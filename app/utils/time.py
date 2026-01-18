@@ -1,4 +1,5 @@
 """Почему: единое место для работы с временем и таймзоной."""
+
 from __future__ import annotations
 
 from datetime import datetime

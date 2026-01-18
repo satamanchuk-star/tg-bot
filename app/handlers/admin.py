@@ -1,4 +1,5 @@
 """Почему: админские команды выделены отдельно для контроля доступа."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -50,7 +51,7 @@ async def mute_user(message: Message, bot: Bot) -> None:
     except ValueError:
         await message.reply("Минуты должны быть числом.")
         return
-    target_id, _ = extract_target_user(message)
+    target_id, display_name = extract_target_user(message)
     if target_id is None:
         await message.reply("Нужен реплай или id пользователя.")
         return
@@ -69,12 +70,14 @@ async def mute_user(message: Message, bot: Bot) -> None:
 async def unmute_user(message: Message, bot: Bot) -> None:
     if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
         return
-    target_id, _ = extract_target_user(message)
+    target_id, display_name = extract_target_user(message)
     if target_id is None:
         await message.reply("Нужен реплай или id пользователя.")
         return
     permissions = ChatPermissions(can_send_messages=True, can_send_other_messages=True)
-    await bot.restrict_chat_member(settings.forum_chat_id, target_id, permissions=permissions)
+    await bot.restrict_chat_member(
+        settings.forum_chat_id, target_id, permissions=permissions
+    )
     await message.reply("Мут снят.")
 
 
@@ -91,7 +94,7 @@ async def ban_user(message: Message, bot: Bot) -> None:
     except ValueError:
         await message.reply("Дни должны быть числом.")
         return
-    target_id, _ = extract_target_user(message)
+    target_id, display_name = extract_target_user(message)
     if target_id is None:
         await message.reply("Нужен реплай или id пользователя.")
         return
@@ -104,7 +107,7 @@ async def ban_user(message: Message, bot: Bot) -> None:
 async def unban_user(message: Message, bot: Bot) -> None:
     if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
         return
-    target_id, _ = extract_target_user(message)
+    target_id, display_name = extract_target_user(message)
     if target_id is None:
         await message.reply("Нужен реплай или id пользователя.")
         return
@@ -116,7 +119,7 @@ async def unban_user(message: Message, bot: Bot) -> None:
 async def strike_user(message: Message, bot: Bot) -> None:
     if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
         return
-    target_id, _ = extract_target_user(message)
+    target_id, display_name = extract_target_user(message)
     if target_id is None:
         await message.reply("Нужен реплай или id пользователя.")
         return
@@ -153,12 +156,17 @@ async def grant_coins(message: Message, bot: Bot) -> None:
     except ValueError:
         await message.reply("Монеты должны быть числом.")
         return
-    target_id, _ = extract_target_user(message)
+    target_id, display_name = extract_target_user(message)
     if target_id is None:
         await message.reply("Нужен реплай или id пользователя.")
         return
     async for session in get_session():
-        stats = await get_or_create_stats(session, target_id, settings.forum_chat_id)
+        stats = await get_or_create_stats(
+            session,
+            target_id,
+            settings.forum_chat_id,
+            display_name=display_name,
+        )
         now = datetime.utcnow()
         if not can_grant_coins(stats, now, amount):
             await message.reply("Нельзя выдать больше 10 монет за раз/сутки.")

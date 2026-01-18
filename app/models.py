@@ -1,4 +1,5 @@
 """Почему: храним состояние бота для модерации, игр и сервисных задач."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -15,7 +16,9 @@ class Strike(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, index=True)
     chat_id: Mapped[int] = mapped_column(Integer, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
 
 
 class FloodRecord(Base):
@@ -34,6 +37,7 @@ class UserStat(Base):
     coins: Mapped[int] = mapped_column(Integer, default=100)
     games_played: Mapped[int] = mapped_column(Integer, default=0)
     wins: Mapped[int] = mapped_column(Integer, default=0)
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_coin_grant_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     coins_granted_today: Mapped[int] = mapped_column(Integer, default=0)
 

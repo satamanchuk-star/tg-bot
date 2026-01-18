@@ -1,4 +1,5 @@
 """Почему: централизуем конфигурацию из окружения для удобства деплоя и тестов."""
+
 from __future__ import annotations
 
 from pydantic_settings import BaseSettings, SettingsConfigDict

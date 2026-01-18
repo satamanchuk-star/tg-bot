@@ -1,4 +1,5 @@
 """Почему: инкапсулируем работу со страйками для повторного использования."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -32,7 +33,9 @@ async def add_strike(session: AsyncSession, user_id: int, chat_id: int) -> int:
     await session.flush()
 
     count = await session.scalar(
-        select(func.count()).select_from(Strike).where(
+        select(func.count())
+        .select_from(Strike)
+        .where(
             Strike.user_id == user_id,
             Strike.chat_id == chat_id,
         )

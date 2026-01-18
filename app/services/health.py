@@ -1,4 +1,5 @@
 """Почему: отслеживание состояния бота хранится в БД и не зависит от памяти процесса."""
+
 from __future__ import annotations
 
 from datetime import datetime

@@ -1,4 +1,5 @@
 """Почему: базовая модерация изолирована, чтобы не смешивать с играми и анкетами."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -30,7 +31,9 @@ def update_profanity(words: set[str]) -> None:
 async def _warn_user(message: Message, text: str, bot: Bot) -> None:
     if message.from_user is None:
         return
-    await message.answer(f"{message.from_user.get_mention(as_html=True)}, {text}", parse_mode="HTML")
+    await message.answer(
+        f"{message.from_user.get_mention(as_html=True)}, {text}", parse_mode="HTML"
+    )
 
 
 @router.message(Command("rules"))
@@ -52,7 +55,9 @@ async def moderate_message(message: Message, bot: Bot) -> None:
     if any(word in PROFANITY_WORDS for word in words):
         await message.delete()
         async for session in get_session():
-            strike_count = await add_strike(session, message.from_user.id, settings.forum_chat_id)
+            strike_count = await add_strike(
+                session, message.from_user.id, settings.forum_chat_id
+            )
             await session.commit()
         await _warn_user(
             message,
@@ -73,21 +78,27 @@ async def moderate_message(message: Message, bot: Bot) -> None:
                 until_date=until,
             )
             async for session in get_session():
-                await clear_strikes(session, message.from_user.id, settings.forum_chat_id)
+                await clear_strikes(
+                    session, message.from_user.id, settings.forum_chat_id
+                )
                 await session.commit()
             await _warn_user(message, "3 страйка = мут на 24 часа. Остынь.", bot)
         return
 
     if contains_forbidden_link(text):
         await message.delete()
-        await _warn_user(message, "ссылки разрешены только телеграм. Без спама!", bot)
+        await _warn_user(
+            message, "ссылки разрешены только телеграм. Прочти правила!", bot
+        )
         await bot.send_message(
             settings.admin_log_chat_id,
             f"Ссылка удалена у {message.from_user.id}",
         )
         return
 
-    count = FLOOD_TRACKER.register(message.from_user.id, settings.forum_chat_id, datetime.utcnow())
+    count = FLOOD_TRACKER.register(
+        message.from_user.id, settings.forum_chat_id, datetime.utcnow()
+    )
     if count > 10:
         async for session in get_session():
             record = await session.get(
@@ -96,9 +107,13 @@ async def moderate_message(message: Message, bot: Bot) -> None:
             )
             now = datetime.utcnow()
             if record is None:
-                record = FloodRecord(user_id=message.from_user.id, chat_id=settings.forum_chat_id)
+                record = FloodRecord(
+                    user_id=message.from_user.id, chat_id=settings.forum_chat_id
+                )
                 session.add(record)
-            repeat_within_hour = record.last_flood_at and now - record.last_flood_at < timedelta(hours=1)
+            repeat_within_hour = (
+                record.last_flood_at and now - record.last_flood_at < timedelta(hours=1)
+            )
             record.last_flood_at = now
             await session.commit()
         mute_minutes = 60 if repeat_within_hour else 15

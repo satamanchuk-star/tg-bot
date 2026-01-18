@@ -1,4 +1,5 @@
 """Почему: логика взаимодействия с пользователем в играх должна быть изолирована."""
+
 from __future__ import annotations
 
 from aiogram import Router
@@ -22,14 +23,29 @@ from app.services.games import (
 router = Router()
 
 
+def _display_name(message: Message) -> str | None:
+    if message.from_user is None:
+        return None
+    return message.from_user.username or message.from_user.full_name
+
+
 @router.message(Command("bj"))
 async def start_blackjack(message: Message) -> None:
-    if message.chat.id != settings.forum_chat_id or message.message_thread_id != settings.topic_games:
+    if (
+        message.chat.id != settings.forum_chat_id
+        or message.message_thread_id != settings.topic_games
+    ):
         return
     if message.from_user is None:
         return
     async for session in get_session():
         state = await start_game(session, message.from_user.id, settings.forum_chat_id)
+        await get_or_create_stats(
+            session,
+            message.from_user.id,
+            settings.forum_chat_id,
+            display_name=_display_name(message),
+        )
         await session.commit()
     await message.reply(
         "Игра 21 началась!\n"
@@ -41,12 +57,20 @@ async def start_blackjack(message: Message) -> None:
 
 @router.message(Command("score"))
 async def show_score(message: Message) -> None:
-    if message.chat.id != settings.forum_chat_id or message.message_thread_id != settings.topic_games:
+    if (
+        message.chat.id != settings.forum_chat_id
+        or message.message_thread_id != settings.topic_games
+    ):
         return
     if message.from_user is None:
         return
     async for session in get_session():
-        stats = await get_or_create_stats(session, message.from_user.id, settings.forum_chat_id)
+        stats = await get_or_create_stats(
+            session,
+            message.from_user.id,
+            settings.forum_chat_id,
+            display_name=_display_name(message),
+        )
         await session.commit()
     await message.reply(
         f"Монеты: {stats.coins}\nИгры: {stats.games_played}\nПобеды: {stats.wins}"
@@ -55,7 +79,10 @@ async def show_score(message: Message) -> None:
 
 @router.message()
 async def blackjack_action(message: Message) -> None:
-    if message.chat.id != settings.forum_chat_id or message.message_thread_id != settings.topic_games:
+    if (
+        message.chat.id != settings.forum_chat_id
+        or message.message_thread_id != settings.topic_games
+    ):
         return
     if message.from_user is None:
         return
@@ -71,7 +98,9 @@ async def blackjack_action(message: Message) -> None:
             return
         if action == "взять":
             state.player_hand.append(draw_card())
-            await save_game(session, message.from_user.id, settings.forum_chat_id, state)
+            await save_game(
+                session, message.from_user.id, settings.forum_chat_id, state
+            )
             await session.commit()
             await message.reply(
                 "Карта добавлена.\n"
@@ -81,7 +110,14 @@ async def blackjack_action(message: Message) -> None:
             return
 
         result, blackjack = evaluate_game(state)
-        stats = await apply_game_result(session, message.from_user.id, settings.forum_chat_id, result, blackjack)
+        stats = await apply_game_result(
+            session,
+            message.from_user.id,
+            settings.forum_chat_id,
+            result,
+            blackjack,
+            display_name=_display_name(message),
+        )
         await end_game(session, message.from_user.id, settings.forum_chat_id)
         await session.commit()
 

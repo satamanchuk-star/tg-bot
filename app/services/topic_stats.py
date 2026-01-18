@@ -1,4 +1,5 @@
 """Почему: статистика тем нужна для ежедневной сводки."""
+
 from __future__ import annotations
 
 from sqlalchemy import select
@@ -35,7 +36,9 @@ async def bump_topic_stat(
     await session.flush()
 
 
-async def get_daily_stats(session: AsyncSession, chat_id: int, date_key: str) -> list[TopicStat]:
+async def get_daily_stats(
+    session: AsyncSession, chat_id: int, date_key: str
+) -> list[TopicStat]:
     return (
         await session.scalars(
             select(TopicStat)

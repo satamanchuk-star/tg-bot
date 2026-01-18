@@ -1,4 +1,5 @@
 """Почему: выносим загрузку списка запрещенных слов в отдельный модуль."""
+
 from __future__ import annotations
 
 from pathlib import Path

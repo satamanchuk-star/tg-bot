@@ -1,4 +1,5 @@
 """Почему: главный модуль собирает роутеры, БД и планировщик в одном месте."""
+
 from __future__ import annotations
 
 import asyncio
@@ -9,6 +10,7 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.config import settings
@@ -32,6 +34,18 @@ async def init_db(async_engine: AsyncEngine) -> None:
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+        def _ensure_columns(sync_conn: object) -> None:
+            inspector = inspect(sync_conn)
+            if not inspector.has_table("user_stats"):
+                return
+            columns = {column["name"] for column in inspector.get_columns("user_stats")}
+            if "display_name" not in columns:
+                sync_conn.execute(
+                    text("ALTER TABLE user_stats ADD COLUMN display_name TEXT")
+                )
+
+        await conn.run_sync(_ensure_columns)
+
 
 async def send_daily_summary(bot: Bot) -> None:
     date_key = now_tz().date().isoformat()
@@ -41,7 +55,12 @@ async def send_daily_summary(bot: Bot) -> None:
         return
     lines = ["Ежедневная сводка (с юмором):"]
     for row in stats_rows[:15]:
-        lines.append(f"• Тема {row.topic_id}: сообщений {row.messages_count}.")
+        if row.last_message:
+            cleaned = row.last_message.replace("\n", " ").strip()
+            snippet = f" ({cleaned[:120]})"
+        else:
+            snippet = ""
+        lines.append(f"• Тема {row.topic_id}: сообщений {row.messages_count}.{snippet}")
     text = "\n".join(lines)
     await bot.send_message(
         settings.forum_chat_id,
@@ -52,18 +71,22 @@ async def send_daily_summary(bot: Bot) -> None:
 
 async def send_weekly_leaderboard(bot: Bot) -> None:
     async for session in get_session():
-        top_coins, top_games = await get_weekly_leaderboard(session, settings.forum_chat_id)
+        top_coins, top_games = await get_weekly_leaderboard(
+            session, settings.forum_chat_id
+        )
     if not top_coins and not top_games:
         return
     lines = ["Еженедельный рейтинг игр:"]
     if top_coins:
         lines.append("Топ по монетам:")
         for stats_row in top_coins:
-            lines.append(f"• {stats_row.user_id}: {stats_row.coins} монет")
+            name = stats_row.display_name or str(stats_row.user_id)
+            lines.append(f"• {name}: {stats_row.coins} монет")
     if top_games:
         lines.append("Топ по играм:")
         for stats_row in top_games:
-            lines.append(f"• {stats_row.user_id}: {stats_row.games_played} игр")
+            name = stats_row.display_name or str(stats_row.user_id)
+            lines.append(f"• {name}: {stats_row.games_played} игр")
     await bot.send_message(
         settings.forum_chat_id,
         "\n".join(lines),
@@ -76,8 +99,12 @@ async def heartbeat_job(bot: Bot) -> None:
     async for session in get_session():
         state = await get_health_state(session)
         last_heartbeat = state.last_heartbeat_at
-        if last_heartbeat and now - last_heartbeat > timedelta(minutes=OFFLINE_THRESHOLD_MIN):
-            should_notify = state.last_notice_at is None or (now - state.last_notice_at > timedelta(days=1))
+        if last_heartbeat and now - last_heartbeat > timedelta(
+            minutes=OFFLINE_THRESHOLD_MIN
+        ):
+            should_notify = state.last_notice_at is None or (
+                now - state.last_notice_at > timedelta(days=1)
+            )
             if should_notify:
                 await bot.send_message(
                     settings.admin_log_chat_id,
@@ -91,8 +118,17 @@ async def heartbeat_job(bot: Bot) -> None:
 async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
     scheduler.add_job(send_daily_summary, "cron", hour=21, minute=0, args=[bot])
-    scheduler.add_job(send_weekly_leaderboard, "cron", day_of_week="sat", hour=21, minute=0, args=[bot])
-    scheduler.add_job(heartbeat_job, "interval", minutes=HEARTBEAT_INTERVAL_MIN, args=[bot])
+    scheduler.add_job(
+        send_weekly_leaderboard,
+        "cron",
+        day_of_week="sat",
+        hour=21,
+        minute=0,
+        args=[bot],
+    )
+    scheduler.add_job(
+        heartbeat_job, "interval", minutes=HEARTBEAT_INTERVAL_MIN, args=[bot]
+    )
     scheduler.start()
     return scheduler
 

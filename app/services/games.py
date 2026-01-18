@@ -1,4 +1,5 @@
 """Почему: логика игры и рейтингов вынесена отдельно от хендлеров."""
+
 from __future__ import annotations
 
 import json
@@ -6,7 +7,7 @@ import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import GameState, UserStat
@@ -67,37 +68,60 @@ def draw_card() -> int:
     return _draw_card()
 
 
-async def get_or_create_stats(session: AsyncSession, user_id: int, chat_id: int) -> UserStat:
+async def get_or_create_stats(
+    session: AsyncSession,
+    user_id: int,
+    chat_id: int,
+    display_name: str | None = None,
+) -> UserStat:
     stats = await session.get(UserStat, {"user_id": user_id, "chat_id": chat_id})
     if stats is None:
-        stats = UserStat(user_id=user_id, chat_id=chat_id, coins=100)
+        stats = UserStat(
+            user_id=user_id, chat_id=chat_id, coins=100, display_name=display_name
+        )
         session.add(stats)
         await session.flush()
+    if display_name:
+        stats.display_name = display_name
     return stats
 
 
-async def start_game(session: AsyncSession, user_id: int, chat_id: int) -> BlackjackState:
-    state = BlackjackState(player_hand=[_draw_card(), _draw_card()], dealer_hand=[_draw_card()])
-    await session.merge(GameState(user_id=user_id, chat_id=chat_id, state_json=state.to_json()))
+async def start_game(
+    session: AsyncSession, user_id: int, chat_id: int
+) -> BlackjackState:
+    state = BlackjackState(
+        player_hand=[_draw_card(), _draw_card()], dealer_hand=[_draw_card()]
+    )
+    await session.merge(
+        GameState(user_id=user_id, chat_id=chat_id, state_json=state.to_json())
+    )
     await session.flush()
     return state
 
 
-async def load_game(session: AsyncSession, user_id: int, chat_id: int) -> BlackjackState | None:
+async def load_game(
+    session: AsyncSession, user_id: int, chat_id: int
+) -> BlackjackState | None:
     record = await session.get(GameState, {"user_id": user_id, "chat_id": chat_id})
     if record is None:
         return None
     return BlackjackState.from_json(record.state_json)
 
 
-async def save_game(session: AsyncSession, user_id: int, chat_id: int, state: BlackjackState) -> None:
-    await session.merge(GameState(user_id=user_id, chat_id=chat_id, state_json=state.to_json()))
+async def save_game(
+    session: AsyncSession, user_id: int, chat_id: int, state: BlackjackState
+) -> None:
+    await session.merge(
+        GameState(user_id=user_id, chat_id=chat_id, state_json=state.to_json())
+    )
     await session.flush()
 
 
 async def end_game(session: AsyncSession, user_id: int, chat_id: int) -> None:
     await session.execute(
-        delete(GameState).where(GameState.user_id == user_id, GameState.chat_id == chat_id)
+        delete(GameState).where(
+            GameState.user_id == user_id, GameState.chat_id == chat_id
+        )
     )
 
 
@@ -107,8 +131,11 @@ async def apply_game_result(
     chat_id: int,
     result: str,
     blackjack: bool,
+    display_name: str | None = None,
 ) -> UserStat:
-    stats = await get_or_create_stats(session, user_id, chat_id)
+    stats = await get_or_create_stats(
+        session, user_id, chat_id, display_name=display_name
+    )
     stats.games_played += 1
     if result == "win":
         stats.wins += 1
@@ -140,15 +167,23 @@ def format_hand(hand: list[int]) -> str:
     return " ".join(str(card) for card in hand)
 
 
-async def get_weekly_leaderboard(session: AsyncSession, chat_id: int) -> tuple[list[UserStat], list[UserStat]]:
+async def get_weekly_leaderboard(
+    session: AsyncSession, chat_id: int
+) -> tuple[list[UserStat], list[UserStat]]:
     top_coins = (
         await session.scalars(
-            select(UserStat).where(UserStat.chat_id == chat_id).order_by(UserStat.coins.desc()).limit(5)
+            select(UserStat)
+            .where(UserStat.chat_id == chat_id)
+            .order_by(UserStat.coins.desc())
+            .limit(5)
         )
     ).all()
     top_games = (
         await session.scalars(
-            select(UserStat).where(UserStat.chat_id == chat_id).order_by(UserStat.games_played.desc()).limit(5)
+            select(UserStat)
+            .where(UserStat.chat_id == chat_id)
+            .order_by(UserStat.games_played.desc())
+            .limit(5)
         )
     ).all()
     return top_coins, top_games
@@ -165,7 +200,9 @@ def can_grant_coins(stats: UserStat, now: datetime, amount: int) -> bool:
 
 
 def register_coin_grant(stats: UserStat, now: datetime, amount: int) -> None:
-    if stats.last_coin_grant_at is None or now - stats.last_coin_grant_at > timedelta(days=1):
+    if stats.last_coin_grant_at is None or now - stats.last_coin_grant_at > timedelta(
+        days=1
+    ):
         stats.coins_granted_today = 0
     stats.coins_granted_today += amount
     stats.last_coin_grant_at = now

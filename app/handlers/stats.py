@@ -1,4 +1,5 @@
 """Почему: сбор статистики отделен от модерации для гибкости."""
+
 from __future__ import annotations
 
 from aiogram import Router

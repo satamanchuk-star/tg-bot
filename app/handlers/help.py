@@ -1,11 +1,10 @@
 """Почему: справка и подсказки — единый источник для пользователей."""
+
 from __future__ import annotations
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.types import Message
-
-from app.config import settings
 
 router = Router()
 

@@ -1,4 +1,5 @@
 """Почему: антифлуд должен работать быстро без лишних запросов в БД."""
+
 from __future__ import annotations
 
 from collections import deque

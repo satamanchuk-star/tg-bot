@@ -1,4 +1,5 @@
 """Почему: анкеты (шлагбаум и соседи) требуют FSM и не должны смешиваться с модерацией."""
+
 from __future__ import annotations
 
 import re
@@ -44,8 +45,7 @@ async def gate_trigger(message: Message, state: FSMContext) -> None:
         return
     await state.set_state(GateForm.arrival_time)
     await message.reply(
-        "Похоже, проблема со шлагбаумом. Заполни анкету:\n"
-        "1) Дата и время заезда?"
+        "Похоже, проблема со шлагбаумом. Заполни анкету:\n1) Дата и время заезда?"
     )
 
 
@@ -93,9 +93,7 @@ async def neighbor_trigger(message: Message, state: FSMContext) -> None:
     if await state.get_state() is not None:
         return
     await state.set_state(NeighborForm.name)
-    await message.reply(
-        "Добро пожаловать! Давай познакомимся. Как тебя зовут?"
-    )
+    await message.reply("Добро пожаловать! Давай познакомимся. Как тебя зовут?")
 
 
 @router.message(NeighborForm.name)
