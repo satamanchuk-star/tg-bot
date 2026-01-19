@@ -31,15 +31,10 @@ jobs:
             BUILD_VERSION=#${{ github.run_number }} (${{ steps.sha.outputs.short }})
 
       - name: Deploy to server
-        run: |
-          sudo apt-get update && sudo apt-get install -y expect
-          expect <<'EOF'
-          spawn ssh -o StrictHostKeyChecking=no root@${{ secrets.SSH_HOST }}
-          expect "assword:"
-          send "${{ secrets.SSH_PASSWORD }}\r"
-          expect "# "
-          send "cd /opt/alexbot && ./reload.sh\r"
-          expect "# "
-          send "exit\r"
-          expect eof
-          EOF
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: root
+          password: ${{ secrets.SSH_PASSWORD }}
+          script: |
+            cd /opt/alexbot && ./reload.sh
