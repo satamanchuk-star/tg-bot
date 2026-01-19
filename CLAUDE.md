@@ -13,7 +13,8 @@ AlexBot is a Telegram forum management bot for a residential community, built wi
 python -m app.main
 
 # Build and push Docker image
-./build.sh
+./build.sh      # Linux/macOS
+build.bat       # Windows
 
 # Deploy (pull and restart)
 ./reload.sh

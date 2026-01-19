@@ -50,7 +50,11 @@ app/
 
 Собрать образ локально и запушить в хранилище:
 ```bash
+# Linux/macOS
 sh build.sh
+
+# Windows
+build.bat
 ```
 
 На сервере:
