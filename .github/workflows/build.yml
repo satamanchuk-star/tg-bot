@@ -36,5 +36,6 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: root
           password: ${{ secrets.SSH_PASSWORD }}
+          keyboard_interactive: true
           script: |
             cd /opt/alexbot && ./reload.sh
