@@ -7,3 +7,14 @@ services:
       - ./data:/app/data
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=300
+    command: alexbot
