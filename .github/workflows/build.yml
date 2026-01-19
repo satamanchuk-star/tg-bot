@@ -32,5 +32,14 @@ jobs:
 
       - name: Deploy to server
         run: |
-          sudo apt-get update && sudo apt-get install -y sshpass
-          sshpass -p "${{ secrets.SSH_PASSWORD }}" ssh -o StrictHostKeyChecking=no root@${{ secrets.SSH_HOST }} "cd /opt/alexbot && ./reload.sh"
+          sudo apt-get update && sudo apt-get install -y expect
+          expect <<'EOF'
+          spawn ssh -o StrictHostKeyChecking=no root@${{ secrets.SSH_HOST }}
+          expect "assword:"
+          send "${{ secrets.SSH_PASSWORD }}\r"
+          expect "# "
+          send "cd /opt/alexbot && ./reload.sh\r"
+          expect "# "
+          send "exit\r"
+          expect eof
+          EOF
