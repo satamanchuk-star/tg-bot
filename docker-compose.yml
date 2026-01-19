@@ -1,0 +1,9 @@
+services:
+  bot:
+    image: satamanchuk/alexbot
+    container_name: alexbot
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
