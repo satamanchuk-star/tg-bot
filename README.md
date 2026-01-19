@@ -46,9 +46,17 @@ app/
 | `DATABASE_URL` | Строка подключения к БД (по умолчанию SQLite) |
 | `TIMEZONE` | Часовой пояс (по умолчанию Europe/Moscow) |
 
+## CI/CD
+
+При пуше в `main` автоматически собирается и пушится Docker-образ (GitHub Actions).
+
+Секреты в репозитории (Settings → Secrets → Actions):
+- `DOCKERHUB_USERNAME` — логин Docker Hub
+- `DOCKERHUB_TOKEN` — Access Token
+
 ## Деплой
 
-Собрать образ локально и запушить в хранилище:
+Собрать образ локально (или дождаться CI):
 ```bash
 # Linux/macOS
 sh build.sh
