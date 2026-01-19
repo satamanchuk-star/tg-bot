@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     admin_log_chat_id: int
     database_url: str = "sqlite+aiosqlite:///data/bot.db"
     timezone: str = "Europe/Moscow"
+    build_version: str = "dev"
 
     topic_rules: int
     topic_important: int

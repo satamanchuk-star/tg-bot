@@ -11,7 +11,7 @@ from typing import Any
 
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import TelegramObject, Update
+from aiogram.types import ErrorEvent, TelegramObject, Update
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -211,12 +211,42 @@ async def on_startup(bot: Bot) -> None:
     await bot.get_me()  # заполняет bot.me с информацией о боте
     await init_db(engine)
     await heartbeat_job(bot)
+    await bot.send_message(
+        settings.admin_log_chat_id,
+        f"🟢 Бот запущен\nВерсия: {settings.build_version}",
+    )
+
+
+async def error_handler(event: ErrorEvent) -> bool:
+    """Глобальный обработчик ошибок — логирует и отправляет в админ-чат."""
+    logger.exception(f"Ошибка: {event.exception}")
+
+    error_text = (
+        f"🔴 Ошибка в боте\n"
+        f"Тип: {type(event.exception).__name__}\n"
+        f"Сообщение: {event.exception}"
+    )
+
+    if event.update and event.update.message:
+        msg = event.update.message
+        error_text += f"\n\nКонтекст:\n"
+        error_text += f"Chat: {msg.chat.id}\n"
+        error_text += f"User: {msg.from_user.id if msg.from_user else 'N/A'}\n"
+        error_text += f"Text: {(msg.text or '')[:100]}"
+
+    try:
+        await event.update.bot.send_message(settings.admin_log_chat_id, error_text)
+    except Exception:
+        pass  # Не падаем если не удалось отправить
+
+    return True  # Ошибка обработана
 
 
 async def main() -> None:
     bot = Bot(token=settings.bot_token)
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.outer_middleware(LoggingMiddleware())
+    dp.error.register(error_handler)
 
     # Порядок важен! Catch-all роутеры должны быть в конце
     dp.include_router(admin.router)  # админ-команды
