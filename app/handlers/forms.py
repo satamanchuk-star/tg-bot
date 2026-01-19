@@ -5,19 +5,25 @@ from __future__ import annotations
 import logging
 import re
 
-from aiogram import Bot, Router
-
-logger = logging.getLogger(__name__)
+from aiogram import Bot, F, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
+
+logger = logging.getLogger(__name__)
 
 from app.config import settings
 
 router = Router()
 
 GATE_TRIGGERS = re.compile(
-    r"проблема|не\s*смог\s*проехать|закрыт\s*шлагбаум|не\s*работает\s*шлагбаум|шлагбаум\s*не\s*работает",
+    r"проблема|"
+    r"не\s*смог\s*(проехать|заехать)|"
+    r"(закрыт|не\s*открывается|не\s*открылся)\s*шлагбаум|"
+    r"шлагбаум\s*(не\s*работает|не\s*открылся|не\s*открывается|закрыт)|"
+    r"пропуск\s*не\s*работает|"
+    r"не\s*работает\s*(шлагбаум|пропуск)",
     re.IGNORECASE,
 )
 
@@ -109,19 +115,15 @@ async def neighbor_finish(message: Message, state: FSMContext) -> None:
 
 
 # Catch-all trigger handlers AFTER state handlers
+# Используем фильтры чтобы не блокировать модерацию для других топиков
 
-@router.message()
+@router.message(
+    F.chat.id == settings.forum_chat_id,
+    F.message_thread_id == settings.topic_gate,
+    F.text,
+    StateFilter(None),
+)
 async def gate_trigger(message: Message, state: FSMContext) -> None:
-    if message.chat.id != settings.forum_chat_id:
-        return
-    if message.message_thread_id != settings.topic_gate:
-        return
-    if message.text is None:
-        return
-    current_state = await state.get_state()
-    if current_state is not None:
-        logger.info(f"HANDLER: gate_trigger SKIP (state={current_state})")
-        return
     if not GATE_TRIGGERS.search(message.text):
         return
     logger.info(f"HANDLER: gate_trigger MATCH, text={message.text!r}")
@@ -132,20 +134,14 @@ async def gate_trigger(message: Message, state: FSMContext) -> None:
     logger.info("OUT: Похоже, проблема со шлагбаумом...")
 
 
-@router.message()
+@router.message(
+    F.chat.id == settings.forum_chat_id,
+    F.message_thread_id == settings.topic_neighbors,
+    F.from_user,
+    F.text,
+    StateFilter(None),
+)
 async def neighbor_trigger(message: Message, state: FSMContext) -> None:
-    if message.chat.id != settings.forum_chat_id:
-        return
-    if message.message_thread_id != settings.topic_neighbors:
-        return
-    if message.from_user is None:
-        return
-    if message.text is None:
-        return
-    current_state = await state.get_state()
-    if current_state is not None:
-        logger.info(f"HANDLER: neighbor_trigger SKIP (state={current_state})")
-        return
     logger.info(f"HANDLER: neighbor_trigger MATCH, text={message.text!r}")
     await state.set_state(NeighborForm.name)
     await message.reply("Добро пожаловать! Давай познакомимся. Как тебя зовут?")

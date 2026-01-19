@@ -183,7 +183,7 @@ async def on_hit(callback: CallbackQuery) -> None:
                 callback.from_user.id,
                 settings.forum_chat_id,
                 "lose",
-                blackjack=False,
+                exact_21=False,
                 display_name=_display_name_from_callback(callback),
             )
             await end_game(session, callback.from_user.id, settings.forum_chat_id)

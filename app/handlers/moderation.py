@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from aiogram import Bot, Router
 
 logger = logging.getLogger(__name__)
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.types import ChatPermissions, Message
 
 from app.config import settings
@@ -49,8 +49,9 @@ async def send_rules(message: Message) -> None:
     await message.reply("Пожалуйста, прочитай правила в закрепленном сообщении.")
 
 
-@router.message()
+@router.message(StateFilter(None))
 async def moderate_message(message: Message, bot: Bot) -> None:
+    """Модерация сообщений. Пропускает пользователей в FSM-состоянии (заполняют форму)."""
     logger.info(f"HANDLER: moderate_message, chat={message.chat.id}, text={message.text!r}")
     if message.chat.id != settings.forum_chat_id:
         logger.info(f"SKIP: wrong chat {message.chat.id} != {settings.forum_chat_id}")

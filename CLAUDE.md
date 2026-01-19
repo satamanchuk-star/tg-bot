@@ -78,3 +78,7 @@ Environment variables in `.env`:
 - Comments in Russian
 - Python type hints throughout
 - No formal linting configured
+
+## Git
+
+- Не указывать Claude как соавтора в коммитах (без Co-Authored-By)
