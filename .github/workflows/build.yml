@@ -31,11 +31,6 @@ jobs:
             BUILD_VERSION=#${{ github.run_number }} (${{ steps.sha.outputs.short }})
 
       - name: Deploy to server
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: root
-          password: ${{ secrets.SSH_PASSWORD }}
-          debug: true
-          script: |
-            cd /opt/alexbot && ./reload.sh
+        run: |
+          sudo apt-get update && sudo apt-get install -y sshpass
+          sshpass -p "${{ secrets.SSH_PASSWORD }}" ssh -o StrictHostKeyChecking=no root@${{ secrets.SSH_HOST }} "cd /opt/alexbot && ./reload.sh"
