@@ -29,3 +29,12 @@ jobs:
           tags: satamanchuk/alexbot:latest
           build-args: |
             BUILD_VERSION=#${{ github.run_number }} (${{ steps.sha.outputs.short }})
+
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: root
+          password: ${{ secrets.SSH_PASSWORD }}
+          script: |
+            cd /opt/alexbot && ./reload.sh
