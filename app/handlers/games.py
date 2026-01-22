@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from app.config import settings
 from app.db import get_session
+from app.utils.time import is_game_time_allowed
 from app.services.games import (
     apply_game_result,
     draw_card,
@@ -86,6 +87,11 @@ async def start_blackjack(message: Message) -> None:
     ):
         return
     if message.from_user is None:
+        return
+
+    # Проверка времени: игра доступна с 22:00 до 23:00 МСК
+    if not is_game_time_allowed(22, 23):
+        await message.reply("Игра '21' доступна с 22:00 до 23:00 по Москве.")
         return
 
     async for session in get_session():

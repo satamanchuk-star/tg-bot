@@ -1,0 +1,207 @@
+"""Почему: логика викторины изолирована от хендлеров."""
+
+from __future__ import annotations
+
+import random
+from datetime import datetime, timezone
+
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import QuizDailyLimit, QuizQuestion, QuizSession, QuizUserStat
+from app.utils.time import is_game_time_allowed, now_tz
+
+QUIZ_MAX_LAUNCHES_PER_DAY = 2
+QUIZ_QUESTIONS_COUNT = 5
+QUIZ_QUESTION_TIMEOUT_SEC = 60
+
+
+async def can_start_quiz(
+    session: AsyncSession,
+    chat_id: int,
+    topic_id: int,
+) -> tuple[bool, str]:
+    """Проверяет возможность запуска викторины.
+
+    Возвращает (можно_ли, причина_отказа).
+    """
+    # Проверка времени: 10:00-23:00 МСК
+    if not is_game_time_allowed(10, 23):
+        return False, "Викторина доступна с 10:00 до 23:00 по Москве."
+
+    # Проверка активной сессии
+    active = await session.execute(
+        select(QuizSession).where(
+            QuizSession.chat_id == chat_id,
+            QuizSession.topic_id == topic_id,
+            QuizSession.is_active == True,
+        )
+    )
+    if active.scalar_one_or_none():
+        return False, "Викторина уже запущена в этом топике."
+
+    # Проверка дневного лимита
+    date_key = now_tz().date().isoformat()
+    limit_row = await session.get(
+        QuizDailyLimit, (chat_id, topic_id, date_key)
+    )
+    if limit_row and limit_row.launches >= QUIZ_MAX_LAUNCHES_PER_DAY:
+        return False, f"Достигнут лимит викторин на сегодня ({QUIZ_MAX_LAUNCHES_PER_DAY})."
+
+    # Проверка наличия вопросов
+    count = await session.execute(select(func.count(QuizQuestion.id)))
+    if count.scalar() == 0:
+        return False, "В базе нет вопросов для викторины."
+
+    return True, ""
+
+
+async def start_quiz_session(
+    session: AsyncSession,
+    chat_id: int,
+    topic_id: int,
+) -> QuizSession:
+    """Создаёт новую сессию викторины."""
+    # Увеличиваем счётчик дневного лимита
+    date_key = now_tz().date().isoformat()
+    limit_row = await session.get(QuizDailyLimit, (chat_id, topic_id, date_key))
+    if limit_row:
+        limit_row.launches += 1
+    else:
+        session.add(QuizDailyLimit(
+            chat_id=chat_id,
+            topic_id=topic_id,
+            date_key=date_key,
+            launches=1,
+        ))
+
+    quiz_session = QuizSession(
+        chat_id=chat_id,
+        topic_id=topic_id,
+        is_active=True,
+        question_number=0,
+    )
+    session.add(quiz_session)
+    await session.flush()
+    return quiz_session
+
+
+async def get_active_session(
+    session: AsyncSession,
+    chat_id: int,
+    topic_id: int,
+) -> QuizSession | None:
+    """Возвращает активную сессию викторины."""
+    result = await session.execute(
+        select(QuizSession).where(
+            QuizSession.chat_id == chat_id,
+            QuizSession.topic_id == topic_id,
+            QuizSession.is_active == True,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_random_question(
+    session: AsyncSession,
+    exclude_ids: list[int] | None = None,
+) -> QuizQuestion | None:
+    """Возвращает случайный вопрос из БД."""
+    query = select(QuizQuestion)
+    if exclude_ids:
+        query = query.where(QuizQuestion.id.notin_(exclude_ids))
+
+    result = await session.execute(query)
+    questions = result.scalars().all()
+    if not questions:
+        return None
+    return random.choice(questions)
+
+
+async def set_current_question(
+    session: AsyncSession,
+    quiz_session: QuizSession,
+    question: QuizQuestion,
+) -> None:
+    """Устанавливает текущий вопрос для сессии."""
+    quiz_session.current_question_id = question.id
+    quiz_session.question_number += 1
+    quiz_session.question_started_at = datetime.now(timezone.utc)
+
+
+async def get_current_question(
+    session: AsyncSession,
+    quiz_session: QuizSession,
+) -> QuizQuestion | None:
+    """Возвращает текущий вопрос сессии."""
+    if quiz_session.current_question_id is None:
+        return None
+    return await session.get(QuizQuestion, quiz_session.current_question_id)
+
+
+def check_answer(question: QuizQuestion, answer: str) -> bool:
+    """Проверяет ответ на вопрос (case-insensitive, полное совпадение)."""
+    return question.answer.strip().lower() == answer.strip().lower()
+
+
+def is_question_timed_out(quiz_session: QuizSession) -> bool:
+    """Проверяет, истекло ли время на ответ."""
+    if quiz_session.question_started_at is None:
+        return False
+    started = quiz_session.question_started_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    return elapsed >= QUIZ_QUESTION_TIMEOUT_SEC
+
+
+async def award_point(
+    session: AsyncSession,
+    user_id: int,
+    chat_id: int,
+    display_name: str | None = None,
+) -> QuizUserStat:
+    """Начисляет балл пользователю."""
+    stat = await session.get(QuizUserStat, (user_id, chat_id))
+    if stat:
+        stat.total_points += 1
+        if display_name:
+            stat.display_name = display_name
+    else:
+        stat = QuizUserStat(
+            user_id=user_id,
+            chat_id=chat_id,
+            total_points=1,
+            display_name=display_name,
+        )
+        session.add(stat)
+    return stat
+
+
+async def end_quiz_session(
+    session: AsyncSession,
+    quiz_session: QuizSession,
+) -> None:
+    """Завершает сессию викторины."""
+    quiz_session.is_active = False
+    quiz_session.current_question_id = None
+
+
+async def get_quiz_leaderboard(
+    session: AsyncSession,
+    chat_id: int,
+    limit: int = 5,
+) -> list[QuizUserStat]:
+    """Возвращает топ игроков по очкам."""
+    result = await session.execute(
+        select(QuizUserStat)
+        .where(QuizUserStat.chat_id == chat_id)
+        .order_by(QuizUserStat.total_points.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def is_quiz_finished(quiz_session: QuizSession) -> bool:
+    """Проверяет, завершена ли викторина (5 вопросов)."""
+    return quiz_session.question_number >= QUIZ_QUESTIONS_COUNT

@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import logging
-import re
 
 from aiogram import Bot, F, Router
-from aiogram.filters import StateFilter
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
@@ -14,18 +13,9 @@ from aiogram.types import Message
 logger = logging.getLogger(__name__)
 
 from app.config import settings
+from app.utils.admin import is_admin
 
 router = Router()
-
-GATE_TRIGGERS = re.compile(
-    r"проблема|"
-    r"не\s*смог\s*(проехать|заехать)|"
-    r"(закрыт|не\s*открывается|не\s*открылся)\s*шлагбаум|"
-    r"шлагбаум\s*(не\s*работает|не\s*открылся|не\s*открывается|закрыт)|"
-    r"пропуск\s*не\s*работает|"
-    r"не\s*работает\s*(шлагбаум|пропуск)",
-    re.IGNORECASE,
-)
 
 
 class GateForm(StatesGroup):
@@ -40,10 +30,50 @@ class NeighborForm(StatesGroup):
     about = State()
 
 
+async def _check_assigned_user(message: Message, state: FSMContext) -> bool:
+    """Проверяет, что отвечает назначенный пользователь."""
+    data = await state.get_data()
+    assigned_id = data.get("assigned_user_id")
+    if assigned_id and message.from_user.id != assigned_id:
+        await message.reply("Эта форма предназначена для другого пользователя.")
+        return False
+    return True
+
+
+@router.message(Command("form"))
+async def start_gate_form_command(message: Message, state: FSMContext, bot: Bot) -> None:
+    """Команда /form для запуска формы шлагбаума (только админы)."""
+    # Только в топике TOPIC_GATE
+    if message.message_thread_id != settings.topic_gate:
+        await message.reply("Команда /form работает только в топике 'Шлагбаум'.")
+        return
+
+    # Только админы
+    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+        await message.reply("Команда только для администраторов.")
+        return
+
+    # Извлечение целевого пользователя из reply
+    if not message.reply_to_message or not message.reply_to_message.from_user:
+        await message.reply("Используй /form как ответ на сообщение пользователя.")
+        return
+
+    target = message.reply_to_message.from_user
+    await state.update_data(assigned_user_id=target.id)
+    await state.set_state(GateForm.arrival_time)
+    target_name = f"@{target.username}" if target.username else target.full_name
+    await message.reply(
+        f"{target_name}, заполни анкету:\n1) Дата и время заезда?"
+    )
+    logger.info(f"HANDLER: start_gate_form_command, target={target.id}")
+
+
 # FSM handlers MUST be registered BEFORE catch-all handlers
 
 @router.message(GateForm.arrival_time)
 async def gate_arrival(message: Message, state: FSMContext) -> None:
+    if not await _check_assigned_user(message, state):
+        return
     logger.info(f"HANDLER: gate_arrival, text={message.text!r}")
     await state.update_data(arrival_time=message.text)
     await state.set_state(GateForm.car_number)
@@ -53,6 +83,8 @@ async def gate_arrival(message: Message, state: FSMContext) -> None:
 
 @router.message(GateForm.car_number)
 async def gate_car(message: Message, state: FSMContext) -> None:
+    if not await _check_assigned_user(message, state):
+        return
     logger.info(f"HANDLER: gate_car, text={message.text!r}")
     await state.update_data(car_number=message.text)
     await state.set_state(GateForm.in_pass_base)
@@ -62,6 +94,8 @@ async def gate_car(message: Message, state: FSMContext) -> None:
 
 @router.message(GateForm.in_pass_base)
 async def gate_finish(message: Message, state: FSMContext, bot: Bot) -> None:
+    if not await _check_assigned_user(message, state):
+        return
     logger.info(f"HANDLER: gate_finish, text={message.text!r}")
     await state.update_data(in_pass_base=message.text)
     data = await state.get_data()
@@ -116,23 +150,6 @@ async def neighbor_finish(message: Message, state: FSMContext) -> None:
 
 # Catch-all trigger handlers AFTER state handlers
 # Используем фильтры чтобы не блокировать модерацию для других топиков
-
-@router.message(
-    F.chat.id == settings.forum_chat_id,
-    F.message_thread_id == settings.topic_gate,
-    F.text,
-    StateFilter(None),
-)
-async def gate_trigger(message: Message, state: FSMContext) -> None:
-    if not GATE_TRIGGERS.search(message.text):
-        return
-    logger.info(f"HANDLER: gate_trigger MATCH, text={message.text!r}")
-    await state.set_state(GateForm.arrival_time)
-    await message.reply(
-        "Похоже, проблема со шлагбаумом. Заполни анкету:\n1) Дата и время заезда?"
-    )
-    logger.info("OUT: Похоже, проблема со шлагбаумом...")
-
 
 @router.message(
     F.chat.id == settings.forum_chat_id,

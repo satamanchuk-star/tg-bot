@@ -67,3 +67,48 @@ class TopicStat(Base):
     date_key: Mapped[str] = mapped_column(String(10), index=True)
     messages_count: Mapped[int] = mapped_column(Integer, default=0)
     last_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class MigrationFlag(Base):
+    __tablename__ = "migration_flags"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    applied_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class QuizQuestion(Base):
+    __tablename__ = "quiz_questions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(Text)
+
+
+class QuizSession(Base):
+    __tablename__ = "quiz_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer)
+    topic_id: Mapped[int] = mapped_column(Integer)
+    current_question_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    question_number: Mapped[int] = mapped_column(Integer, default=1)
+    question_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Integer, default=True)
+
+
+class QuizUserStat(Base):
+    __tablename__ = "quiz_user_stats"
+
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    total_points: Mapped[int] = mapped_column(Integer, default=0)
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class QuizDailyLimit(Base):
+    __tablename__ = "quiz_daily_limits"
+
+    chat_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    topic_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    date_key: Mapped[str] = mapped_column(String(10), primary_key=True)
+    launches: Mapped[int] = mapped_column(Integer, default=0)

@@ -13,12 +13,13 @@ from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import ErrorEvent, TelegramObject, Update
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import inspect, text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import inspect, text, update
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.config import settings
 from app.db import Base, engine, get_session
-from app.handlers import admin, forms, games, help as help_handler, moderation
+from app.handlers import admin, forms, games, help as help_handler, moderation, quiz
+from app.models import MigrationFlag, UserStat
 from app.services.topic_stats import bump_topic_stat
 from app.services.games import (
     end_game,
@@ -94,6 +95,18 @@ async def init_db(async_engine: AsyncEngine) -> None:
                 )
 
         await conn.run_sync(_ensure_columns)
+
+
+async def apply_v11_stats_reset(session: AsyncSession) -> None:
+    """Единоразовый сброс статистики для v1.1."""
+    flag = await session.get(MigrationFlag, "v11_stats_reset")
+    if flag:
+        return
+
+    await session.execute(update(UserStat).values(coins=100, games_played=0, wins=0))
+    session.add(MigrationFlag(key="v11_stats_reset"))
+    await session.commit()
+    logger.info("v1.1: статистика сброшена")
 
 
 async def send_daily_summary(bot: Bot) -> None:
@@ -210,6 +223,9 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
 async def on_startup(bot: Bot) -> None:
     await bot.get_me()  # заполняет bot.me с информацией о боте
     await init_db(engine)
+    # Применяем миграции
+    async for session in get_session():
+        await apply_v11_stats_reset(session)
     await heartbeat_job(bot)
     await bot.send_message(
         settings.admin_log_chat_id,
@@ -251,6 +267,7 @@ async def main() -> None:
     # Порядок важен! Catch-all роутеры должны быть в конце
     dp.include_router(admin.router)  # админ-команды
     dp.include_router(games.router)  # игры (команды /21, /score)
+    dp.include_router(quiz.router)  # викторина (перед forms, т.к. есть catch-all)
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     dp.include_router(help_handler.router)  # mention-help (catch-all) последним
