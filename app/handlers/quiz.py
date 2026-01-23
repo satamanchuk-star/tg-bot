@@ -124,10 +124,11 @@ def _cancel_timeout(chat_id: int, topic_id: int) -> None:
 @router.message(Command("umnij"))
 async def start_quiz(message: Message, bot: Bot) -> None:
     """Команда /umnij для запуска викторины."""
-    if (
-        message.chat.id != settings.forum_chat_id
-        or message.message_thread_id != settings.topic_games
-    ):
+    if message.chat.id != settings.forum_chat_id:
+        return
+
+    if message.message_thread_id != settings.topic_games:
+        await message.reply("Эта команда доступна только в топике Игры.")
         return
 
     chat_id = settings.forum_chat_id
@@ -163,10 +164,11 @@ async def start_quiz(message: Message, bot: Bot) -> None:
 @router.message(Command("topumnij"))
 async def show_quiz_leaderboard(message: Message) -> None:
     """Команда /topumnij для показа рейтинга."""
-    if (
-        message.chat.id != settings.forum_chat_id
-        or message.message_thread_id != settings.topic_games
-    ):
+    if message.chat.id != settings.forum_chat_id:
+        return
+
+    if message.message_thread_id != settings.topic_games:
+        await message.reply("Эта команда доступна только в топике Игры.")
         return
 
     async for session in get_session():
