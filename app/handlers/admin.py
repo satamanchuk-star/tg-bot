@@ -21,12 +21,12 @@ router = Router()
 
 ADMIN_HELP = (
     "Админ-команды:\n"
-    "/mute <минуты> (реплай или id)\n"
-    "/unmute (реплай или id)\n"
-    "/ban <дни> (реплай или id)\n"
-    "/unban (реплай или id)\n"
-    "/strike (реплай или id)\n"
-    "/addcoins <кол-во> (реплай или id, не более 10 за раз)\n"
+    "/mute <минуты> (реплай)\n"
+    "/unmute (реплай)\n"
+    "/ban <дни> (реплай)\n"
+    "/unban (реплай)\n"
+    "/strike (реплай)\n"
+    "/addcoins <кол-во> (реплай, не более 10 за раз)\n"
     "/reload_profanity"
 )
 
@@ -53,7 +53,7 @@ async def mute_user(message: Message, bot: Bot) -> None:
         return
     target_id, display_name = extract_target_user(message)
     if target_id is None:
-        await message.reply("Нужен реплай или id пользователя.")
+        await message.reply("Нужен реплай на сообщение пользователя.")
         return
     until = datetime.utcnow() + timedelta(minutes=minutes)
     permissions = ChatPermissions(can_send_messages=False)
@@ -72,7 +72,7 @@ async def unmute_user(message: Message, bot: Bot) -> None:
         return
     target_id, display_name = extract_target_user(message)
     if target_id is None:
-        await message.reply("Нужен реплай или id пользователя.")
+        await message.reply("Нужен реплай на сообщение пользователя.")
         return
     permissions = ChatPermissions(can_send_messages=True, can_send_other_messages=True)
     await bot.restrict_chat_member(
@@ -96,7 +96,7 @@ async def ban_user(message: Message, bot: Bot) -> None:
         return
     target_id, display_name = extract_target_user(message)
     if target_id is None:
-        await message.reply("Нужен реплай или id пользователя.")
+        await message.reply("Нужен реплай на сообщение пользователя.")
         return
     until = datetime.utcnow() + timedelta(days=days)
     await bot.ban_chat_member(settings.forum_chat_id, target_id, until_date=until)
@@ -109,7 +109,7 @@ async def unban_user(message: Message, bot: Bot) -> None:
         return
     target_id, display_name = extract_target_user(message)
     if target_id is None:
-        await message.reply("Нужен реплай или id пользователя.")
+        await message.reply("Нужен реплай на сообщение пользователя.")
         return
     await bot.unban_chat_member(settings.forum_chat_id, target_id)
     await message.reply("Бан снят.")
@@ -121,7 +121,7 @@ async def strike_user(message: Message, bot: Bot) -> None:
         return
     target_id, display_name = extract_target_user(message)
     if target_id is None:
-        await message.reply("Нужен реплай или id пользователя.")
+        await message.reply("Нужен реплай на сообщение пользователя.")
         return
     async for session in get_session():
         count = await add_strike(session, target_id, settings.forum_chat_id)
@@ -158,7 +158,7 @@ async def grant_coins(message: Message, bot: Bot) -> None:
         return
     target_id, display_name = extract_target_user(message)
     if target_id is None:
-        await message.reply("Нужен реплай или id пользователя.")
+        await message.reply("Нужен реплай на сообщение пользователя.")
         return
     async for session in get_session():
         stats = await get_or_create_stats(

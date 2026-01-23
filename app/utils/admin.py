@@ -12,17 +12,10 @@ async def is_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
 
 
 def extract_target_user(message: Message) -> tuple[int | None, str | None]:
-    """Получает цель из реплая или аргумента (упоминание не парсим)."""
-
+    """Получает цель из реплая."""
     if message.reply_to_message and message.reply_to_message.from_user:
         return (
             message.reply_to_message.from_user.id,
             message.reply_to_message.from_user.full_name,
         )
-    parts = (message.text or "").split()
-    if len(parts) < 2:
-        return None, None
-    try:
-        return int(parts[1]), None
-    except ValueError:
-        return None, None
+    return None, None
