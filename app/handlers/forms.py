@@ -8,6 +8,7 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import Message
 
 logger = logging.getLogger(__name__)
@@ -30,16 +31,6 @@ class NeighborForm(StatesGroup):
     about = State()
 
 
-async def _check_assigned_user(message: Message, state: FSMContext) -> bool:
-    """Проверяет, что отвечает назначенный пользователь."""
-    data = await state.get_data()
-    assigned_id = data.get("assigned_user_id")
-    if assigned_id and message.from_user.id != assigned_id:
-        await message.reply("Эта форма предназначена для другого пользователя.")
-        return False
-    return True
-
-
 @router.message(Command("form"))
 async def start_gate_form_command(message: Message, state: FSMContext, bot: Bot) -> None:
     """Команда /form для запуска формы шлагбаума (только админы)."""
@@ -59,8 +50,16 @@ async def start_gate_form_command(message: Message, state: FSMContext, bot: Bot)
         return
 
     target = message.reply_to_message.from_user
-    await state.update_data(assigned_user_id=target.id)
-    await state.set_state(GateForm.arrival_time)
+    # Устанавливаем FSM-состояние для целевого пользователя, а не для админа
+    target_state = FSMContext(
+        storage=state.storage,
+        key=StorageKey(
+            bot_id=bot.id,
+            chat_id=message.chat.id,
+            user_id=target.id
+        )
+    )
+    await target_state.set_state(GateForm.arrival_time)
     target_name = f"@{target.username}" if target.username else target.full_name
     await message.reply(
         f"{target_name}, заполни анкету:\n1) Дата и время заезда?"
@@ -72,8 +71,6 @@ async def start_gate_form_command(message: Message, state: FSMContext, bot: Bot)
 
 @router.message(GateForm.arrival_time)
 async def gate_arrival(message: Message, state: FSMContext) -> None:
-    if not await _check_assigned_user(message, state):
-        return
     logger.info(f"HANDLER: gate_arrival, text={message.text!r}")
     await state.update_data(arrival_time=message.text)
     await state.set_state(GateForm.car_number)
@@ -83,8 +80,6 @@ async def gate_arrival(message: Message, state: FSMContext) -> None:
 
 @router.message(GateForm.car_number)
 async def gate_car(message: Message, state: FSMContext) -> None:
-    if not await _check_assigned_user(message, state):
-        return
     logger.info(f"HANDLER: gate_car, text={message.text!r}")
     await state.update_data(car_number=message.text)
     await state.set_state(GateForm.in_pass_base)
@@ -94,8 +89,6 @@ async def gate_car(message: Message, state: FSMContext) -> None:
 
 @router.message(GateForm.in_pass_base)
 async def gate_finish(message: Message, state: FSMContext, bot: Bot) -> None:
-    if not await _check_assigned_user(message, state):
-        return
     logger.info(f"HANDLER: gate_finish, text={message.text!r}")
     await state.update_data(in_pass_base=message.text)
     data = await state.get_data()
