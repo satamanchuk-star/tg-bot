@@ -31,11 +31,10 @@ jobs:
             BUILD_VERSION=#${{ github.run_number }} (${{ steps.sha.outputs.short }})
 
       - name: Deploy to server
-        if: false  # временно отключено
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
-          username: root
-          password: ${{ secrets.SSH_PASSWORD }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            cd /opt/alexbot && ./reload.sh
+            cd /opt/alexbot && sh reload.sh
