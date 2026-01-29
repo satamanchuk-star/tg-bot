@@ -41,9 +41,9 @@ async def can_start_quiz(
 
     Возвращает (можно_ли, причина_отказа).
     """
-    # Проверка времени: 10:00-23:00 МСК
-    if not is_game_time_allowed(10, 23):
-        return False, "Викторина доступна с 10:00 до 23:00 по Москве."
+    # Проверка времени: 10:00-00:00 МСК
+    if not is_game_time_allowed(10, 24):
+        return False, "Викторина доступна с 10:00 до 00:00 по Москве."
 
     # Проверка активной сессии
     active = await session.execute(
