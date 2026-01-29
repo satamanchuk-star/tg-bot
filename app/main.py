@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from app.config import settings
 from app.db import Base, engine, get_session
 from app.handlers import admin, forms, games, help as help_handler, moderation, quiz
-from app.models import MigrationFlag, UserStat
+from app.models import MigrationFlag, QuizQuestion, UserStat
 from app.services.topic_stats import bump_topic_stat
 from app.services.games import (
     end_game,
@@ -39,6 +39,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL_MIN = 10
+STOP_FLAG = Path("/app/data/.stopped")
 
 
 class LoggingMiddleware(BaseMiddleware):
@@ -107,6 +108,22 @@ async def apply_v11_stats_reset(session: AsyncSession) -> None:
     session.add(MigrationFlag(key="v11_stats_reset"))
     await session.commit()
     logger.info("v1.1: статистика сброшена")
+
+
+async def load_initial_quiz_questions(session: AsyncSession) -> None:
+    """Загружает начальные вопросы для викторины."""
+    flag = await session.get(MigrationFlag, "quiz_questions_initial_load")
+    if flag:
+        return
+
+    from app.data.quiz_questions import INITIAL_QUESTIONS
+
+    for question, answer in INITIAL_QUESTIONS:
+        session.add(QuizQuestion(question=question, answer=answer))
+
+    session.add(MigrationFlag(key="quiz_questions_initial_load"))
+    await session.commit()
+    logger.info(f"Загружено {len(INITIAL_QUESTIONS)} вопросов для викторины")
 
 
 async def send_daily_summary(bot: Bot) -> None:
@@ -226,6 +243,7 @@ async def on_startup(bot: Bot) -> None:
     # Применяем миграции
     async for session in get_session():
         await apply_v11_stats_reset(session)
+        await load_initial_quiz_questions(session)
     await heartbeat_job(bot)
     await bot.send_message(
         settings.admin_log_chat_id,
@@ -259,6 +277,11 @@ async def error_handler(event: ErrorEvent) -> bool:
 
 
 async def main() -> None:
+    # Проверка флага остановки — если бот был остановлен командой /shutdown_bot
+    if STOP_FLAG.exists():
+        logger.info("Бот остановлен. Удалите /app/data/.stopped для запуска.")
+        return
+
     bot = Bot(token=settings.bot_token)
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.outer_middleware(LoggingMiddleware())

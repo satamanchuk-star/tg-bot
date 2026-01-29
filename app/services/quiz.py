@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import random
 from datetime import datetime, timezone
 
@@ -14,6 +15,21 @@ from app.utils.time import is_game_time_allowed, now_tz
 QUIZ_MAX_LAUNCHES_PER_DAY = 2
 QUIZ_QUESTIONS_COUNT = 5
 QUIZ_QUESTION_TIMEOUT_SEC = 60
+
+
+def get_used_question_ids(quiz_session: QuizSession) -> list[int]:
+    """Возвращает список ID использованных вопросов."""
+    if not quiz_session.used_question_ids:
+        return []
+    return json.loads(quiz_session.used_question_ids)
+
+
+def add_used_question_id(quiz_session: QuizSession, question_id: int) -> None:
+    """Добавляет ID вопроса в список использованных."""
+    used_ids = get_used_question_ids(quiz_session)
+    if question_id not in used_ids:
+        used_ids.append(question_id)
+        quiz_session.used_question_ids = json.dumps(used_ids)
 
 
 async def can_start_quiz(
@@ -48,10 +64,11 @@ async def can_start_quiz(
     if limit_row and limit_row.launches >= QUIZ_MAX_LAUNCHES_PER_DAY:
         return False, f"Достигнут лимит викторин на сегодня ({QUIZ_MAX_LAUNCHES_PER_DAY})."
 
-    # Проверка наличия вопросов
-    count = await session.execute(select(func.count(QuizQuestion.id)))
-    if count.scalar() == 0:
-        return False, "В базе нет вопросов для викторины."
+    # Проверка наличия достаточного количества вопросов
+    count_result = await session.execute(select(func.count(QuizQuestion.id)))
+    questions_count = count_result.scalar()
+    if questions_count < QUIZ_QUESTIONS_COUNT:
+        return False, f"Недостаточно вопросов в базе (нужно минимум {QUIZ_QUESTIONS_COUNT}, сейчас {questions_count}). Пополните базу вопросов."
 
     return True, ""
 
@@ -104,12 +121,14 @@ async def get_active_session(
 
 async def get_random_question(
     session: AsyncSession,
-    exclude_ids: list[int] | None = None,
+    quiz_session: QuizSession | None = None,
 ) -> QuizQuestion | None:
-    """Возвращает случайный вопрос из БД."""
+    """Возвращает случайный вопрос из БД, исключая использованные в сессии."""
     query = select(QuizQuestion)
-    if exclude_ids:
-        query = query.where(QuizQuestion.id.notin_(exclude_ids))
+    if quiz_session:
+        exclude_ids = get_used_question_ids(quiz_session)
+        if exclude_ids:
+            query = query.where(QuizQuestion.id.notin_(exclude_ids))
 
     result = await session.execute(query)
     questions = result.scalars().all()
@@ -123,10 +142,11 @@ async def set_current_question(
     quiz_session: QuizSession,
     question: QuizQuestion,
 ) -> None:
-    """Устанавливает текущий вопрос для сессии."""
+    """Устанавливает текущий вопрос для сессии и помечает его как использованный."""
     quiz_session.current_question_id = question.id
     quiz_session.question_number += 1
     quiz_session.question_started_at = datetime.now(timezone.utc)
+    add_used_question_id(quiz_session, question.id)
 
 
 async def get_current_question(

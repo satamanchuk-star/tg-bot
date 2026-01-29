@@ -94,6 +94,7 @@ class QuizSession(Base):
     question_number: Mapped[int] = mapped_column(Integer, default=1)
     question_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     is_active: Mapped[bool] = mapped_column(Integer, default=True)
+    used_question_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class QuizUserStat(Base):

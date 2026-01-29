@@ -85,7 +85,7 @@ async def _handle_timeout(bot: Bot, chat_id: int, topic_id: int) -> None:
             return
 
         # Следующий вопрос
-        next_question = await get_random_question(session)
+        next_question = await get_random_question(session, quiz_session)
         if next_question:
             await set_current_question(session, quiz_session, next_question)
             await session.commit()
@@ -142,7 +142,7 @@ async def start_quiz(message: Message, bot: Bot) -> None:
 
         quiz_session = await start_quiz_session(session, chat_id, topic_id)
 
-        question = await get_random_question(session)
+        question = await get_random_question(session, quiz_session)
         if not question:
             await message.reply("Нет доступных вопросов.")
             return
@@ -243,7 +243,7 @@ async def check_quiz_answer(message: Message, bot: Bot) -> None:
             return
 
         # Следующий вопрос
-        next_question = await get_random_question(session)
+        next_question = await get_random_question(session, quiz_session)
         if next_question:
             await set_current_question(session, quiz_session, next_question)
             await session.commit()
