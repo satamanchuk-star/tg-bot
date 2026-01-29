@@ -31,6 +31,7 @@ jobs:
             BUILD_VERSION=#${{ github.run_number }} (${{ steps.sha.outputs.short }})
 
       - name: Deploy to server
+        if: false  # временно отключено
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
