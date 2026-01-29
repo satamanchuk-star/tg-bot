@@ -67,13 +67,14 @@ async def _handle_timeout(bot: Bot, chat_id: int, topic_id: int) -> None:
 
     await asyncio.sleep(QUIZ_QUESTION_TIMEOUT_SEC)
 
+    # Проверяем race condition: если значение в dict изменилось, вопрос был отвечен
+    current_started_at = _question_started_at.get(key)
+    if current_started_at != started_at_before:
+        return
+
     async for session in get_session():
         quiz_session = await get_active_session(session, chat_id, topic_id)
         if not quiz_session or not quiz_session.is_active:
-            return
-
-        # Проверяем race condition: если вопрос уже сменился, не показываем таймаут
-        if quiz_session.question_started_at != started_at_before:
             return
 
         question = await get_current_question(session, quiz_session)
@@ -233,6 +234,8 @@ async def check_quiz_answer(message: Message, bot: Bot) -> None:
 
         # Правильный ответ!
         _cancel_timeout(chat_id, topic_id)
+        # Сбрасываем таймстамп для защиты от race condition
+        _question_started_at[(chat_id, topic_id)] = None
 
         stat = await award_point(
             session,
