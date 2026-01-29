@@ -87,13 +87,22 @@ async def init_db(async_engine: AsyncEngine) -> None:
 
         def _ensure_columns(sync_conn: object) -> None:
             inspector = inspect(sync_conn)
-            if not inspector.has_table("user_stats"):
-                return
-            columns = {column["name"] for column in inspector.get_columns("user_stats")}
-            if "display_name" not in columns:
-                sync_conn.execute(
-                    text("ALTER TABLE user_stats ADD COLUMN display_name TEXT")
-                )
+
+            # Миграция user_stats
+            if inspector.has_table("user_stats"):
+                columns = {column["name"] for column in inspector.get_columns("user_stats")}
+                if "display_name" not in columns:
+                    sync_conn.execute(
+                        text("ALTER TABLE user_stats ADD COLUMN display_name TEXT")
+                    )
+
+            # Миграция quiz_sessions
+            if inspector.has_table("quiz_sessions"):
+                columns = {column["name"] for column in inspector.get_columns("quiz_sessions")}
+                if "used_question_ids" not in columns:
+                    sync_conn.execute(
+                        text("ALTER TABLE quiz_sessions ADD COLUMN used_question_ids TEXT")
+                    )
 
         await conn.run_sync(_ensure_columns)
 
