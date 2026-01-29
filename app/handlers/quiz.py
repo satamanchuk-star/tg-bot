@@ -43,6 +43,34 @@ _timeout_tasks: dict[tuple[int, int], asyncio.Task] = {}
 # Хранилище времени начала вопроса для проверки race condition
 _question_started_at: dict[tuple[int, int], datetime | None] = {}
 
+# Результаты текущей сессии: (chat_id, topic_id) -> {user_id: (display_name, points)}
+_session_results: dict[tuple[int, int], dict[int, tuple[str, int]]] = {}
+
+
+def _pluralize_points(n: int) -> str:
+    """Склонение слова 'очко' в зависимости от числа."""
+    if 11 <= n % 100 <= 14:
+        return "очков"
+    if n % 10 == 1:
+        return "очко"
+    if 2 <= n % 10 <= 4:
+        return "очка"
+    return "очков"
+
+
+def _format_results(chat_id: int, topic_id: int) -> str:
+    """Форматирует итоги викторины и очищает результаты сессии."""
+    key = (chat_id, topic_id)
+    results = _session_results.pop(key, {})
+    if not results:
+        return "Викторина завершена! Никто не ответил правильно."
+
+    lines = ["Викторина завершена!\n\nИтоги:"]
+    sorted_results = sorted(results.items(), key=lambda x: -x[1][1])
+    for user_id, (name, points) in sorted_results:
+        lines.append(f"• @{name}: +{points} {_pluralize_points(points)}")
+    return "\n".join(lines)
+
 
 def _display_name(message: Message) -> str | None:
     if message.from_user is None:
@@ -91,7 +119,7 @@ async def _handle_timeout(bot: Bot, chat_id: int, topic_id: int) -> None:
             await session.commit()
             await bot.send_message(
                 chat_id,
-                "Викторина завершена!",
+                _format_results(chat_id, topic_id),
                 message_thread_id=topic_id,
             )
             _cancel_timeout(chat_id, topic_id)
@@ -113,7 +141,7 @@ async def _handle_timeout(bot: Bot, chat_id: int, topic_id: int) -> None:
             await session.commit()
             await bot.send_message(
                 chat_id,
-                "Вопросы закончились. Викторина завершена!",
+                _format_results(chat_id, topic_id),
                 message_thread_id=topic_id,
             )
             _cancel_timeout(chat_id, topic_id)
@@ -148,6 +176,9 @@ async def start_quiz(message: Message, bot: Bot) -> None:
 
     chat_id = settings.forum_chat_id
     topic_id = settings.topic_games
+
+    # Очищаем результаты предыдущей сессии
+    _session_results[(chat_id, topic_id)] = {}
 
     async for session in get_session():
         can_start, reason = await can_start_quiz(session, chat_id, topic_id)
@@ -245,6 +276,17 @@ async def check_quiz_answer(message: Message, bot: Bot) -> None:
         )
 
         name = _display_name(message) or str(message.from_user.id)
+
+        # Отслеживаем результаты сессии
+        key = (chat_id, topic_id)
+        if key not in _session_results:
+            _session_results[key] = {}
+        results = _session_results[key]
+        user_id = message.from_user.id
+        if user_id in results:
+            results[user_id] = (name, results[user_id][1] + 1)
+        else:
+            results[user_id] = (name, 1)
         await message.reply(
             f"Правильно, @{name}! +1 очко (всего: {stat.total_points})"
         )
@@ -255,7 +297,7 @@ async def check_quiz_answer(message: Message, bot: Bot) -> None:
             await session.commit()
             await bot.send_message(
                 chat_id,
-                "Викторина завершена!",
+                _format_results(chat_id, topic_id),
                 message_thread_id=topic_id,
             )
             return
@@ -275,6 +317,6 @@ async def check_quiz_answer(message: Message, bot: Bot) -> None:
             await session.commit()
             await bot.send_message(
                 chat_id,
-                "Вопросы закончились. Викторина завершена!",
+                _format_results(chat_id, topic_id),
                 message_thread_id=topic_id,
             )
