@@ -20,9 +20,7 @@ router = Router()
 
 
 class GateForm(StatesGroup):
-    arrival_time = State()
-    car_number = State()
-    in_pass_base = State()
+    waiting_response = State()  # Единственное состояние для ответа на все вопросы
 
 
 class NeighborForm(StatesGroup):
@@ -59,47 +57,33 @@ async def start_gate_form_command(message: Message, state: FSMContext, bot: Bot)
             user_id=target.id
         )
     )
-    await target_state.set_state(GateForm.arrival_time)
+    await target_state.set_state(GateForm.waiting_response)
     target_name = f"@{target.username}" if target.username else target.full_name
     await message.reply(
-        f"{target_name}, заполни анкету:\n1) Дата и время заезда?"
+        f"{target_name}, заполни анкету:\n"
+        "1) Дата и время заезда\n"
+        "2) Номер автомобиля\n"
+        "3) Цвет и марка машины\n"
+        "4) Номер был в постоянной базе пропусков? (да/нет)"
     )
     logger.info(f"HANDLER: start_gate_form_command, target={target.id}")
 
 
 # FSM handlers MUST be registered BEFORE catch-all handlers
 
-@router.message(GateForm.arrival_time)
-async def gate_arrival(message: Message, state: FSMContext) -> None:
-    logger.info(f"HANDLER: gate_arrival, text={message.text!r}")
-    await state.update_data(arrival_time=message.text)
-    await state.set_state(GateForm.car_number)
-    await message.reply("2) Номер автомобиля?")
-    logger.info("OUT: 2) Номер автомобиля?")
-
-
-@router.message(GateForm.car_number)
-async def gate_car(message: Message, state: FSMContext) -> None:
-    logger.info(f"HANDLER: gate_car, text={message.text!r}")
-    await state.update_data(car_number=message.text)
-    await state.set_state(GateForm.in_pass_base)
-    await message.reply("3) Номер был в постоянной базе пропусков? (да/нет)")
-    logger.info("OUT: 3) Номер был в постоянной базе пропусков?")
-
-
-@router.message(GateForm.in_pass_base)
-async def gate_finish(message: Message, state: FSMContext, bot: Bot) -> None:
-    logger.info(f"HANDLER: gate_finish, text={message.text!r}")
-    await state.update_data(in_pass_base=message.text)
-    data = await state.get_data()
+@router.message(GateForm.waiting_response)
+async def gate_response(message: Message, state: FSMContext, bot: Bot) -> None:
+    """Обработчик ответа пользователя на все вопросы формы шлагбаума."""
+    logger.info(f"HANDLER: gate_response, text={message.text!r}")
     await state.clear()
 
+    user = message.from_user
+    username_part = f" @{user.username}" if user.username else ""
     text = (
         "#проблема_шлагбаум\n"
-        f"Дата/время заезда: {data.get('arrival_time')}\n"
-        f"Авто: {data.get('car_number')}\n"
-        f"В базе пропусков: {data.get('in_pass_base')}\n"
-        f"От пользователя: {message.from_user.full_name} ({message.from_user.id})"
+        "Ответ пользователя:\n"
+        f"{message.text}\n\n"
+        f"От пользователя ({user.full_name}{username_part} {user.id})"
     )
     await bot.send_message(settings.admin_log_chat_id, text)
     await message.reply("Спасибо! Заявка отправлена администраторам.")
