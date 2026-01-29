@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from aiogram import Bot, F, Router
@@ -39,6 +40,9 @@ router = Router()
 # Хранилище активных таймаутов (chat_id, topic_id) -> asyncio.Task
 _timeout_tasks: dict[tuple[int, int], asyncio.Task] = {}
 
+# Хранилище времени начала вопроса для проверки race condition
+_question_started_at: dict[tuple[int, int], datetime | None] = {}
+
 
 def _display_name(message: Message) -> str | None:
     if message.from_user is None:
@@ -57,11 +61,19 @@ async def _send_question(bot: Bot, chat_id: int, topic_id: int, question_num: in
 
 async def _handle_timeout(bot: Bot, chat_id: int, topic_id: int) -> None:
     """Обрабатывает таймаут вопроса."""
+    # Запоминаем время начала вопроса ДО сна
+    key = (chat_id, topic_id)
+    started_at_before = _question_started_at.get(key)
+
     await asyncio.sleep(QUIZ_QUESTION_TIMEOUT_SEC)
 
     async for session in get_session():
         quiz_session = await get_active_session(session, chat_id, topic_id)
         if not quiz_session or not quiz_session.is_active:
+            return
+
+        # Проверяем race condition: если вопрос уже сменился, не показываем таймаут
+        if quiz_session.question_started_at != started_at_before:
             return
 
         question = await get_current_question(session, quiz_session)
@@ -94,7 +106,7 @@ async def _handle_timeout(bot: Bot, chat_id: int, topic_id: int) -> None:
                 quiz_session.question_number, next_question.question
             )
             # Запускаем новый таймаут
-            _start_timeout(bot, chat_id, topic_id)
+            _start_timeout(bot, chat_id, topic_id, quiz_session.question_started_at)
         else:
             await end_quiz_session(session, quiz_session)
             await session.commit()
@@ -106,11 +118,13 @@ async def _handle_timeout(bot: Bot, chat_id: int, topic_id: int) -> None:
             _cancel_timeout(chat_id, topic_id)
 
 
-def _start_timeout(bot: Bot, chat_id: int, topic_id: int) -> None:
+def _start_timeout(bot: Bot, chat_id: int, topic_id: int, question_started_at: datetime | None) -> None:
     """Запускает таймаут для текущего вопроса."""
     _cancel_timeout(chat_id, topic_id)
+    key = (chat_id, topic_id)
+    _question_started_at[key] = question_started_at
     task = asyncio.create_task(_handle_timeout(bot, chat_id, topic_id))
-    _timeout_tasks[(chat_id, topic_id)] = task
+    _timeout_tasks[key] = task
 
 
 def _cancel_timeout(chat_id: int, topic_id: int) -> None:
@@ -149,10 +163,11 @@ async def start_quiz(message: Message, bot: Bot) -> None:
 
         await set_current_question(session, quiz_session, question)
         await session.commit()
+        question_started_at = quiz_session.question_started_at
 
     await message.reply("Викторина начинается! У вас 60 секунд на каждый вопрос.")
     await _send_question(bot, chat_id, topic_id, 1, question.question)
-    _start_timeout(bot, chat_id, topic_id)
+    _start_timeout(bot, chat_id, topic_id, question_started_at)
 
     # Логируем в админ-чат
     await bot.send_message(
@@ -251,7 +266,7 @@ async def check_quiz_answer(message: Message, bot: Bot) -> None:
                 bot, chat_id, topic_id,
                 quiz_session.question_number, next_question.question
             )
-            _start_timeout(bot, chat_id, topic_id)
+            _start_timeout(bot, chat_id, topic_id, quiz_session.question_started_at)
         else:
             await end_quiz_session(session, quiz_session)
             await session.commit()
