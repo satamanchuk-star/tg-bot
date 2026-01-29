@@ -78,6 +78,7 @@ Environment variables in `.env`:
 - Comments in Russian
 - Python type hints throughout
 - No formal linting configured
+- Проверка синтаксиса: `python3 -m py_compile <file>`
 
 ## Git
 

@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import os
+import signal
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import ChatPermissions, Message
+from sqlalchemy import delete, update
 
 from app.config import settings
 from app.db import get_session
+from app.models import GameState, QuizSession
 from app.services.games import can_grant_coins, get_or_create_stats, register_coin_grant
 from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import extract_target_user, is_admin
@@ -19,6 +25,8 @@ from app.utils.profanity import load_profanity
 router = Router()
 
 
+STOP_FLAG = Path("/app/data/.stopped")
+
 ADMIN_HELP = (
     "Админ-команды:\n"
     "/mute <минуты> (реплай)\n"
@@ -27,7 +35,10 @@ ADMIN_HELP = (
     "/unban (реплай)\n"
     "/strike (реплай)\n"
     "/addcoins <кол-во> (реплай, не более 10 за раз)\n"
-    "/reload_profanity"
+    "/reload_profanity\n"
+    "/load_quiz — загрузить вопросы с quizvopros.ru\n"
+    "/restart_jobs — сброс зависших задач (формы, квизы, игры)\n"
+    "/shutdown_bot — полная остановка бота"
 )
 
 
@@ -183,3 +194,117 @@ async def reload_profanity(message: Message, bot: Bot) -> None:
     words = load_profanity()
     update_profanity(words)
     await message.reply(f"Список матов обновлен. Слов: {len(words)}")
+
+
+@router.message(Command("load_quiz"))
+async def load_quiz_questions(message: Message, bot: Bot) -> None:
+    """Загружает вопросы для викторины с quizvopros.ru."""
+    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+        return
+
+    from app.services.quiz_loader import load_questions_from_quizvopros, save_questions_to_db
+
+    status_msg = await message.reply("Начинаю загрузку вопросов...")
+
+    questions: list[tuple[str, str]] = []
+    last_update = ""
+
+    async for progress in load_questions_from_quizvopros():
+        if progress.startswith("DONE"):
+            # Парсим финальное сообщение с данными
+            parts = progress.split("|")
+            if len(parts) > 1:
+                # Формат: DONE|q1|a1|q2|a2|...
+                for i in range(1, len(parts) - 1, 2):
+                    questions.append((parts[i], parts[i + 1]))
+        else:
+            # Обновляем статус каждые несколько сообщений
+            if progress != last_update:
+                last_update = progress
+                try:
+                    await status_msg.edit_text(f"Загрузка: {progress}")
+                except Exception:
+                    pass  # Telegram может ругаться на слишком частые изменения
+
+    if not questions:
+        await status_msg.edit_text("Вопросы не найдены.")
+        return
+
+    # Сохраняем в БД
+    async for session in get_session():
+        added = await save_questions_to_db(session, questions)
+
+    await status_msg.edit_text(
+        f"Загрузка завершена!\n"
+        f"Найдено вопросов: {len(questions)}\n"
+        f"Добавлено новых: {added}"
+    )
+
+
+@router.message(Command("restart_jobs"))
+async def restart_jobs(message: Message, bot: Bot, state: FSMContext) -> None:
+    """Останавливает все зависшие задачи (формы, квизы, игры)."""
+    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+        return
+
+    cleared = []
+
+    # 1. Отменяем таймауты квиза
+    from app.handlers.quiz import _timeout_tasks
+    if _timeout_tasks:
+        for task in _timeout_tasks.values():
+            task.cancel()
+        _timeout_tasks.clear()
+        cleared.append("таймауты квиза")
+
+    # 2. Очищаем БД
+    async for session in get_session():
+        # Игры
+        result = await session.execute(delete(GameState))
+        if result.rowcount > 0:
+            cleared.append(f"игры ({result.rowcount})")
+
+        # Квизы
+        result = await session.execute(
+            update(QuizSession)
+            .where(QuizSession.is_active == True)
+            .values(is_active=False)
+        )
+        if result.rowcount > 0:
+            cleared.append(f"квизы ({result.rowcount})")
+
+        await session.commit()
+
+    # 3. Очищаем FSM (через storage)
+    storage = state.storage
+    # MemoryStorage хранит данные в _data dict
+    if hasattr(storage, '_data'):
+        storage._data.clear()
+        cleared.append("FSM-состояния")
+
+    if cleared:
+        await message.reply(f"Очищено: {', '.join(cleared)}")
+    else:
+        await message.reply("Нет зависших задач.")
+
+
+@router.message(Command("shutdown_bot"))
+async def shutdown_bot_cmd(message: Message, bot: Bot) -> None:
+    """Полностью останавливает бота без автоматического перезапуска."""
+    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+        return
+
+    # Создаём файл-флаг для предотвращения перезапуска
+    STOP_FLAG.parent.mkdir(parents=True, exist_ok=True)
+    STOP_FLAG.touch()
+
+    await message.reply("🛑 Бот останавливается...")
+    await bot.send_message(
+        settings.admin_log_chat_id,
+        f"🛑 Бот остановлен командой /shutdown_bot\n"
+        f"Админ: {message.from_user.full_name}\n"
+        f"Для запуска: удалить /app/data/.stopped и перезапустить контейнер",
+    )
+
+    # Отправляем сигнал завершения процессу
+    os.kill(os.getpid(), signal.SIGTERM)
