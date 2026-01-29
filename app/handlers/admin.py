@@ -15,10 +15,11 @@ from sqlalchemy import delete, update
 
 from app.config import settings
 from app.db import get_session
-from app.models import GameState, QuizSession
+from app.models import GameState, QuizDailyLimit, QuizSession
 from app.services.games import can_grant_coins, get_or_create_stats, register_coin_grant
 from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import extract_target_user, is_admin
+from app.utils.time import now_tz
 from app.handlers.moderation import update_profanity
 from app.utils.profanity import load_profanity
 
@@ -37,6 +38,7 @@ ADMIN_HELP = (
     "/addcoins <кол-во> (реплай, не более 10 за раз)\n"
     "/reload_profanity\n"
     "/load_quiz — загрузить вопросы с quizvopros.ru\n"
+    "/reset_quiz — сбросить счётчик викторин на сегодня\n"
     "/restart_jobs — сброс зависших задач (формы, квизы, игры)\n"
     "/shutdown_bot — полная остановка бота"
 )
@@ -239,6 +241,32 @@ async def load_quiz_questions(message: Message, bot: Bot) -> None:
         f"Найдено вопросов: {len(questions)}\n"
         f"Добавлено новых: {added}"
     )
+
+
+@router.message(Command("reset_quiz"))
+async def reset_quiz_limit(message: Message, bot: Bot) -> None:
+    """Сбрасывает счётчик викторин на сегодня."""
+    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+        return
+
+    chat_id = settings.forum_chat_id
+    topic_id = settings.topic_games
+    date_key = now_tz().date().isoformat()
+
+    async for session in get_session():
+        result = await session.execute(
+            delete(QuizDailyLimit).where(
+                QuizDailyLimit.chat_id == chat_id,
+                QuizDailyLimit.topic_id == topic_id,
+                QuizDailyLimit.date_key == date_key,
+            )
+        )
+        await session.commit()
+
+    if result.rowcount > 0:
+        await message.reply("Счётчик викторин на сегодня сброшен.")
+    else:
+        await message.reply("Счётчик и так был пустой.")
 
 
 @router.message(Command("restart_jobs"))
