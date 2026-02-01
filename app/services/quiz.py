@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select, update
@@ -13,7 +14,7 @@ from app.models import QuizDailyLimit, QuizQuestion, QuizSession, QuizUserStat
 from app.utils.time import is_game_time_allowed, now_tz
 
 QUIZ_MAX_LAUNCHES_PER_DAY = 2
-QUIZ_QUESTIONS_COUNT = 5
+QUIZ_QUESTIONS_COUNT = 10
 QUIZ_QUESTION_TIMEOUT_SEC = 60
 
 
@@ -41,9 +42,9 @@ async def can_start_quiz(
 
     Возвращает (можно_ли, причина_отказа).
     """
-    # Проверка времени: 10:00-00:00 МСК
-    if not is_game_time_allowed(10, 24):
-        return False, "Викторина доступна с 10:00 до 00:00 по Москве."
+    # Проверка времени: 20:00-22:00 МСК
+    if not is_game_time_allowed(20, 22):
+        return False, "Викторина доступна с 20:00 до 22:00 по Москве."
 
     # Проверка активной сессии
     active = await session.execute(
@@ -159,9 +160,27 @@ async def get_current_question(
     return await session.get(QuizQuestion, quiz_session.current_question_id)
 
 
+def _normalize_text(text: str) -> str:
+    cleaned = re.sub(r"[^\w\s]+", " ", text.lower())
+    return " ".join(cleaned.split())
+
+
+def _normalize_words(text: str) -> list[str]:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return []
+    return normalized.split()
+
+
 def check_answer(question: QuizQuestion, answer: str) -> bool:
-    """Проверяет ответ на вопрос (case-insensitive, полное совпадение)."""
-    return question.answer.strip().lower() == answer.strip().lower()
+    """Проверяет ответ на вопрос без учёта регистра и пунктуации."""
+    correct_words = _normalize_words(question.answer)
+    answer_words = _normalize_words(answer)
+    if not correct_words or not answer_words:
+        return False
+    if len(correct_words) == 1:
+        return _normalize_text(question.answer) == _normalize_text(answer)
+    return len(set(correct_words) & set(answer_words)) >= 2
 
 
 def is_question_timed_out(quiz_session: QuizSession) -> bool:
@@ -223,5 +242,5 @@ async def get_quiz_leaderboard(
 
 
 async def is_quiz_finished(quiz_session: QuizSession) -> bool:
-    """Проверяет, завершена ли викторина (5 вопросов)."""
+    """Проверяет, завершена ли викторина (10 вопросов)."""
     return quiz_session.question_number >= QUIZ_QUESTIONS_COUNT
