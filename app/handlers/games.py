@@ -17,6 +17,7 @@ from app.services.games import (
     get_or_create_stats,
     get_weekly_leaderboard,
     load_game,
+    register_game_command_message,
     save_game,
     start_game,
     evaluate_game,
@@ -35,6 +36,18 @@ def _display_name_from_callback(callback: CallbackQuery) -> str | None:
     if callback.from_user is None:
         return None
     return callback.from_user.username or callback.from_user.full_name
+
+
+async def _track_game_command(message: Message) -> None:
+    if not is_game_time_allowed(22, 24):
+        return
+    async for session in get_session():
+        await register_game_command_message(
+            session,
+            message.chat.id,
+            message.message_id,
+        )
+        await session.commit()
 
 
 def game_keyboard() -> InlineKeyboardMarkup:
@@ -90,9 +103,10 @@ async def start_blackjack(message: Message) -> None:
         return
 
     # Проверка времени: игра доступна с 22:00 до 23:00 МСК
-    if not is_game_time_allowed(22, 23):
-        await message.reply("Игра '21' доступна с 22:00 до 23:00 по Москве.")
+    if not is_game_time_allowed(22, 24):
+        await message.reply("Игра '21' доступна с 22:00 до 00:00 по Москве.")
         return
+    await _track_game_command(message)
 
     async for session in get_session():
         # Проверяем, нет ли уже активной игры
@@ -126,6 +140,7 @@ async def show_score(message: Message) -> None:
         return
     if message.from_user is None:
         return
+    await _track_game_command(message)
     async for session in get_session():
         stats = await get_or_create_stats(
             session,
@@ -146,6 +161,7 @@ async def show_leaderboard(message: Message) -> None:
         or message.message_thread_id != settings.topic_games
     ):
         return
+    await _track_game_command(message)
 
     async for session in get_session():
         top_coins, top_games = await get_weekly_leaderboard(session, settings.forum_chat_id)

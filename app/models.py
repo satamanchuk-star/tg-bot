@@ -113,3 +113,14 @@ class QuizDailyLimit(Base):
     topic_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     date_key: Mapped[str] = mapped_column(String(10), primary_key=True)
     launches: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class GameCommandMessage(Base):
+    __tablename__ = "game_command_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    message_id: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )

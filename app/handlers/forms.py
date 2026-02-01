@@ -64,7 +64,8 @@ async def start_gate_form_command(message: Message, state: FSMContext, bot: Bot)
         "1) Дата и время заезда\n"
         "2) Номер автомобиля\n"
         "3) Цвет и марка машины\n"
-        "4) Номер был в постоянной базе пропусков? (да/нет)"
+        "4) Номер был в постоянной базе пропусков? (да/нет)\n"
+        "5) Вы выезжали из ЖК или заезжали?"
     )
     logger.info(f"HANDLER: start_gate_form_command, target={target.id}")
 

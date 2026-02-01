@@ -22,8 +22,10 @@ from app.handlers import admin, forms, games, help as help_handler, moderation, 
 from app.models import MigrationFlag, QuizQuestion, UserStat
 from app.services.topic_stats import bump_topic_stat
 from app.services.games import (
+    clear_game_command_messages,
     end_game,
     get_all_active_games,
+    get_game_command_messages,
     get_weekly_leaderboard,
     is_game_timed_out,
 )
@@ -224,6 +226,21 @@ async def check_game_timeouts(bot: Bot) -> None:
                     pass  # Не блокируем, если не удалось отправить
 
 
+async def cleanup_blackjack_commands(bot: Bot) -> None:
+    """Удаляет команды игры 21, отправленные в окно 22:00-00:00."""
+    messages = []
+    async for session in get_session():
+        messages = await get_game_command_messages(session, settings.forum_chat_id)
+        await clear_game_command_messages(session, settings.forum_chat_id)
+        await session.commit()
+
+    for record in messages:
+        try:
+            await bot.delete_message(record.chat_id, record.message_id)
+        except Exception:
+            pass
+
+
 async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
     # Ежедневные сводки отключены
@@ -241,6 +258,41 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     )
     scheduler.add_job(
         check_game_timeouts, "interval", minutes=1, args=[bot]
+    )
+    scheduler.add_job(
+        cleanup_blackjack_commands,
+        "cron",
+        hour=0,
+        minute=1,
+        args=[bot],
+    )
+    scheduler.add_job(
+        quiz.announce_quiz_soon,
+        "cron",
+        hour=19,
+        minute=55,
+        args=[bot],
+    )
+    scheduler.add_job(
+        quiz.start_quiz_auto,
+        "cron",
+        hour=20,
+        minute=0,
+        args=[bot],
+    )
+    scheduler.add_job(
+        quiz.announce_quiz_soon,
+        "cron",
+        hour=20,
+        minute=55,
+        args=[bot],
+    )
+    scheduler.add_job(
+        quiz.start_quiz_auto,
+        "cron",
+        hour=21,
+        minute=0,
+        args=[bot],
     )
     scheduler.start()
     return scheduler

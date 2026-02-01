@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import GameState, UserStat
+from app.models import GameCommandMessage, GameState, UserStat
 
 
 @dataclass
@@ -192,6 +192,36 @@ async def get_weekly_leaderboard(
         )
     ).all()
     return top_coins, top_games
+
+
+async def register_game_command_message(
+    session: AsyncSession,
+    chat_id: int,
+    message_id: int,
+) -> None:
+    """Сохраняет сообщение с командой игры для последующего удаления."""
+    session.add(
+        GameCommandMessage(chat_id=chat_id, message_id=message_id)
+    )
+    await session.flush()
+
+
+async def get_game_command_messages(
+    session: AsyncSession,
+    chat_id: int,
+) -> list[GameCommandMessage]:
+    """Возвращает сообщения с командами игры."""
+    result = await session.execute(
+        select(GameCommandMessage).where(GameCommandMessage.chat_id == chat_id)
+    )
+    return list(result.scalars().all())
+
+
+async def clear_game_command_messages(session: AsyncSession, chat_id: int) -> None:
+    """Удаляет сохранённые команды игры для чата."""
+    await session.execute(
+        delete(GameCommandMessage).where(GameCommandMessage.chat_id == chat_id)
+    )
 
 
 def can_grant_coins(stats: UserStat, now: datetime, amount: int) -> bool:

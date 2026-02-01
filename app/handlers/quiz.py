@@ -13,6 +13,7 @@ from aiogram.types import Message
 
 from app.config import settings
 from app.db import get_session
+from app.utils.admin import is_admin
 from app.services.quiz import (
     QUIZ_QUESTION_TIMEOUT_SEC,
     QUIZ_QUESTIONS_COUNT,
@@ -24,7 +25,6 @@ from app.services.quiz import (
     get_current_question,
     get_quiz_leaderboard,
     get_random_question,
-    is_question_timed_out,
     is_quiz_finished,
     set_current_question,
     start_quiz_session,
@@ -76,6 +76,72 @@ def _display_name(message: Message) -> str | None:
     if message.from_user is None:
         return None
     return message.from_user.username or message.from_user.full_name
+
+
+def _display_name_from_user(user: object) -> str | None:
+    if not hasattr(user, "username") or not hasattr(user, "full_name"):
+        return None
+    return user.username or user.full_name
+
+
+async def announce_quiz_soon(bot: Bot) -> None:
+    """Анонсирует старт викторины за 5 минут."""
+    await bot.send_message(
+        settings.forum_chat_id,
+        "уважаемые соседи через 5 минут начнется викторина в топике "
+        "Блэкджек и боулинг, приходите размять мозг",
+    )
+    await bot.send_message(
+        settings.forum_chat_id,
+        "Привет соседи, давайте поиграем! через 5 минут начнем!",
+        message_thread_id=settings.topic_games,
+    )
+
+
+async def start_quiz_auto(bot: Bot) -> None:
+    """Автоматически запускает викторину."""
+    chat_id = settings.forum_chat_id
+    topic_id = settings.topic_games
+
+    _session_results[(chat_id, topic_id)] = {}
+    question = None
+    question_started_at = None
+
+    async for session in get_session():
+        can_start, reason = await can_start_quiz(session, chat_id, topic_id)
+        if not can_start:
+            logger.info("Авто-викторина не запущена: %s", reason)
+            await bot.send_message(
+                settings.admin_log_chat_id,
+                f"Авто-викторина не запущена: {reason}",
+            )
+            return
+
+        quiz_session = await start_quiz_session(session, chat_id, topic_id)
+        question = await get_random_question(session, quiz_session)
+        if not question:
+            await bot.send_message(chat_id, "Нет доступных вопросов.", message_thread_id=topic_id)
+            return
+
+        await set_current_question(session, quiz_session, question)
+        await session.commit()
+        question_started_at = quiz_session.question_started_at
+
+    if question is None:
+        return
+
+    await bot.send_message(
+        chat_id,
+        "Викторина начинается! У вас 60 секунд на каждый вопрос.",
+        message_thread_id=topic_id,
+    )
+    await _send_question(bot, chat_id, topic_id, 1, question.question)
+    _start_timeout(bot, chat_id, topic_id, question_started_at)
+
+    await bot.send_message(
+        settings.admin_log_chat_id,
+        "Викторина запущена автоматически",
+    )
 
 
 async def _send_question(bot: Bot, chat_id: int, topic_id: int, question_num: int, question_text: str) -> None:
@@ -208,6 +274,53 @@ async def start_quiz(message: Message, bot: Bot) -> None:
     )
 
 
+@router.message(Command("bal"))
+async def add_quiz_point_admin(message: Message, bot: Bot) -> None:
+    """Админская команда для добавления +1 балла в викторине."""
+    if message.from_user is None:
+        return
+    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+        return
+    if (
+        message.chat.id != settings.forum_chat_id
+        or message.message_thread_id != settings.topic_games
+    ):
+        return
+    if not message.reply_to_message or not message.reply_to_message.from_user:
+        await message.reply("Нужен реплай на сообщение игрока.")
+        return
+
+    target_user = message.reply_to_message.from_user
+    display_name = _display_name_from_user(target_user) or str(target_user.id)
+
+    async for session in get_session():
+        quiz_session = await get_active_session(
+            session, settings.forum_chat_id, settings.topic_games
+        )
+        if not quiz_session:
+            await message.reply("Сейчас викторина не запущена.")
+            return
+
+        stat = await award_point(
+            session,
+            target_user.id,
+            settings.forum_chat_id,
+            display_name=display_name,
+        )
+        await session.commit()
+
+    key = (settings.forum_chat_id, settings.topic_games)
+    if key not in _session_results:
+        _session_results[key] = {}
+    results = _session_results[key]
+    if target_user.id in results:
+        results[target_user.id] = (display_name, results[target_user.id][1] + 1)
+    else:
+        results[target_user.id] = (display_name, 1)
+
+    await message.reply(f"Добавлен 1 балл @{display_name}. Всего: {stat.total_points}")
+
+
 @router.message(Command("topumnij"))
 async def show_quiz_leaderboard(message: Message) -> None:
     """Команда /topumnij для показа рейтинга."""
@@ -303,6 +416,10 @@ async def check_quiz_answer(message: Message, bot: Bot) -> None:
             return
 
         # Следующий вопрос
+        quiz_session.current_question_id = None
+        quiz_session.question_started_at = None
+        await session.commit()
+        await asyncio.sleep(60)
         next_question = await get_random_question(session, quiz_session)
         if next_question:
             await set_current_question(session, quiz_session, next_question)
