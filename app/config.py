@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from pydantic import field_validator
+import logging
+from pathlib import Path
+
+from pydantic import ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,7 +17,7 @@ class Settings(BaseSettings):
     bot_token: str
     forum_chat_id: int
     admin_log_chat_id: int
-    database_url: str = "sqlite+aiosqlite:///data/bot.db"
+    database_url: str = "sqlite+aiosqlite:///app/data/bot.db"
     timezone: str = "Europe/Moscow"
     build_version: str = "dev"
 
@@ -69,4 +72,38 @@ class Settings(BaseSettings):
         return value
 
 
-settings = Settings()  # type: ignore[call-arg]
+    @property
+    def data_dir(self) -> Path:
+        """Возвращает директорию для служебных файлов (SQLite или дефолт)."""
+        prefix = "sqlite+aiosqlite:///"
+        if self.database_url.startswith(prefix):
+            db_path = Path(self.database_url.removeprefix(prefix))
+            return db_path.expanduser().resolve().parent
+        return Path("/app/data")
+
+
+def _load_settings() -> Settings:
+    try:
+        return Settings()  # type: ignore[call-arg]
+    except ValidationError as exc:
+        logging.basicConfig(
+            level=logging.ERROR,
+            format="%(asctime)s | %(levelname)s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        logger = logging.getLogger(__name__)
+        missing = [
+            ".".join(map(str, err["loc"]))
+            for err in exc.errors()
+            if err.get("type") == "missing"
+        ]
+        if missing:
+            logger.error(
+                "Не заданы обязательные переменные окружения: %s",
+                ", ".join(missing),
+            )
+        logger.error("Ошибка конфигурации: %s", exc)
+        raise SystemExit(1) from exc
+
+
+settings = _load_settings()
