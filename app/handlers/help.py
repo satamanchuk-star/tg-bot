@@ -94,11 +94,11 @@ def _is_bot_mentioned(message: Message, bot_user: object) -> bool:
 @router.message()
 async def mention_help(message: Message, bot: Bot) -> None:
     logger.info(f"HANDLER: mention_help called, text={message.text!r}")
-    text = _get_message_text(message)
-    if text is None or text.startswith("/"):
+    if message.text is None or message.text.startswith("/"):
         return
     me = await bot.get_me()
-    if _is_bot_mentioned(message, me):
-        logger.info(f"HANDLER: mention_help MATCH @{me.username}")
+    username = me.username
+    if username and f"@{username.lower()}" in message.text.lower():
+        logger.info(f"HANDLER: mention_help MATCH @{username}")
         await message.reply(random.choice(MENTION_REPLIES))
         logger.info("OUT: MENTION_REPLY")
