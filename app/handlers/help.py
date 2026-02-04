@@ -20,6 +20,8 @@ from aiogram.types import (
 )
 
 from app.config import settings
+from app.utils.admin import is_admin
+from app.utils.admin_help import ADMIN_HELP
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -259,6 +261,24 @@ LAST_HINT_TIME: dict[tuple[int, int], datetime] = {}
 HELP_DELETE_TASKS: dict[tuple[int, int], asyncio.Task[None]] = {}
 
 
+async def _get_menu_text(
+    bot: Bot,
+    user_id: int | None,
+    is_anonymous_admin: bool = False,
+) -> str:
+    """Возвращает текст меню, добавляя админ-справку при необходимости."""
+    if is_anonymous_admin:
+        return f"{HELP_MENU_TEXT}\n\n{ADMIN_HELP}"
+    if user_id is None:
+        return HELP_MENU_TEXT
+    try:
+        if await is_admin(bot, settings.forum_chat_id, user_id):
+            return f"{HELP_MENU_TEXT}\n\n{ADMIN_HELP}"
+    except Exception:  # noqa: BLE001 - не ломаем /help при ошибке проверки
+        logger.exception("Не удалось проверить права администратора для /help.")
+    return HELP_MENU_TEXT
+
+
 def _chat_id_for_link(chat_id: int) -> str:
     chat_id_str = str(chat_id)
     if chat_id_str.startswith("-100"):
@@ -417,7 +437,7 @@ def clear_routing_state(
 
 @router.message(Command("start"))
 @router.message(Command("help"))
-async def help_command(message: Message) -> None:
+async def help_command(message: Message, bot: Bot) -> None:
     logger.info("HANDLER: help_command")
     if message.chat.id != settings.forum_chat_id:
         await message.reply("Команда /help работает только в форуме ЖК.")
@@ -428,8 +448,18 @@ async def help_command(message: Message) -> None:
     if message.from_user:
         key = _state_key(message.chat.id, message.from_user.id)
         _clear_waiting_state(key)
+    is_anonymous_admin = (
+        message.from_user is None
+        and message.sender_chat is not None
+        and message.sender_chat.id == message.chat.id
+    )
+    menu_text = await _get_menu_text(
+        bot,
+        message.from_user.id if message.from_user else None,
+        is_anonymous_admin=is_anonymous_admin,
+    )
     response = await message.answer(
-        HELP_MENU_TEXT,
+        menu_text,
         reply_markup=_menu_keyboard(),
         parse_mode="HTML",
     )
@@ -492,8 +522,9 @@ async def help_back(callback: CallbackQuery) -> None:
         return
     key = _state_key(callback.message.chat.id, callback.from_user.id)
     _clear_waiting_state(key)
+    menu_text = await _get_menu_text(callback.message.bot, callback.from_user.id)
     await callback.message.edit_text(
-        HELP_MENU_TEXT,
+        menu_text,
         reply_markup=_menu_keyboard(),
         parse_mode="HTML",
     )
@@ -561,30 +592,16 @@ async def help_topic(callback: CallbackQuery) -> None:
     thread_id = TOPIC_THREADS.get(topic)
     if thread_id is None:
         reply_text = description
-        await callback.message.edit_text(
-            reply_text,
-            reply_markup=_back_keyboard(),
-            parse_mode="HTML",
-        )
     else:
         reply_text = (
             f"{description}\n\n"
             f"Перейти в тему: {_topic_link(topic, thread_id)}"
         )
-        try:
-            await callback.message.bot.send_message(
-                settings.forum_chat_id,
-                reply_text,
-                message_thread_id=thread_id,
-                parse_mode="HTML",
-            )
-        except Exception:  # noqa: BLE001 - не блокируем UI помощи
-            logger.exception("Не удалось отправить справку в тему %s", topic)
-        await callback.message.edit_text(
-            f"Подсказка отправлена в тему «{topic}».",
-            reply_markup=_back_keyboard(),
-            parse_mode="HTML",
-        )
+    await callback.message.edit_text(
+        reply_text,
+        reply_markup=_back_keyboard(),
+        parse_mode="HTML",
+    )
     schedule_help_delete(
         callback.message.bot,
         callback.message.chat.id,

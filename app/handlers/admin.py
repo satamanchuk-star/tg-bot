@@ -21,6 +21,7 @@ from app.models import GameState, QuizSession
 from app.services.games import can_grant_coins, get_or_create_stats, register_coin_grant
 from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import extract_target_user, is_admin
+from app.utils.admin_help import ADMIN_HELP
 from app.handlers.moderation import update_profanity, update_profanity_exceptions
 from app.handlers.help import clear_routing_state
 from app.utils.profanity import load_profanity, load_profanity_exceptions
@@ -31,28 +32,12 @@ logger = logging.getLogger(__name__)
 
 STOP_FLAG = Path("/app/data/.stopped")
 
-ADMIN_HELP = (
-    "Админ-команды:\n"
-    "/mute <минуты> (реплай)\n"
-    "/unmute (реплай)\n"
-    "/ban <дни> (реплай)\n"
-    "/unban (реплай)\n"
-    "/strike (реплай)\n"
-    "/addcoins <кол-во> (реплай, не более 10 за раз)\n"
-    "/bal (реплай, +1 балл в викторине)\n"
-    "/reload_profanity\n"
-    "/load_quiz — загрузить вопросы викторины из источников\n"
-    "/restart_jobs — сброс зависших задач (формы, квизы, игры)\n"
-    "/reset_routing_state — сбросить ожидание /help (реплай/@username/id или без параметров)\n"
-    "/shutdown_bot — полная остановка бота"
-)
-
 
 async def _ensure_admin(message: Message, bot: Bot) -> bool:
     if message.from_user is None:
         return False
     try:
-        return await is_admin(bot, settings.forum_chat_id, message.from_user.id)
+        return await is_admin(bot, message.chat.id, message.from_user.id)
     except Exception:  # noqa: BLE001 - не выдаём доступ при ошибке проверки
         logger.exception("Не удалось проверить права администратора.")
         return False
@@ -61,7 +46,7 @@ async def _ensure_admin(message: Message, bot: Bot) -> bool:
 @router.message(Command("admin"))
 async def admin_help(message: Message, bot: Bot) -> None:
     if message.from_user is None:
-        if message.sender_chat and message.sender_chat.id == message.chat.id:
+        if message.sender_chat:
             await message.reply(ADMIN_HELP)
         return
     if not await _ensure_admin(message, bot):
