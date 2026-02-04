@@ -139,6 +139,9 @@ async def load_initial_quiz_questions(session: AsyncSession) -> None:
 
 
 async def send_daily_summary(bot: Bot) -> None:
+    if settings.topic_smoke is None:
+        logger.info("Ежедневная сводка пропущена: topic_smoke не задан.")
+        return
     date_key = now_tz().date().isoformat()
     async for session in get_session():
         stats_rows = await get_daily_stats(session, settings.forum_chat_id, date_key)
@@ -161,6 +164,9 @@ async def send_daily_summary(bot: Bot) -> None:
 
 
 async def send_weekly_leaderboard(bot: Bot) -> None:
+    if settings.topic_games is None:
+        logger.info("Еженедельный рейтинг игр пропущен: topic_games не задан.")
+        return
     async for session in get_session():
         top_coins, top_games = await get_weekly_leaderboard(
             session, settings.forum_chat_id
@@ -210,6 +216,9 @@ async def heartbeat_job(bot: Bot) -> None:
 
 async def check_game_timeouts(bot: Bot) -> None:
     """Проверяет и отменяет просроченные игры (таймаут 10 минут)."""
+    if settings.topic_games is None:
+        logger.info("Проверка таймаутов игр пропущена: topic_games не задан.")
+        return
     now = datetime.now(timezone.utc)
     async for session in get_session():
         games = await get_all_active_games(session)

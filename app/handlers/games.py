@@ -94,6 +94,8 @@ def format_game_state(
 
 @router.message(Command("21"))
 async def start_blackjack(message: Message) -> None:
+    if settings.topic_games is None:
+        return
     if (
         message.chat.id != settings.forum_chat_id
         or message.message_thread_id != settings.topic_games
@@ -133,6 +135,8 @@ async def start_blackjack(message: Message) -> None:
 
 @router.message(Command("score"))
 async def show_score(message: Message) -> None:
+    if settings.topic_games is None:
+        return
     if (
         message.chat.id != settings.forum_chat_id
         or message.message_thread_id != settings.topic_games
@@ -156,6 +160,8 @@ async def show_score(message: Message) -> None:
 
 @router.message(Command("21top"))
 async def show_leaderboard(message: Message) -> None:
+    if settings.topic_games is None:
+        return
     if (
         message.chat.id != settings.forum_chat_id
         or message.message_thread_id != settings.topic_games
