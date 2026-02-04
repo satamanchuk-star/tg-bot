@@ -428,7 +428,6 @@ async def help_command(message: Message) -> None:
         key = _state_key(message.chat.id, message.from_user.id)
         _clear_waiting_state(key)
     response = await message.answer(
-    await message.answer(
         HELP_MENU_TEXT,
         reply_markup=_menu_keyboard(),
         parse_mode="HTML",
