@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import signal
 from collections.abc import AsyncGenerator
@@ -25,6 +26,7 @@ from app.handlers.help import clear_routing_state
 from app.utils.profanity import load_profanity, load_profanity_exceptions
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 
 STOP_FLAG = Path("/app/data/.stopped")
@@ -46,16 +48,30 @@ ADMIN_HELP = (
 )
 
 
+async def _ensure_admin(message: Message, bot: Bot) -> bool:
+    if message.from_user is None:
+        return False
+    try:
+        return await is_admin(bot, settings.forum_chat_id, message.from_user.id)
+    except Exception:  # noqa: BLE001 - не выдаём доступ при ошибке проверки
+        logger.exception("Не удалось проверить права администратора.")
+        return False
+
+
 @router.message(Command("admin"))
 async def admin_help(message: Message, bot: Bot) -> None:
-    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+    if message.from_user is None:
+        if message.sender_chat and message.sender_chat.id == message.chat.id:
+            await message.reply(ADMIN_HELP)
+        return
+    if not await _ensure_admin(message, bot):
         return
     await message.reply(ADMIN_HELP)
 
 
 @router.message(Command("mute"))
 async def mute_user(message: Message, bot: Bot) -> None:
-    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+    if not await _ensure_admin(message, bot):
         return
     parts = (message.text or "").split()
     if len(parts) < 2:
@@ -83,7 +99,7 @@ async def mute_user(message: Message, bot: Bot) -> None:
 
 @router.message(Command("unmute"))
 async def unmute_user(message: Message, bot: Bot) -> None:
-    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+    if not await _ensure_admin(message, bot):
         return
     target_id, display_name = extract_target_user(message)
     if target_id is None:
@@ -98,7 +114,7 @@ async def unmute_user(message: Message, bot: Bot) -> None:
 
 @router.message(Command("ban"))
 async def ban_user(message: Message, bot: Bot) -> None:
-    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+    if not await _ensure_admin(message, bot):
         return
     parts = (message.text or "").split()
     if len(parts) < 2:
@@ -120,7 +136,7 @@ async def ban_user(message: Message, bot: Bot) -> None:
 
 @router.message(Command("unban"))
 async def unban_user(message: Message, bot: Bot) -> None:
-    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+    if not await _ensure_admin(message, bot):
         return
     target_id, display_name = extract_target_user(message)
     if target_id is None:
@@ -132,7 +148,7 @@ async def unban_user(message: Message, bot: Bot) -> None:
 
 @router.message(Command("strike"))
 async def strike_user(message: Message, bot: Bot) -> None:
-    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+    if not await _ensure_admin(message, bot):
         return
     target_id, display_name = extract_target_user(message)
     if target_id is None:
@@ -160,7 +176,7 @@ async def strike_user(message: Message, bot: Bot) -> None:
 
 @router.message(Command("addcoins"))
 async def grant_coins(message: Message, bot: Bot) -> None:
-    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+    if not await _ensure_admin(message, bot):
         return
     parts = (message.text or "").split()
     if len(parts) < 2:
@@ -193,7 +209,7 @@ async def grant_coins(message: Message, bot: Bot) -> None:
 
 @router.message(Command("reload_profanity"))
 async def reload_profanity(message: Message, bot: Bot) -> None:
-    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+    if not await _ensure_admin(message, bot):
         return
     words = load_profanity()
     exceptions = load_profanity_exceptions()
@@ -204,7 +220,7 @@ async def reload_profanity(message: Message, bot: Bot) -> None:
 
 @router.message(Command("reset_routing_state"))
 async def reset_routing_state(message: Message, bot: Bot) -> None:
-    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+    if not await _ensure_admin(message, bot):
         return
 
     target_id, display_name = extract_target_user(message)
@@ -243,7 +259,7 @@ async def reset_routing_state(message: Message, bot: Bot) -> None:
 @router.message(Command("load_quiz"))
 async def load_quiz_questions(message: Message, bot: Bot) -> None:
     """Загружает вопросы для викторины из внешних источников."""
-    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+    if not await _ensure_admin(message, bot):
         return
 
     from app.services.quiz_loader import (
@@ -312,7 +328,7 @@ async def load_quiz_questions(message: Message, bot: Bot) -> None:
 @router.message(Command("restart_jobs"))
 async def restart_jobs(message: Message, bot: Bot, state: FSMContext) -> None:
     """Останавливает все зависшие задачи (формы, квизы, игры)."""
-    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+    if not await _ensure_admin(message, bot):
         return
 
     cleared = []
@@ -359,7 +375,7 @@ async def restart_jobs(message: Message, bot: Bot, state: FSMContext) -> None:
 @router.message(Command("shutdown_bot"))
 async def shutdown_bot_cmd(message: Message, bot: Bot) -> None:
     """Полностью останавливает бота без автоматического перезапуска."""
-    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+    if not await _ensure_admin(message, bot):
         return
 
     # Создаём файл-флаг для предотвращения перезапуска
