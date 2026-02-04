@@ -35,10 +35,7 @@ STOP_FLAG = Path("/app/data/.stopped")
 
 async def _ensure_admin(message: Message, bot: Bot) -> bool:
     if message.from_user is None:
-        if message.sender_chat and message.sender_chat.id in {
-            settings.forum_chat_id,
-            message.chat.id,
-        }:
+        if message.sender_chat and message.sender_chat.id == settings.forum_chat_id:
             return True
         return False
     try:
