@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -469,6 +470,21 @@ def _is_bot_mentioned(message: Message, bot_user: object) -> bool:
     return False
 
 
+def _is_bot_name_called(text: str | None, bot_user: object) -> bool:
+    """Проверяет обращение к боту по имени без @."""
+    if text is None:
+        return False
+    lowered = text.casefold()
+    first_name = getattr(bot_user, "first_name", None)
+    full_name = getattr(bot_user, "full_name", None)
+    candidates = [name for name in (first_name, full_name) if name]
+    for name in candidates:
+        pattern = rf"(?<!\\w){re.escape(str(name).casefold())}(?!\\w)"
+        if re.search(pattern, lowered):
+            return True
+    return False
+
+
 @router.callback_query(F.data == CALLBACK_BACK)
 async def help_back(callback: CallbackQuery) -> None:
     if callback.message is None or callback.from_user is None:
@@ -545,16 +561,30 @@ async def help_topic(callback: CallbackQuery) -> None:
     thread_id = TOPIC_THREADS.get(topic)
     if thread_id is None:
         reply_text = description
+        await callback.message.edit_text(
+            reply_text,
+            reply_markup=_back_keyboard(),
+            parse_mode="HTML",
+        )
     else:
         reply_text = (
             f"{description}\n\n"
             f"Перейти в тему: {_topic_link(topic, thread_id)}"
         )
-    await callback.message.edit_text(
-        reply_text,
-        reply_markup=_back_keyboard(),
-        parse_mode="HTML",
-    )
+        try:
+            await callback.message.bot.send_message(
+                settings.forum_chat_id,
+                reply_text,
+                message_thread_id=thread_id,
+                parse_mode="HTML",
+            )
+        except Exception:  # noqa: BLE001 - не блокируем UI помощи
+            logger.exception("Не удалось отправить справку в тему %s", topic)
+        await callback.message.edit_text(
+            f"Подсказка отправлена в тему «{topic}».",
+            reply_markup=_back_keyboard(),
+            parse_mode="HTML",
+        )
     schedule_help_delete(
         callback.message.bot,
         callback.message.chat.id,
@@ -616,16 +646,18 @@ async def mention_help(message: Message, bot: Bot) -> None:
 
     text = _get_message_text(message)
     entities = _get_message_entities(message)
+    me = await bot.get_me()
     has_possible_mention = False
     if text and "@" in text:
         has_possible_mention = True
     if any(entity.type in {"mention", "text_mention"} for entity in entities):
         has_possible_mention = True
+    if _is_bot_name_called(text, me):
+        has_possible_mention = True
     if not has_possible_mention:
         return
 
-    me = await bot.get_me()
-    if _is_bot_mentioned(message, me):
+    if _is_bot_mentioned(message, me) or _is_bot_name_called(text, me):
         username = getattr(me, "username", None)
         if username:
             logger.info(f"HANDLER: mention_help MATCH @{username}")
