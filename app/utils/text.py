@@ -5,18 +5,14 @@ from __future__ import annotations
 import re
 
 
-URL_PATTERN = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
-TELEGRAM_LINK_PATTERN = re.compile(r"^(https?://)?t\.me/\S+$", re.IGNORECASE)
+LINK_PATTERN = re.compile(r"https?://\S+|www\.\S+|t\.me/\S+", re.IGNORECASE)
 MENTION_PATTERN = re.compile(r"@\w{3,}")
 
 
 def contains_forbidden_link(text: str) -> bool:
-    """Возвращает True, если найден внешний линк (кроме телеграм-ссылок)."""
+    """Возвращает True, если найден любой линк."""
 
-    urls = URL_PATTERN.findall(text)
-    if not urls:
-        return False
-    return any(not TELEGRAM_LINK_PATTERN.match(url) for url in urls)
+    return bool(LINK_PATTERN.search(text))
 
 
 def normalize_words(text: str) -> list[str]:
