@@ -244,7 +244,7 @@ def register_coin_grant(stats: UserStat, now: datetime, amount: int) -> None:
     stats.coins += amount
 
 
-GAME_TIMEOUT_MINUTES = 1
+GAME_TIMEOUT_MINUTES = 10
 
 
 async def get_all_active_games(

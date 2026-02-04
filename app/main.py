@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from aiogram import BaseMiddleware, Bot, Dispatcher
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import ErrorEvent, TelegramObject, Update
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import inspect, text, update
+from sqlalchemy import Integer, inspect, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.config import settings
@@ -101,10 +102,26 @@ async def init_db(async_engine: AsyncEngine) -> None:
 
             # Миграция quiz_sessions
             if inspector.has_table("quiz_sessions"):
-                columns = {column["name"] for column in inspector.get_columns("quiz_sessions")}
+                columns = {
+                    column["name"]: column
+                    for column in inspector.get_columns("quiz_sessions")
+                }
                 if "used_question_ids" not in columns:
                     sync_conn.execute(
                         text("ALTER TABLE quiz_sessions ADD COLUMN used_question_ids TEXT")
+                    )
+                is_active_column = columns.get("is_active")
+                if (
+                    is_active_column
+                    and sync_conn.dialect.name == "postgresql"
+                    and isinstance(is_active_column["type"], Integer)
+                ):
+                    sync_conn.execute(
+                        text(
+                            "ALTER TABLE quiz_sessions "
+                            "ALTER COLUMN is_active "
+                            "TYPE BOOLEAN USING is_active::boolean"
+                        )
                     )
 
         await conn.run_sync(_ensure_columns)
@@ -317,7 +334,18 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
 
 
 async def on_startup(bot: Bot) -> None:
-    await bot.get_me()  # заполняет bot.me с информацией о боте
+    for attempt in range(1, 4):
+        try:
+            await bot.get_me()  # заполняет bot.me с информацией о боте
+            break
+        except TelegramNetworkError:
+            if attempt >= 3:
+                raise
+            logger.warning(
+                "Нет соединения с Telegram API, попытка %s/3. Повтор через 5 секунд.",
+                attempt,
+            )
+            await asyncio.sleep(5)
     await init_db(engine)
     # Применяем миграции
     async for session in get_session():
@@ -375,12 +403,14 @@ async def main() -> None:
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     # stats.router убран — статистика через middleware
 
-    await on_startup(bot)
-    scheduler = await schedule_jobs(bot)
+    scheduler: AsyncIOScheduler | None = None
     try:
+        await on_startup(bot)
+        scheduler = await schedule_jobs(bot)
         await dp.start_polling(bot)
     finally:
-        scheduler.shutdown()
+        if scheduler is not None:
+            scheduler.shutdown()
         await bot.session.close()
 
 
