@@ -91,9 +91,22 @@ def _is_bot_mentioned(message: Message, bot_user: object) -> bool:
     return False
 
 
-@router.message()
+@router.message(flags={"block": False})
 async def mention_help(message: Message, bot: Bot) -> None:
     logger.info(f"HANDLER: mention_help called, text={message.text!r}")
+    if message.from_user and message.from_user.is_bot:
+        return
+
+    text = _get_message_text(message)
+    entities = _get_message_entities(message)
+    has_possible_mention = False
+    if text and "@" in text:
+        has_possible_mention = True
+    if any(entity.type in {"mention", "text_mention"} for entity in entities):
+        has_possible_mention = True
+    if not has_possible_mention:
+        return
+
     me = await bot.get_me()
     if _is_bot_mentioned(message, me):
         username = getattr(me, "username", None)

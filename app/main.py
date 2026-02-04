@@ -357,13 +357,13 @@ async def main() -> None:
     dp.update.outer_middleware(LoggingMiddleware())
     dp.error.register(error_handler)
 
-    # Порядок важен! Catch-all роутеры должны быть в конце
+    # Порядок важен: упоминания должны ловиться до остальных обработчиков
+    dp.include_router(help_handler.router)  # mention-help (catch-all, не блокирует)
     dp.include_router(admin.router)  # админ-команды
     dp.include_router(games.router)  # игры (команды /21, /score)
     dp.include_router(quiz.router)  # викторина (перед forms, т.к. есть catch-all)
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
-    dp.include_router(help_handler.router)  # mention-help (catch-all) последним
     # stats.router убран — статистика через middleware
 
     await on_startup(bot)
