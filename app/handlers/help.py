@@ -7,7 +7,7 @@ import random
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, MessageEntity
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -56,6 +56,39 @@ async def help_command(message: Message) -> None:
     logger.info("HANDLER: help_command")
     await message.reply(HELP_TEXT)
     logger.info("OUT: HELP_TEXT")
+
+
+def _get_message_text(message: Message) -> str | None:
+    """Возвращает текст сообщения или подпись, если это медиа."""
+    return message.text or message.caption
+
+
+def _get_message_entities(message: Message) -> list[MessageEntity]:
+    """Возвращает сущности сообщения или подписи."""
+    return message.entities or message.caption_entities or []
+
+
+def _is_bot_mentioned(message: Message, bot_user: object) -> bool:
+    """Проверяет упоминание бота по сущностям и тексту."""
+    text = _get_message_text(message)
+    if text is None:
+        return False
+    username = getattr(bot_user, "username", None)
+    bot_id = getattr(bot_user, "id", None)
+
+    for entity in _get_message_entities(message):
+        if entity.type == "text_mention" and getattr(entity, "user", None):
+            if bot_id is not None and entity.user.id == bot_id:
+                return True
+        if entity.type == "mention" and username:
+            mention = text[entity.offset:entity.offset + entity.length]
+            if mention.lower() == f"@{username.lower()}":
+                return True
+
+    if username and f"@{username.lower()}" in text.lower():
+        return True
+
+    return False
 
 
 @router.message()
