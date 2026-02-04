@@ -49,7 +49,7 @@ async def send_rules(message: Message) -> None:
     await message.reply("Пожалуйста, прочитай правила в закрепленном сообщении.")
 
 
-@router.message(StateFilter(None))
+@router.message(StateFilter(None), flags={"block": False})
 async def moderate_message(message: Message, bot: Bot) -> None:
     """Модерация сообщений. Пропускает пользователей в FSM-состоянии (заполняют форму)."""
     logger.info(f"HANDLER: moderate_message, chat={message.chat.id}, text={message.text!r}")
