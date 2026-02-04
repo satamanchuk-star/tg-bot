@@ -43,7 +43,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL_MIN = 10
-STOP_FLAG = Path("/app/data/.stopped")
+STOP_FLAG = settings.data_dir / ".stopped"
 
 
 class LoggingMiddleware(BaseMiddleware):

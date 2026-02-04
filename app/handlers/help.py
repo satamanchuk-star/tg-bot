@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -25,8 +26,8 @@ router = Router()
 
 
 HELP_MENU_TEXT = (
-    "Выберите тему форума для справки или воспользуйтесь советником "
-    "«Куда писать?»."
+    "Я подсказываю, где обсуждать вопросы, и отвечаю на упоминания. "
+    "Выберите тему форума или воспользуйтесь советником «Куда писать?»."
 )
 HELP_WAIT_TEXT = (
     "Опишите кратко, о чём ваш вопрос, одним сообщением. "
@@ -469,6 +470,21 @@ def _is_bot_mentioned(message: Message, bot_user: object) -> bool:
     return False
 
 
+def _is_bot_name_called(text: str | None, bot_user: object) -> bool:
+    """Проверяет обращение к боту по имени без @."""
+    if text is None:
+        return False
+    lowered = text.casefold()
+    first_name = getattr(bot_user, "first_name", None)
+    full_name = getattr(bot_user, "full_name", None)
+    candidates = [name for name in (first_name, full_name) if name]
+    for name in candidates:
+        pattern = rf"(?<!\\w){re.escape(str(name).casefold())}(?!\\w)"
+        if re.search(pattern, lowered):
+            return True
+    return False
+
+
 @router.callback_query(F.data == CALLBACK_BACK)
 async def help_back(callback: CallbackQuery) -> None:
     if callback.message is None or callback.from_user is None:
@@ -550,17 +566,51 @@ async def help_topic(callback: CallbackQuery) -> None:
             f"{description}\n\n"
             f"Перейти в тему: {_topic_link(topic, thread_id)}"
         )
-    await callback.message.edit_text(
-        reply_text,
-        reply_markup=_back_keyboard(),
-        parse_mode="HTML",
-    )
+    try:
+        await callback.message.edit_text(
+            reply_text,
+            reply_markup=_back_keyboard(),
+            parse_mode="HTML",
+        )
+    except Exception:  # noqa: BLE001 - не спамим новым сообщением
+        logger.exception("Не удалось обновить сообщение справки для темы %s", topic)
+        await callback.answer("Не удалось обновить подсказку.", show_alert=True)
+        return
     schedule_help_delete(
         callback.message.bot,
         callback.message.chat.id,
         callback.message.message_id,
     )
     await callback.answer()
+
+
+@router.message(flags={"block": False})
+async def mention_help(message: Message, bot: Bot) -> None:
+    logger.info(f"HANDLER: mention_help called, text={message.text!r}")
+    if message.from_user and message.from_user.is_bot:
+        return
+
+    text = _get_message_text(message)
+    entities = _get_message_entities(message)
+    me = await bot.get_me()
+    has_possible_mention = False
+    if text and "@" in text:
+        has_possible_mention = True
+    if any(entity.type in {"mention", "text_mention"} for entity in entities):
+        has_possible_mention = True
+    if _is_bot_name_called(text, me):
+        has_possible_mention = True
+    if not has_possible_mention:
+        return
+
+    if _is_bot_mentioned(message, me) or _is_bot_name_called(text, me):
+        username = getattr(me, "username", None)
+        if username:
+            logger.info(f"HANDLER: mention_help MATCH @{username}")
+        else:
+            logger.info("HANDLER: mention_help MATCH by id")
+        await message.reply(random.choice(MENTION_REPLIES))
+        logger.info("OUT: MENTION_REPLY")
 
 
 @router.message(flags={"block": False})
@@ -606,30 +656,3 @@ async def help_routing_response(message: Message, bot: Bot) -> None:
         parse_mode="HTML",
     )
     schedule_help_delete(bot, state.chat_id, state.message_id)
-
-
-@router.message(flags={"block": False})
-async def mention_help(message: Message, bot: Bot) -> None:
-    logger.info(f"HANDLER: mention_help called, text={message.text!r}")
-    if message.from_user and message.from_user.is_bot:
-        return
-
-    text = _get_message_text(message)
-    entities = _get_message_entities(message)
-    has_possible_mention = False
-    if text and "@" in text:
-        has_possible_mention = True
-    if any(entity.type in {"mention", "text_mention"} for entity in entities):
-        has_possible_mention = True
-    if not has_possible_mention:
-        return
-
-    me = await bot.get_me()
-    if _is_bot_mentioned(message, me):
-        username = getattr(me, "username", None)
-        if username:
-            logger.info(f"HANDLER: mention_help MATCH @{username}")
-        else:
-            logger.info("HANDLER: mention_help MATCH by id")
-        await message.reply(random.choice(MENTION_REPLIES))
-        logger.info("OUT: MENTION_REPLY")
