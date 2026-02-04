@@ -13,7 +13,7 @@ from aiogram.types import Message
 
 from app.config import settings
 from app.db import get_session
-from app.utils.admin import is_admin
+from app.utils.admin import is_admin_message
 from app.services.quiz import (
     QUIZ_QUESTION_TIMEOUT_SEC,
     QUIZ_QUESTIONS_COUNT,
@@ -285,11 +285,9 @@ async def start_quiz(message: Message, bot: Bot) -> None:
 @router.message(Command("bal"))
 async def add_quiz_point_admin(message: Message, bot: Bot) -> None:
     """Админская команда для добавления +1 балла в викторине."""
-    if message.from_user is None:
-        return
     if settings.topic_games is None:
         return
-    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+    if not await is_admin_message(bot, settings.forum_chat_id, message):
         return
     if (
         message.chat.id != settings.forum_chat_id
@@ -361,17 +359,20 @@ async def show_quiz_leaderboard(message: Message) -> None:
 @router.message(
     F.chat.id == settings.forum_chat_id,
     F.message_thread_id == settings.topic_games,
-    F.text,
+    (F.text | F.caption),
 )
 async def check_quiz_answer(message: Message, bot: Bot) -> None:
     """Проверяет ответы на вопросы викторины."""
-    if message.from_user is None:
-        return
     if settings.topic_games is None:
         return
 
     # Пропускаем команды
-    if message.text and message.text.startswith("/"):
+    message_text = message.text or message.caption
+    if not message_text:
+        return
+    if message_text.startswith("/"):
+        return
+    if message.from_user is None:
         return
 
     chat_id = settings.forum_chat_id
@@ -387,7 +388,7 @@ async def check_quiz_answer(message: Message, bot: Bot) -> None:
             return
 
         # Проверяем ответ
-        if not check_answer(question, message.text):
+        if not check_answer(question, message_text):
             return
 
         # Правильный ответ!
