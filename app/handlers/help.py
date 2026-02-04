@@ -77,6 +77,7 @@ CALLBACK_TOPIC = f"{CALLBACK_PREFIX}:topic"
 
 WAITING_TIMEOUT = timedelta(minutes=2)
 HINT_COOLDOWN = timedelta(seconds=30)
+HELP_DELETE_TIMEOUT = timedelta(minutes=2)
 
 
 @dataclass
@@ -156,6 +157,34 @@ TOPIC_KEYWORDS: dict[str, list[str]] = {
         "жалоб",
         "претенз",
         "не работ",
+        "управляющ",
+        "ук",
+        "лифт",
+        "подъезд",
+        "двор",
+        "сломал",
+        "течёт",
+        "шум",
+        "грязно",
+        "холодно",
+    ],
+    "Барахолка": [
+        "продам",
+        "куплю",
+        "отдам",
+        "даром",
+        "обмен",
+        "продаю",
+        "продается",
+        "барахолка",
+        "объявлен",
+        "б/у",
+    ],
+    "Питомцы": [
+        "кот",
+        "кошка",
+        "котик",
+        "котён",
         "сломал",
         "течёт",
         "шум",
@@ -242,6 +271,7 @@ TOPIC_THREADS: dict[str, int] = {
 HELP_ROUTING_STATE: dict[tuple[int, int], HelpRoutingState] = {}
 HELP_TIMEOUT_TASKS: dict[tuple[int, int], asyncio.Task[None]] = {}
 LAST_HINT_TIME: dict[tuple[int, int], datetime] = {}
+HELP_DELETE_TASKS: dict[tuple[int, int], asyncio.Task[None]] = {}
 
 
 def _chat_id_for_link(chat_id: int) -> str:
@@ -307,11 +337,37 @@ def _state_key(chat_id: int, user_id: int) -> tuple[int, int]:
     return (chat_id, user_id)
 
 
+def _message_key(chat_id: int, message_id: int) -> tuple[int, int]:
+    return (chat_id, message_id)
+
+
 def _clear_waiting_state(key: tuple[int, int]) -> None:
     HELP_ROUTING_STATE.pop(key, None)
     task = HELP_TIMEOUT_TASKS.pop(key, None)
     if task:
         task.cancel()
+
+
+def _clear_delete_task(key: tuple[int, int]) -> None:
+    task = HELP_DELETE_TASKS.pop(key, None)
+    if task:
+        task.cancel()
+
+
+async def _delete_help_message(bot: Bot, key: tuple[int, int]) -> None:
+    await asyncio.sleep(HELP_DELETE_TIMEOUT.total_seconds())
+    task_key = _message_key(*key)
+    HELP_DELETE_TASKS.pop(task_key, None)
+    try:
+        await bot.delete_message(chat_id=key[0], message_id=key[1])
+    except Exception:  # noqa: BLE001 - сообщение могло быть уже удалено
+        return
+
+
+def schedule_help_delete(bot: Bot, chat_id: int, message_id: int) -> None:
+    key = _message_key(chat_id, message_id)
+    _clear_delete_task(key)
+    HELP_DELETE_TASKS[key] = asyncio.create_task(_delete_help_message(bot, key))
 
 
 async def _run_timeout(bot: Bot, key: tuple[int, int]) -> None:
@@ -385,11 +441,13 @@ async def help_command(message: Message) -> None:
     if message.from_user:
         key = _state_key(message.chat.id, message.from_user.id)
         _clear_waiting_state(key)
+    response = await message.answer(
     await message.answer(
         HELP_MENU_TEXT,
         reply_markup=_menu_keyboard(),
         parse_mode="HTML",
     )
+    schedule_help_delete(message.bot, response.chat.id, response.message_id)
     logger.info("OUT: HELP_MENU")
 
 
@@ -438,6 +496,11 @@ async def help_back(callback: CallbackQuery) -> None:
         reply_markup=_menu_keyboard(),
         parse_mode="HTML",
     )
+    schedule_help_delete(
+        callback.message.bot,
+        callback.message.chat.id,
+        callback.message.message_id,
+    )
     await callback.answer()
 
 
@@ -455,6 +518,11 @@ async def help_where(callback: CallbackQuery, bot: Bot) -> None:
             reply_markup=_back_keyboard(),
             parse_mode="HTML",
         )
+        schedule_help_delete(
+            callback.message.bot,
+            callback.message.chat.id,
+            callback.message.message_id,
+        )
         await callback.answer()
         return
     await set_waiting_state(
@@ -468,6 +536,11 @@ async def help_where(callback: CallbackQuery, bot: Bot) -> None:
         HELP_WAIT_TEXT,
         reply_markup=_back_keyboard(),
         parse_mode="HTML",
+    )
+    schedule_help_delete(
+        callback.message.bot,
+        callback.message.chat.id,
+        callback.message.message_id,
     )
     await callback.answer()
 
@@ -484,6 +557,23 @@ async def help_topic(callback: CallbackQuery) -> None:
         return
     key = _state_key(callback.message.chat.id, callback.from_user.id)
     _clear_waiting_state(key)
+    thread_id = TOPIC_THREADS.get(topic)
+    if thread_id is None:
+        reply_text = description
+    else:
+        reply_text = (
+            f"{description}\n\n"
+            f"Перейти в тему: {_topic_link(topic, thread_id)}"
+        )
+    await callback.message.edit_text(
+        reply_text,
+        parse_mode="HTML",
+    )
+    schedule_help_delete(
+        callback.message.bot,
+        callback.message.chat.id,
+        callback.message.message_id,
+    )
     await callback.message.edit_text(
         description,
         reply_markup=_back_keyboard(),
@@ -534,6 +624,7 @@ async def help_routing_response(message: Message, bot: Bot) -> None:
         reply_markup=_back_keyboard(),
         parse_mode="HTML",
     )
+    schedule_help_delete(bot, state.chat_id, state.message_id)
 
 
 @router.message(flags={"block": False})
