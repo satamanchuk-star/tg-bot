@@ -20,8 +20,9 @@ from app.models import GameState, QuizSession
 from app.services.games import can_grant_coins, get_or_create_stats, register_coin_grant
 from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import extract_target_user, is_admin
-from app.handlers.moderation import update_profanity
-from app.utils.profanity import load_profanity
+from app.handlers.moderation import update_profanity, update_profanity_exceptions
+from app.handlers.help import clear_routing_state
+from app.utils.profanity import load_profanity, load_profanity_exceptions
 
 router = Router()
 
@@ -40,6 +41,7 @@ ADMIN_HELP = (
     "/reload_profanity\n"
     "/load_quiz — загрузить вопросы викторины из источников\n"
     "/restart_jobs — сброс зависших задач (формы, квизы, игры)\n"
+    "/reset_routing_state — сбросить ожидание /help (реплай/@username/id или без параметров)\n"
     "/shutdown_bot — полная остановка бота"
 )
 
@@ -194,8 +196,48 @@ async def reload_profanity(message: Message, bot: Bot) -> None:
     if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
         return
     words = load_profanity()
+    exceptions = load_profanity_exceptions()
     update_profanity(words)
+    update_profanity_exceptions(exceptions)
     await message.reply(f"Список матов обновлен. Слов: {len(words)}")
+
+
+@router.message(Command("reset_routing_state"))
+async def reset_routing_state(message: Message, bot: Bot) -> None:
+    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+        return
+
+    target_id, display_name = extract_target_user(message)
+    parts = (message.text or "").split(maxsplit=1)
+    if target_id is None and len(parts) > 1:
+        raw_target = parts[1].strip()
+        if raw_target.startswith("@"):
+            try:
+                chat = await bot.get_chat(raw_target)
+            except Exception:  # noqa: BLE001 - Telegram API может ответить ошибкой
+                chat = None
+            target_id = chat.id if chat else None
+            display_name = raw_target
+        elif raw_target.isdigit():
+            target_id = int(raw_target)
+            display_name = raw_target
+
+    if target_id is None:
+        cleared = clear_routing_state()
+        await message.reply(f"Сброшено ожиданий: {cleared}.")
+        await bot.send_message(
+            settings.admin_log_chat_id,
+            f"Админ {message.from_user.id} сбросил все ожидания /help.",
+        )
+        return
+
+    cleared = clear_routing_state(user_id=target_id, chat_id=settings.forum_chat_id)
+    await message.reply(f"Ожидание для пользователя {display_name or target_id} сброшено.")
+    if cleared:
+        await bot.send_message(
+            settings.admin_log_chat_id,
+            f"Админ {message.from_user.id} сбросил ожидание /help для {target_id}.",
+        )
 
 
 @router.message(Command("load_quiz"))

@@ -17,19 +17,35 @@ from app.models import FloodRecord
 from app.services.flood import FloodTracker
 from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import is_admin
-from app.utils.profanity import load_profanity
-from app.utils.text import contains_forbidden_link, normalize_words
+from app.utils.profanity import (
+    load_profanity,
+    load_profanity_exceptions,
+    split_profanity_words,
+)
+from app.utils.text import contains_forbidden_link, contains_profanity, normalize_words
 
 router = Router()
 
 PROFANITY_WORDS = load_profanity()
-logger.info(f"Loaded {len(PROFANITY_WORDS)} profanity words")
+PROFANITY_EXCEPTIONS = load_profanity_exceptions()
+EXACT_PROFANITY, PREFIX_PROFANITY = split_profanity_words(PROFANITY_WORDS)
+logger.info(
+    "Loaded %s profanity words, %s exceptions",
+    len(PROFANITY_WORDS),
+    len(PROFANITY_EXCEPTIONS),
+)
 FLOOD_TRACKER = FloodTracker(limit=10, window_seconds=120)
 
 
 def update_profanity(words: set[str]) -> None:
-    PROFANITY_WORDS.clear()
-    PROFANITY_WORDS.update(words)
+    global PROFANITY_WORDS, EXACT_PROFANITY, PREFIX_PROFANITY
+    PROFANITY_WORDS = set(words)
+    EXACT_PROFANITY, PREFIX_PROFANITY = split_profanity_words(PROFANITY_WORDS)
+
+
+def update_profanity_exceptions(words: set[str]) -> None:
+    global PROFANITY_EXCEPTIONS
+    PROFANITY_EXCEPTIONS = set(words)
 
 
 async def _warn_user(message: Message, text: str, bot: Bot) -> None:
@@ -65,8 +81,17 @@ async def moderate_message(message: Message, bot: Bot) -> None:
 
     text = message.text
     words = normalize_words(text)
-    logger.info(f"Normalized words: {words}, profanity check: {[w for w in words if w in PROFANITY_WORDS]}")
-    if any(word in PROFANITY_WORDS for word in words):
+    logger.info(
+        "Normalized words: %s, profanity check: %s",
+        words,
+        [word for word in words if word in PROFANITY_WORDS],
+    )
+    if contains_profanity(
+        words,
+        EXACT_PROFANITY,
+        PREFIX_PROFANITY,
+        PROFANITY_EXCEPTIONS,
+    ):
         await message.delete()
         async for session in get_session():
             strike_count = await add_strike(
