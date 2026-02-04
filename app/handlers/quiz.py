@@ -86,6 +86,9 @@ def _display_name_from_user(user: object) -> str | None:
 
 async def announce_quiz_soon(bot: Bot) -> None:
     """Анонсирует старт викторины за 5 минут."""
+    if settings.topic_games is None:
+        logger.info("Анонс викторины пропущен: topic_games не задан.")
+        return
     await bot.send_message(
         settings.forum_chat_id,
         "уважаемые соседи через 5 минут начнется викторина в топике "
@@ -100,6 +103,9 @@ async def announce_quiz_soon(bot: Bot) -> None:
 
 async def start_quiz_auto(bot: Bot) -> None:
     """Автоматически запускает викторину."""
+    if settings.topic_games is None:
+        logger.info("Авто-викторина пропущена: topic_games не задан.")
+        return
     chat_id = settings.forum_chat_id
     topic_id = settings.topic_games
 
