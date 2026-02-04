@@ -1,4 +1,4 @@
-"""Сервис загрузки вопросов с quizvopros.ru."""
+"""Сервис загрузки вопросов для викторины из внешних источников."""
 
 from __future__ import annotations
 
@@ -8,14 +8,24 @@ from collections.abc import AsyncGenerator
 from urllib.parse import urljoin
 
 import httpx
+from aiogram import Bot
 from bs4 import BeautifulSoup
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
+from app.db import get_session
 from app.models import QuizQuestion
 
 BASE_URL = "https://quizvopros.ru/"
+GOTQUESTIONS_URL = "https://gotquestions.online/"
 MAX_PAGES = 15
+MAX_GOTQUESTIONS_PAGES = 10
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+}
 
 
 async def _fetch_page(client: httpx.AsyncClient, url: str) -> str | None:
@@ -66,6 +76,32 @@ def _extract_questions_from_text(text: str) -> list[tuple[str, str]]:
     return questions
 
 
+def _extract_question_answer_blocks(text: str) -> list[tuple[str, str]]:
+    """Ищет пары вопрос/ответ в свободном тексте."""
+    patterns = [
+        r"(?:вопрос|question)\s*[:\-–]\s*(.+?)\s*(?:ответ|answer)\s*[:\-–]\s*(.+?)(?=(?:вопрос|question)\s*[:\-–]|\Z)",
+        r"(?:вопрос|question)\s*\d*\s*[:\-–]\s*(.+?)\s*(?:ответ|answer)\s*\d*\s*[:\-–]\s*(.+?)(?=(?:вопрос|question)\s*\d*\s*[:\-–]|\Z)",
+    ]
+    questions: list[tuple[str, str]] = []
+    for pattern in patterns:
+        for match in re.findall(pattern, text, re.IGNORECASE | re.DOTALL):
+            question = " ".join(match[0].split())
+            answer = " ".join(match[1].split())
+            if 10 < len(question) < 500 and 1 < len(answer) < 200:
+                questions.append((question, answer))
+        if questions:
+            break
+    return questions
+
+
+def _extract_questions(text: str) -> list[tuple[str, str]]:
+    """Извлекает вопросы/ответы из текста с fallback-паттернами."""
+    questions = _extract_question_answer_blocks(text)
+    if questions:
+        return questions
+    return _extract_questions_from_text(text)
+
+
 def _parse_questions_page(html: str) -> list[tuple[str, str]]:
     """Парсит страницу с вопросами."""
     soup = BeautifulSoup(html, "html.parser")
@@ -76,22 +112,45 @@ def _parse_questions_page(html: str) -> list[tuple[str, str]]:
     content = soup.select_one("article, .entry-content, .post-content, main")
     text = content.get_text(separator="\n") if content else soup.get_text(separator="\n")
 
-    return _extract_questions_from_text(text)
+    return _extract_questions(text)
 
 
-def _get_article_links(html: str, base_url: str) -> list[str]:
+def _get_article_links(
+    html: str,
+    base_url: str,
+    include_keywords: list[str] | None = None,
+    exclude_keywords: list[str] | None = None,
+) -> list[str]:
     """Извлекает ссылки на статьи с вопросами."""
     soup = BeautifulSoup(html, "html.parser")
     links = set()
+    include_keywords = include_keywords or []
+    exclude_keywords = exclude_keywords or []
 
     for a in soup.select("a[href]"):
         href = a.get("href", "")
-        if "quizvopros.ru/" in href or href.startswith("/"):
+        if base_url in href or href.startswith("/"):
             full_url = urljoin(base_url, href)
-            if any(x in full_url.lower() for x in ["/category/", "/tag/", "/page/", "/author/", "#", "?", ".jpg", ".png"]):
+            lower_url = full_url.lower()
+            if any(
+                x in lower_url
+                for x in [
+                    "/category/",
+                    "/tag/",
+                    "/page/",
+                    "/author/",
+                    "#",
+                    "?",
+                    ".jpg",
+                    ".png",
+                ]
+            ):
                 continue
-            if "вопрос" in full_url.lower() or "квиз" in full_url.lower() or "интеллектуальн" in full_url.lower():
-                links.add(full_url)
+            if exclude_keywords and any(x in lower_url for x in exclude_keywords):
+                continue
+            if include_keywords and not any(x in lower_url for x in include_keywords):
+                continue
+            links.add(full_url)
 
     return list(links)
 
@@ -106,13 +165,23 @@ async def load_questions_from_quizvopros() -> AsyncGenerator[str, None]:
     seen_questions: set[str] = set()
     all_links: set[str] = set()
 
-    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        timeout=30.0,
+        follow_redirects=True,
+        headers=DEFAULT_HEADERS,
+    ) as client:
         yield "Сбор ссылок на страницы..."
 
         # Главная страница
         html = await _fetch_page(client, BASE_URL)
         if html:
-            all_links.update(_get_article_links(html, BASE_URL))
+            all_links.update(
+                _get_article_links(
+                    html,
+                    BASE_URL,
+                    include_keywords=["вопрос", "квиз", "интеллектуальн"],
+                )
+            )
 
         # Пагинация
         for page in range(2, MAX_PAGES + 1):
@@ -120,7 +189,11 @@ async def load_questions_from_quizvopros() -> AsyncGenerator[str, None]:
             html = await _fetch_page(client, url)
             if not html:
                 break
-            links = _get_article_links(html, BASE_URL)
+            links = _get_article_links(
+                html,
+                BASE_URL,
+                include_keywords=["вопрос", "квиз", "интеллектуальн"],
+            )
             if not links:
                 break
             all_links.update(links)
@@ -158,6 +231,90 @@ async def load_questions_from_quizvopros() -> AsyncGenerator[str, None]:
         yield "DONE"
 
 
+async def load_questions_from_gotquestions() -> AsyncGenerator[str, None]:
+    """Загружает вопросы с gotquestions.online, yield'ит сообщения о прогрессе."""
+    all_questions: list[tuple[str, str]] = []
+    seen_questions: set[str] = set()
+    all_links: set[str] = set()
+
+    async with httpx.AsyncClient(
+        timeout=30.0,
+        follow_redirects=True,
+        headers=DEFAULT_HEADERS,
+    ) as client:
+        yield "Сбор ссылок gotquestions.online..."
+
+        html = await _fetch_page(client, GOTQUESTIONS_URL)
+        if html:
+            all_links.update(
+                _get_article_links(
+                    html,
+                    GOTQUESTIONS_URL,
+                    include_keywords=["question", "вопрос", "quiz"],
+                    exclude_keywords=["/page/"],
+                )
+            )
+
+        for page in range(2, MAX_GOTQUESTIONS_PAGES + 1):
+            url = f"{GOTQUESTIONS_URL}page/{page}/"
+            html = await _fetch_page(client, url)
+            if not html:
+                break
+            links = _get_article_links(
+                html,
+                GOTQUESTIONS_URL,
+                include_keywords=["question", "вопрос", "quiz"],
+                exclude_keywords=["/page/"],
+            )
+            if not links:
+                break
+            all_links.update(links)
+            await asyncio.sleep(0.3)
+
+        yield f"Найдено {len(all_links)} страниц с вопросами (gotquestions.online)"
+
+        for i, url in enumerate(all_links, 1):
+            html = await _fetch_page(client, url)
+            if not html:
+                continue
+
+            questions = _parse_questions_page(html)
+            new_count = 0
+            for q, a in questions:
+                if q not in seen_questions:
+                    seen_questions.add(q)
+                    all_questions.append((q, a))
+                    new_count += 1
+
+            if new_count > 0:
+                yield f"[{i}/{len(all_links)}] +{new_count} вопросов (gotquestions.online)"
+
+            await asyncio.sleep(0.4)
+
+    if all_questions:
+        parts = ["DONE"]
+        for q, a in all_questions:
+            parts.append(q)
+            parts.append(a)
+        yield "|".join(parts)
+    else:
+        yield "DONE"
+
+
+async def collect_questions(
+    loader: AsyncGenerator[str, None],
+) -> list[tuple[str, str]]:
+    """Собирает вопросы из loader-генератора."""
+    questions: list[tuple[str, str]] = []
+    async for progress in loader:
+        if progress.startswith("DONE"):
+            parts = progress.split("|")
+            if len(parts) > 1:
+                for i in range(1, len(parts) - 1, 2):
+                    questions.append((parts[i], parts[i + 1]))
+    return questions
+
+
 async def save_questions_to_db(
     session: AsyncSession,
     questions: list[tuple[str, str]],
@@ -165,13 +322,58 @@ async def save_questions_to_db(
     """Сохраняет вопросы в БД, пропуская дубликаты. Возвращает кол-во добавленных."""
     result = await session.execute(select(QuizQuestion.question))
     existing = {row[0] for row in result.fetchall()}
+    existing_normalized = {_normalize_question(question) for question in existing}
 
     added = 0
     for question, answer in questions:
-        if question not in existing:
-            session.add(QuizQuestion(question=question, answer=answer))
-            existing.add(question)
-            added += 1
+        normalized = _normalize_question(question)
+        if normalized in existing_normalized:
+            continue
+        session.add(QuizQuestion(question=question, answer=answer))
+        existing.add(question)
+        existing_normalized.add(normalized)
+        added += 1
 
     await session.commit()
     return added
+
+
+def _normalize_question(text: str) -> str:
+    """Нормализует текст вопроса для проверки дубликатов."""
+    return " ".join(text.lower().split())
+
+
+async def auto_load_quiz_questions(bot: Bot) -> None:
+    """Автозагружает вопросы из внешних источников и логирует результат."""
+    sources = [
+        ("quizvopros.ru", load_questions_from_quizvopros),
+        ("gotquestions.online", load_questions_from_gotquestions),
+    ]
+    all_questions: list[tuple[str, str]] = []
+    source_stats: list[tuple[str, int]] = []
+
+    for name, loader_factory in sources:
+        questions = await collect_questions(loader_factory())
+        source_stats.append((name, len(questions)))
+        all_questions.extend(questions)
+
+    if not all_questions:
+        await bot.send_message(
+            settings.admin_log_chat_id,
+            "Автозагрузка викторины: вопросы не найдены.",
+        )
+        return
+
+    async for session in get_session():
+        added = await save_questions_to_db(session, all_questions)
+
+    details = "\n".join(
+        f"• {name}: найдено {count}" for name, count in source_stats
+    )
+    await bot.send_message(
+        settings.admin_log_chat_id,
+        "Автозагрузка викторины завершена.\n"
+        f"Найдено всего: {sum(count for _, count in source_stats)}\n"
+        f"Добавлено новых: {added}\n"
+        f"{details}",
+    )
