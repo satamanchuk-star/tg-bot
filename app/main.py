@@ -12,7 +12,13 @@ from typing import Any
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import ErrorEvent, TelegramObject, Update
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeChatAdministrators,
+    ErrorEvent,
+    TelegramObject,
+    Update,
+)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import Integer, inspect, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -352,6 +358,24 @@ async def on_startup(bot: Bot) -> None:
         await apply_v11_stats_reset(session)
         await load_initial_quiz_questions(session)
     await heartbeat_job(bot)
+    await bot.set_my_commands(
+        [
+            BotCommand(command="admin", description="Справка по админ-командам"),
+            BotCommand(command="mute", description="Мут пользователя (реплай)"),
+            BotCommand(command="unmute", description="Снять мут (реплай)"),
+            BotCommand(command="ban", description="Бан пользователя (реплай)"),
+            BotCommand(command="unban", description="Снять бан (реплай)"),
+            BotCommand(command="strike", description="Добавить страйк (реплай)"),
+            BotCommand(command="addcoins", description="Выдать монеты (реплай)"),
+            BotCommand(command="bal", description="Добавить балл викторины (реплай)"),
+            BotCommand(command="reload_profanity", description="Обновить список матов"),
+            BotCommand(command="load_quiz", description="Загрузить вопросы викторины"),
+            BotCommand(command="restart_jobs", description="Сбросить зависшие задачи"),
+            BotCommand(command="reset_routing_state", description="Сбросить ожидание /help"),
+            BotCommand(command="shutdown_bot", description="Остановить бота"),
+        ],
+        scope=BotCommandScopeChatAdministrators(chat_id=settings.forum_chat_id),
+    )
     await bot.send_message(
         settings.admin_log_chat_id,
         f"🟢 Бот запущен\nВерсия: {settings.build_version}",
