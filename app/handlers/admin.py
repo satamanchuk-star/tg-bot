@@ -37,7 +37,7 @@ async def _ensure_admin(message: Message, bot: Bot) -> bool:
     if message.from_user is None:
         return False
     try:
-        return await is_admin(bot, settings.forum_chat_id, message.from_user.id)
+        return await is_admin(bot, message.chat.id, message.from_user.id)
     except Exception:  # noqa: BLE001 - не выдаём доступ при ошибке проверки
         logger.exception("Не удалось проверить права администратора.")
         return False
@@ -46,7 +46,7 @@ async def _ensure_admin(message: Message, bot: Bot) -> bool:
 @router.message(Command("admin"))
 async def admin_help(message: Message, bot: Bot) -> None:
     if message.from_user is None:
-        if message.sender_chat and message.sender_chat.id == message.chat.id:
+        if message.sender_chat:
             await message.reply(ADMIN_HELP)
         return
     if not await _ensure_admin(message, bot):
