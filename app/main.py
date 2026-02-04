@@ -13,7 +13,7 @@ from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import ErrorEvent, TelegramObject, Update
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import inspect, text, update
+from sqlalchemy import Integer, inspect, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.config import settings
@@ -101,10 +101,26 @@ async def init_db(async_engine: AsyncEngine) -> None:
 
             # Миграция quiz_sessions
             if inspector.has_table("quiz_sessions"):
-                columns = {column["name"] for column in inspector.get_columns("quiz_sessions")}
+                columns = {
+                    column["name"]: column
+                    for column in inspector.get_columns("quiz_sessions")
+                }
                 if "used_question_ids" not in columns:
                     sync_conn.execute(
                         text("ALTER TABLE quiz_sessions ADD COLUMN used_question_ids TEXT")
+                    )
+                is_active_column = columns.get("is_active")
+                if (
+                    is_active_column
+                    and sync_conn.dialect.name == "postgresql"
+                    and isinstance(is_active_column["type"], Integer)
+                ):
+                    sync_conn.execute(
+                        text(
+                            "ALTER TABLE quiz_sessions "
+                            "ALTER COLUMN is_active "
+                            "TYPE BOOLEAN USING is_active::boolean"
+                        )
                     )
 
         await conn.run_sync(_ensure_columns)
