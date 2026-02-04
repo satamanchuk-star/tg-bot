@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,26 +18,55 @@ class Settings(BaseSettings):
     timezone: str = "Europe/Moscow"
     build_version: str = "dev"
 
-    topic_rules: int
-    topic_important: int
-    topic_buildings_41_42: int
-    topic_building_2: int
-    topic_building_3: int
-    topic_complaints: int
-    topic_rides: int
-    topic_smoke: int
-    topic_pets: int
-    topic_repair: int
-    topic_realty: int
-    topic_parents: int
-    topic_ads: int
-    topic_games: int
-    topic_gate: int
-    topic_services: int
-    topic_uk: int
-    topic_neighbors: int
-    topic_market: int
-    topic_duplex: int
+    topic_rules: int | None = None
+    topic_important: int | None = None
+    topic_buildings_41_42: int | None = None
+    topic_building_2: int | None = None
+    topic_building_3: int | None = None
+    topic_complaints: int | None = None
+    topic_rides: int | None = None
+    topic_smoke: int | None = None
+    topic_pets: int | None = None
+    topic_repair: int | None = None
+    topic_realty: int | None = None
+    topic_parents: int | None = None
+    topic_ads: int | None = None
+    topic_games: int | None = None
+    topic_gate: int | None = None
+    topic_services: int | None = None
+    topic_uk: int | None = None
+    topic_neighbors: int | None = None
+    topic_market: int | None = None
+    topic_duplex: int | None = None
+
+    @field_validator(
+        "topic_rules",
+        "topic_important",
+        "topic_buildings_41_42",
+        "topic_building_2",
+        "topic_building_3",
+        "topic_complaints",
+        "topic_rides",
+        "topic_smoke",
+        "topic_pets",
+        "topic_repair",
+        "topic_realty",
+        "topic_parents",
+        "topic_ads",
+        "topic_games",
+        "topic_gate",
+        "topic_services",
+        "topic_uk",
+        "topic_neighbors",
+        "topic_market",
+        "topic_duplex",
+        mode="before",
+    )
+    @classmethod
+    def _empty_to_none(cls, value: object) -> object:
+        if value == "":
+            return None
+        return value
 
 
 settings = Settings()  # type: ignore[call-arg]

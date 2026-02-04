@@ -254,7 +254,7 @@ TOPIC_KEYWORDS: dict[str, list[str]] = {
     "Правила": [],
 }
 
-TOPIC_THREADS: dict[str, int] = {
+TOPIC_THREADS: dict[str, int | None] = {
     "Шлагбаум": settings.topic_gate,
     "Ремонт": settings.topic_repair,
     "Жалобы": settings.topic_complaints,
@@ -283,7 +283,9 @@ def _chat_id_for_link(chat_id: int) -> str:
     return chat_id_str
 
 
-def _topic_link(title: str, thread_id: int) -> str:
+def _topic_link(title: str, thread_id: int | None) -> str:
+    if thread_id is None:
+        return title
     chat_id_str = _chat_id_for_link(settings.forum_chat_id)
     return f'<a href="https://t.me/c/{chat_id_str}/{thread_id}">{title}</a>'
 
