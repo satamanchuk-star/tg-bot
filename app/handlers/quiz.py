@@ -236,14 +236,17 @@ def _cancel_timeout(chat_id: int, topic_id: int) -> None:
         del _timeout_tasks[key]
 
 
-@router.message(Command("umnij"))
-async def start_quiz(message: Message, bot: Bot) -> None:
-    """Команда /umnij для запуска викторины."""
+async def _start_quiz_from_message(
+    message: Message,
+    bot: Bot,
+    *,
+    log_prefix: str,
+) -> None:
+    """Запускает викторину из командного сообщения с проверкой топика."""
     if message.chat.id != settings.forum_chat_id:
         return
     if settings.topic_games is None:
         return
-
     if message.message_thread_id != settings.topic_games:
         await message.reply("Эта команда доступна только в топике Игры.")
         return
@@ -251,7 +254,6 @@ async def start_quiz(message: Message, bot: Bot) -> None:
     chat_id = settings.forum_chat_id
     topic_id = settings.topic_games
 
-    # Очищаем результаты предыдущей сессии
     _session_results[(chat_id, topic_id)] = {}
 
     async for session in get_session():
@@ -275,10 +277,31 @@ async def start_quiz(message: Message, bot: Bot) -> None:
     await _send_question(bot, chat_id, topic_id, 1, question.question)
     _start_timeout(bot, chat_id, topic_id, question_started_at)
 
-    # Логируем в админ-чат
     await bot.send_message(
         settings.admin_log_chat_id,
-        f"Викторина запущена пользователем {_display_name(message)}",
+        f"{log_prefix} {_display_name(message)}",
+    )
+
+
+@router.message(Command("umnij"))
+async def start_quiz(message: Message, bot: Bot) -> None:
+    """Команда /umnij для запуска викторины."""
+    await _start_quiz_from_message(
+        message,
+        bot,
+        log_prefix="Викторина запущена пользователем",
+    )
+
+
+@router.message(Command("umnij_start"))
+async def start_quiz_admin(message: Message, bot: Bot) -> None:
+    """Админская команда /umnij_start для ручного запуска викторины."""
+    if not await is_admin_message(bot, settings.forum_chat_id, message):
+        return
+    await _start_quiz_from_message(
+        message,
+        bot,
+        log_prefix="Викторина запущена админом",
     )
 
 

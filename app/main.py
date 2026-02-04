@@ -368,6 +368,7 @@ async def on_startup(bot: Bot) -> None:
             BotCommand(command="strike", description="Добавить страйк (реплай)"),
             BotCommand(command="addcoins", description="Выдать монеты (реплай)"),
             BotCommand(command="bal", description="Добавить балл викторины (реплай)"),
+            BotCommand(command="umnij_start", description="Запустить викторину вручную"),
             BotCommand(command="reload_profanity", description="Обновить список матов"),
             BotCommand(command="load_quiz", description="Загрузить вопросы викторины"),
             BotCommand(command="restart_jobs", description="Сбросить зависшие задачи"),
