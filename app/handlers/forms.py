@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from aiogram import Bot, F, Router
@@ -27,6 +28,74 @@ class NeighborForm(StatesGroup):
     name = State()
     building = State()
     about = State()
+
+
+NEIGHBOR_TIMEOUT_MIN = 30
+NEIGHBOR_QUESTIONS = [
+    "Как тебя зовут?",
+    "В каком корпусе/доме живешь?",
+    "Чем увлекаешься или чем можешь быть полезен соседям?",
+]
+_neighbor_timeout_tasks: dict[tuple[int, int], asyncio.Task] = {}
+
+
+def _format_neighbor_questions() -> str:
+    lines = ["Вопросы для знакомства:"]
+    for i, question in enumerate(NEIGHBOR_QUESTIONS, 1):
+        lines.append(f"{i}) {question}")
+    return "\n".join(lines)
+
+
+def _cancel_neighbor_timeout(chat_id: int, user_id: int) -> None:
+    key = (chat_id, user_id)
+    task = _neighbor_timeout_tasks.pop(key, None)
+    if task:
+        task.cancel()
+
+
+def _start_neighbor_timeout(
+    bot: Bot,
+    storage: object,
+    chat_id: int,
+    thread_id: int | None,
+    user_id: int,
+) -> None:
+    _cancel_neighbor_timeout(chat_id, user_id)
+    task = asyncio.create_task(
+        _handle_neighbor_timeout(bot, storage, chat_id, thread_id, user_id)
+    )
+    _neighbor_timeout_tasks[(chat_id, user_id)] = task
+
+
+async def _handle_neighbor_timeout(
+    bot: Bot,
+    storage: object,
+    chat_id: int,
+    thread_id: int | None,
+    user_id: int,
+) -> None:
+    try:
+        await asyncio.sleep(NEIGHBOR_TIMEOUT_MIN * 60)
+        ctx = FSMContext(
+            storage=storage,
+            key=StorageKey(
+                bot_id=bot.id,
+                chat_id=chat_id,
+                user_id=user_id,
+            ),
+        )
+        current_state = await ctx.get_state()
+        if not current_state or not current_state.startswith(NeighborForm.__name__):
+            return
+        await ctx.clear()
+        await bot.send_message(
+            chat_id,
+            "Увы не дождался ответа, будет время расскажи о себе.\n"
+            f"{_format_neighbor_questions()}",
+            message_thread_id=thread_id,
+        )
+    finally:
+        _neighbor_timeout_tasks.pop((chat_id, user_id), None)
 
 
 @router.message(Command("form"))
@@ -92,29 +161,44 @@ async def gate_response(message: Message, state: FSMContext, bot: Bot) -> None:
 
 
 @router.message(NeighborForm.name)
-async def neighbor_name(message: Message, state: FSMContext) -> None:
+async def neighbor_name(message: Message, state: FSMContext, bot: Bot) -> None:
     logger.info(f"HANDLER: neighbor_name, text={message.text!r}")
     await state.update_data(name=message.text)
     await state.set_state(NeighborForm.building)
     await message.reply("В каком корпусе/доме живешь?")
+    _start_neighbor_timeout(
+        bot,
+        state.storage,
+        message.chat.id,
+        message.message_thread_id,
+        message.from_user.id,
+    )
     logger.info("OUT: В каком корпусе/доме живешь?")
 
 
 @router.message(NeighborForm.building)
-async def neighbor_building(message: Message, state: FSMContext) -> None:
+async def neighbor_building(message: Message, state: FSMContext, bot: Bot) -> None:
     logger.info(f"HANDLER: neighbor_building, text={message.text!r}")
     await state.update_data(building=message.text)
     await state.set_state(NeighborForm.about)
     await message.reply("Чем увлекаешься или чем можешь быть полезен соседям?")
+    _start_neighbor_timeout(
+        bot,
+        state.storage,
+        message.chat.id,
+        message.message_thread_id,
+        message.from_user.id,
+    )
     logger.info("OUT: Чем увлекаешься...")
 
 
 @router.message(NeighborForm.about)
-async def neighbor_finish(message: Message, state: FSMContext) -> None:
+async def neighbor_finish(message: Message, state: FSMContext, bot: Bot) -> None:
     logger.info(f"HANDLER: neighbor_finish, text={message.text!r}")
     await state.update_data(about=message.text)
     data = await state.get_data()
     await state.clear()
+    _cancel_neighbor_timeout(message.chat.id, message.from_user.id)
 
     welcome = (
         "Приветствуем нового соседа!\n"
@@ -136,8 +220,15 @@ async def neighbor_finish(message: Message, state: FSMContext) -> None:
     F.text,
     StateFilter(None),
 )
-async def neighbor_trigger(message: Message, state: FSMContext) -> None:
+async def neighbor_trigger(message: Message, state: FSMContext, bot: Bot) -> None:
     logger.info(f"HANDLER: neighbor_trigger MATCH, text={message.text!r}")
     await state.set_state(NeighborForm.name)
     await message.reply("Добро пожаловать! Давай познакомимся. Как тебя зовут?")
+    _start_neighbor_timeout(
+        bot,
+        state.storage,
+        message.chat.id,
+        message.message_thread_id,
+        message.from_user.id,
+    )
     logger.info("OUT: Добро пожаловать! Давай познакомимся...")

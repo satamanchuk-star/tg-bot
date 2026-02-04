@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import signal
+from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -37,7 +38,7 @@ ADMIN_HELP = (
     "/addcoins <кол-во> (реплай, не более 10 за раз)\n"
     "/bal (реплай, +1 балл в викторине)\n"
     "/reload_profanity\n"
-    "/load_quiz — загрузить вопросы с quizvopros.ru\n"
+    "/load_quiz — загрузить вопросы викторины из источников\n"
     "/restart_jobs — сброс зависших задач (формы, квизы, игры)\n"
     "/shutdown_bot — полная остановка бота"
 )
@@ -199,46 +200,70 @@ async def reload_profanity(message: Message, bot: Bot) -> None:
 
 @router.message(Command("load_quiz"))
 async def load_quiz_questions(message: Message, bot: Bot) -> None:
-    """Загружает вопросы для викторины с quizvopros.ru."""
+    """Загружает вопросы для викторины из внешних источников."""
     if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
         return
 
-    from app.services.quiz_loader import load_questions_from_quizvopros, save_questions_to_db
+    from app.services.quiz_loader import (
+        load_questions_from_gotquestions,
+        load_questions_from_quizvopros,
+        save_questions_to_db,
+    )
 
     status_msg = await message.reply("Начинаю загрузку вопросов...")
-
     questions: list[tuple[str, str]] = []
-    last_update = ""
+    source_stats: list[tuple[str, int]] = []
 
-    async for progress in load_questions_from_quizvopros():
-        if progress.startswith("DONE"):
-            # Парсим финальное сообщение с данными
-            parts = progress.split("|")
-            if len(parts) > 1:
-                # Формат: DONE|q1|a1|q2|a2|...
-                for i in range(1, len(parts) - 1, 2):
-                    questions.append((parts[i], parts[i + 1]))
-        else:
-            # Обновляем статус каждые несколько сообщений
-            if progress != last_update:
-                last_update = progress
-                try:
-                    await status_msg.edit_text(f"Загрузка: {progress}")
-                except Exception:
-                    pass  # Telegram может ругаться на слишком частые изменения
+    async def collect_with_progress(
+        loader: AsyncGenerator[str, None],
+        prefix: str,
+    ) -> list[tuple[str, str]]:
+        collected: list[tuple[str, str]] = []
+        last_update = ""
+        async for progress in loader:
+            if progress.startswith("DONE"):
+                parts = progress.split("|")
+                if len(parts) > 1:
+                    for i in range(1, len(parts) - 1, 2):
+                        collected.append((parts[i], parts[i + 1]))
+            else:
+                if progress != last_update:
+                    last_update = progress
+                    try:
+                        await status_msg.edit_text(f"{prefix}: {progress}")
+                    except Exception:
+                        pass
+        return collected
+
+    sources = [
+        ("quizvopros.ru", load_questions_from_quizvopros),
+        ("gotquestions.online", load_questions_from_gotquestions),
+    ]
+
+    for source_name, loader_factory in sources:
+        source_questions = await collect_with_progress(
+            loader_factory(),
+            source_name,
+        )
+        source_stats.append((source_name, len(source_questions)))
+        questions.extend(source_questions)
 
     if not questions:
-        await status_msg.edit_text("Вопросы не найдены.")
+        await status_msg.edit_text("Вопросы не найдены ни в одном источнике.")
         return
 
     # Сохраняем в БД
     async for session in get_session():
         added = await save_questions_to_db(session, questions)
 
+    details = "\n".join(
+        f"• {name}: найдено {count}" for name, count in source_stats
+    )
     await status_msg.edit_text(
         f"Загрузка завершена!\n"
         f"Найдено вопросов: {len(questions)}\n"
-        f"Добавлено новых: {added}"
+        f"Добавлено новых: {added}\n"
+        f"{details}"
     )
 
 
