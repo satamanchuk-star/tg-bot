@@ -388,7 +388,6 @@ async def help_command(message: Message) -> None:
     await message.answer(
         HELP_MENU_TEXT,
         reply_markup=_menu_keyboard(),
-        message_thread_id=message.message_thread_id,
         parse_mode="HTML",
     )
     logger.info("OUT: HELP_MENU")
