@@ -26,8 +26,8 @@ router = Router()
 
 
 HELP_MENU_TEXT = (
-    "Выберите тему форума для справки или воспользуйтесь советником "
-    "«Куда писать?»."
+    "Я подсказываю, где обсуждать вопросы, и отвечаю на упоминания. "
+    "Выберите тему форума или воспользуйтесь советником «Куда писать?»."
 )
 HELP_WAIT_TEXT = (
     "Опишите кратко, о чём ваш вопрос, одним сообщением. "
@@ -591,6 +591,35 @@ async def help_topic(callback: CallbackQuery) -> None:
         callback.message.message_id,
     )
     await callback.answer()
+
+
+@router.message(flags={"block": False})
+async def mention_help(message: Message, bot: Bot) -> None:
+    logger.info(f"HANDLER: mention_help called, text={message.text!r}")
+    if message.from_user and message.from_user.is_bot:
+        return
+
+    text = _get_message_text(message)
+    entities = _get_message_entities(message)
+    me = await bot.get_me()
+    has_possible_mention = False
+    if text and "@" in text:
+        has_possible_mention = True
+    if any(entity.type in {"mention", "text_mention"} for entity in entities):
+        has_possible_mention = True
+    if _is_bot_name_called(text, me):
+        has_possible_mention = True
+    if not has_possible_mention:
+        return
+
+    if _is_bot_mentioned(message, me) or _is_bot_name_called(text, me):
+        username = getattr(me, "username", None)
+        if username:
+            logger.info(f"HANDLER: mention_help MATCH @{username}")
+        else:
+            logger.info("HANDLER: mention_help MATCH by id")
+        await message.reply(random.choice(MENTION_REPLIES))
+        logger.info("OUT: MENTION_REPLY")
 
 
 @router.message(flags={"block": False})
