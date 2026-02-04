@@ -174,13 +174,21 @@ def _normalize_words(text: str) -> list[str]:
 
 def check_answer(question: QuizQuestion, answer: str) -> bool:
     """Проверяет ответ на вопрос без учёта регистра и пунктуации."""
-    correct_words = _normalize_words(question.answer)
-    answer_words = _normalize_words(answer)
-    if not correct_words or not answer_words:
+    correct_text = _normalize_text(question.answer)
+    answer_text = _normalize_text(answer)
+    if not correct_text or not answer_text:
         return False
+    if correct_text == answer_text:
+        return True
+    if correct_text in answer_text or answer_text in correct_text:
+        return True
+
+    correct_words = correct_text.split()
+    answer_words = answer_text.split()
+    common = set(correct_words) & set(answer_words)
     if len(correct_words) == 1:
-        return _normalize_text(question.answer) == _normalize_text(answer)
-    return len(set(correct_words) & set(answer_words)) >= 2
+        return False
+    return len(common) >= min(2, len(correct_words))
 
 
 def is_question_timed_out(quiz_session: QuizSession) -> bool:
