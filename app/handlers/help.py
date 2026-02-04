@@ -177,6 +177,7 @@ TOPIC_KEYWORDS: dict[str, list[str]] = {
         "продаю",
         "продается",
         "барахолка",
+        "объявление",
         "объявлен",
         "б/у",
     ],
@@ -185,30 +186,13 @@ TOPIC_KEYWORDS: dict[str, list[str]] = {
         "кошка",
         "котик",
         "котён",
-        "сломал",
-        "течёт",
-        "шум",
-        "грязно",
-        "холодно",
-    ],
-    "Барахолка": [
-        "продам",
-        "куплю",
-        "отдам",
-        "даром",
-        "обмен",
-        "продаю",
-        "барахолка",
-        "объявление",
-    ],
-    "Питомцы": [
-        "кот",
-        "кошка",
-        "котик",
         "собак",
         "пёс",
         "щенок",
         "ветеринар",
+        "питом",
+        "прививк",
+        "корм",
         "потерялся",
     ],
     "Мамы и папы": [
@@ -569,17 +553,13 @@ async def help_topic(callback: CallbackQuery) -> None:
         )
     await callback.message.edit_text(
         reply_text,
+        reply_markup=_back_keyboard(),
         parse_mode="HTML",
     )
     schedule_help_delete(
         callback.message.bot,
         callback.message.chat.id,
         callback.message.message_id,
-    )
-    await callback.message.edit_text(
-        description,
-        reply_markup=_back_keyboard(),
-        parse_mode="HTML",
     )
     await callback.answer()
 

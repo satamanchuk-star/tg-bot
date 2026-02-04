@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -93,7 +93,7 @@ class QuizSession(Base):
     current_question_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     question_number: Mapped[int] = mapped_column(Integer, default=1)
     question_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    is_active: Mapped[bool] = mapped_column(Integer, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     used_question_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
