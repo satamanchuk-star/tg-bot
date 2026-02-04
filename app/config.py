@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     )
     @classmethod
     def _empty_to_none(cls, value: object) -> object:
-        if value == "":
+        if isinstance(value, str) and value.strip() == "":
             return None
         return value
 

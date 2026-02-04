@@ -241,6 +241,8 @@ async def start_quiz(message: Message, bot: Bot) -> None:
     """Команда /umnij для запуска викторины."""
     if message.chat.id != settings.forum_chat_id:
         return
+    if settings.topic_games is None:
+        return
 
     if message.message_thread_id != settings.topic_games:
         await message.reply("Эта команда доступна только в топике Игры.")
@@ -284,6 +286,8 @@ async def start_quiz(message: Message, bot: Bot) -> None:
 async def add_quiz_point_admin(message: Message, bot: Bot) -> None:
     """Админская команда для добавления +1 балла в викторине."""
     if message.from_user is None:
+        return
+    if settings.topic_games is None:
         return
     if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
         return
@@ -332,6 +336,8 @@ async def show_quiz_leaderboard(message: Message) -> None:
     """Команда /topumnij для показа рейтинга."""
     if message.chat.id != settings.forum_chat_id:
         return
+    if settings.topic_games is None:
+        return
 
     if message.message_thread_id != settings.topic_games:
         await message.reply("Эта команда доступна только в топике Игры.")
@@ -360,6 +366,8 @@ async def show_quiz_leaderboard(message: Message) -> None:
 async def check_quiz_answer(message: Message, bot: Bot) -> None:
     """Проверяет ответы на вопросы викторины."""
     if message.from_user is None:
+        return
+    if settings.topic_games is None:
         return
 
     # Пропускаем команды
