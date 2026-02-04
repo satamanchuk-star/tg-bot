@@ -94,8 +94,6 @@ def _is_bot_mentioned(message: Message, bot_user: object) -> bool:
 @router.message()
 async def mention_help(message: Message, bot: Bot) -> None:
     logger.info(f"HANDLER: mention_help called, text={message.text!r}")
-    if message.text and message.text.startswith("/"):
-        return
     me = await bot.get_me()
     if _is_bot_mentioned(message, me):
         username = getattr(me, "username", None)
