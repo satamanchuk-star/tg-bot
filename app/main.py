@@ -21,6 +21,7 @@ from app.db import Base, engine, get_session
 from app.handlers import admin, forms, games, help as help_handler, moderation, quiz
 from app.models import MigrationFlag, QuizQuestion, UserStat
 from app.services.topic_stats import bump_topic_stat
+from app.services.quiz_loader import auto_load_quiz_questions
 from app.services.games import (
     clear_game_command_messages,
     end_game,
@@ -291,6 +292,14 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         quiz.start_quiz_auto,
         "cron",
         hour=21,
+        minute=0,
+        args=[bot],
+    )
+    scheduler.add_job(
+        auto_load_quiz_questions,
+        "cron",
+        day="*/3",
+        hour=4,
         minute=0,
         args=[bot],
     )
