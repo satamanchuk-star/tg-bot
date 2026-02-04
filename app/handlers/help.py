@@ -261,14 +261,8 @@ LAST_HINT_TIME: dict[tuple[int, int], datetime] = {}
 HELP_DELETE_TASKS: dict[tuple[int, int], asyncio.Task[None]] = {}
 
 
-async def _get_menu_text(
-    bot: Bot,
-    user_id: int | None,
-    is_anonymous_admin: bool = False,
-) -> str:
+async def _get_menu_text(bot: Bot, user_id: int | None) -> str:
     """Возвращает текст меню, добавляя админ-справку при необходимости."""
-    if is_anonymous_admin:
-        return f"{HELP_MENU_TEXT}\n\n{ADMIN_HELP}"
     if user_id is None:
         return HELP_MENU_TEXT
     try:
@@ -448,16 +442,7 @@ async def help_command(message: Message, bot: Bot) -> None:
     if message.from_user:
         key = _state_key(message.chat.id, message.from_user.id)
         _clear_waiting_state(key)
-    is_anonymous_admin = (
-        message.from_user is None
-        and message.sender_chat is not None
-        and message.sender_chat.id == message.chat.id
-    )
-    menu_text = await _get_menu_text(
-        bot,
-        message.from_user.id if message.from_user else None,
-        is_anonymous_admin=is_anonymous_admin,
-    )
+    menu_text = await _get_menu_text(bot, message.from_user.id if message.from_user else None)
     response = await message.answer(
         menu_text,
         reply_markup=_menu_keyboard(),
