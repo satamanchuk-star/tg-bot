@@ -185,6 +185,26 @@ TOPIC_KEYWORDS: dict[str, list[str]] = {
         "кошка",
         "котик",
         "котён",
+        "сломал",
+        "течёт",
+        "шум",
+        "грязно",
+        "холодно",
+    ],
+    "Барахолка": [
+        "продам",
+        "куплю",
+        "отдам",
+        "даром",
+        "обмен",
+        "продаю",
+        "барахолка",
+        "объявление",
+    ],
+    "Питомцы": [
+        "кот",
+        "кошка",
+        "котик",
         "собак",
         "пёс",
         "щенок",
@@ -422,6 +442,7 @@ async def help_command(message: Message) -> None:
         key = _state_key(message.chat.id, message.from_user.id)
         _clear_waiting_state(key)
     response = await message.answer(
+    await message.answer(
         HELP_MENU_TEXT,
         reply_markup=_menu_keyboard(),
         parse_mode="HTML",
@@ -552,6 +573,11 @@ async def help_topic(callback: CallbackQuery) -> None:
         callback.message.bot,
         callback.message.chat.id,
         callback.message.message_id,
+    )
+    await callback.message.edit_text(
+        description,
+        reply_markup=_back_keyboard(),
+        parse_mode="HTML",
     )
     await callback.answer()
 
