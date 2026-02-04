@@ -7,7 +7,6 @@ import os
 import signal
 from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
@@ -30,7 +29,23 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
-STOP_FLAG = Path("/app/data/.stopped")
+STOP_FLAG = settings.data_dir / ".stopped"
+
+
+def _admin_label(message: Message) -> str:
+    if message.from_user:
+        return message.from_user.full_name
+    if message.sender_chat:
+        return message.sender_chat.title or str(message.sender_chat.id)
+    return "неизвестный админ"
+
+
+def _admin_id(message: Message) -> str:
+    if message.from_user:
+        return str(message.from_user.id)
+    if message.sender_chat:
+        return str(message.sender_chat.id)
+    return "unknown"
 
 
 async def _ensure_admin(message: Message, bot: Bot) -> bool:
@@ -230,7 +245,7 @@ async def reset_routing_state(message: Message, bot: Bot) -> None:
         await message.reply(f"Сброшено ожиданий: {cleared}.")
         await bot.send_message(
             settings.admin_log_chat_id,
-            f"Админ {message.from_user.id} сбросил все ожидания /help.",
+            f"Админ {_admin_id(message)} сбросил все ожидания /help.",
         )
         return
 
@@ -239,7 +254,7 @@ async def reset_routing_state(message: Message, bot: Bot) -> None:
     if cleared:
         await bot.send_message(
             settings.admin_log_chat_id,
-            f"Админ {message.from_user.id} сбросил ожидание /help для {target_id}.",
+            f"Админ {_admin_id(message)} сбросил ожидание /help для {target_id}.",
         )
 
 
@@ -373,8 +388,8 @@ async def shutdown_bot_cmd(message: Message, bot: Bot) -> None:
     await bot.send_message(
         settings.admin_log_chat_id,
         f"🛑 Бот остановлен командой /shutdown_bot\n"
-        f"Админ: {message.from_user.full_name}\n"
-        f"Для запуска: удалить /app/data/.stopped и перезапустить контейнер",
+        f"Админ: {_admin_label(message)}\n"
+        f"Для запуска: удалить {STOP_FLAG} и перезапустить контейнер",
     )
 
     # Отправляем сигнал завершения процессу
