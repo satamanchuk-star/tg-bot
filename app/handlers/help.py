@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command
+from aiogram.filters import BaseFilter, Command
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -25,6 +25,32 @@ from app.utils.admin_help import ADMIN_HELP
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+
+class HelpRoutingActiveFilter(BaseFilter):
+    """Почему: ограничиваем обработчик /help только на активные ожидания."""
+
+    async def __call__(self, message: Message) -> bool:
+        if message.from_user is None:
+            return False
+        key = _state_key(message.chat.id, message.from_user.id)
+        return key in HELP_ROUTING_STATE
+
+
+class BotMentionFilter(BaseFilter):
+    """Почему: ловим упоминания бота, не блокируя остальные команды."""
+
+    async def __call__(self, message: Message, bot: Bot) -> bool:
+        if message.from_user and message.from_user.is_bot:
+            return False
+        text = _get_message_text(message)
+        if text is None:
+            return False
+        entities = _get_message_entities(message)
+        if not text and not entities:
+            return False
+        me = await bot.get_me()
+        return _is_bot_mentioned(message, me) or _is_bot_name_called(text, me)
 
 
 HELP_MENU_TEXT = (
@@ -595,36 +621,20 @@ async def help_topic(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-@router.message(flags={"block": False})
+@router.message(BotMentionFilter(), flags={"block": False})
 async def mention_help(message: Message, bot: Bot) -> None:
     logger.info(f"HANDLER: mention_help called, text={message.text!r}")
-    if message.from_user and message.from_user.is_bot:
-        return
-
-    text = _get_message_text(message)
-    entities = _get_message_entities(message)
     me = await bot.get_me()
-    has_possible_mention = False
-    if text and "@" in text:
-        has_possible_mention = True
-    if any(entity.type in {"mention", "text_mention"} for entity in entities):
-        has_possible_mention = True
-    if _is_bot_name_called(text, me):
-        has_possible_mention = True
-    if not has_possible_mention:
-        return
-
-    if _is_bot_mentioned(message, me) or _is_bot_name_called(text, me):
-        username = getattr(me, "username", None)
-        if username:
-            logger.info(f"HANDLER: mention_help MATCH @{username}")
-        else:
-            logger.info("HANDLER: mention_help MATCH by id")
-        await message.reply(random.choice(MENTION_REPLIES))
-        logger.info("OUT: MENTION_REPLY")
+    username = getattr(me, "username", None)
+    if username:
+        logger.info(f"HANDLER: mention_help MATCH @{username}")
+    else:
+        logger.info("HANDLER: mention_help MATCH by id")
+    await message.reply(random.choice(MENTION_REPLIES))
+    logger.info("OUT: MENTION_REPLY")
 
 
-@router.message(flags={"block": False})
+@router.message(HelpRoutingActiveFilter(), flags={"block": False})
 async def help_routing_response(message: Message, bot: Bot) -> None:
     if message.from_user is None:
         return
@@ -668,31 +678,3 @@ async def help_routing_response(message: Message, bot: Bot) -> None:
     )
     schedule_help_delete(bot, state.chat_id, state.message_id)
 
-
-@router.message(flags={"block": False})
-async def mention_help(message: Message, bot: Bot) -> None:
-    logger.info(f"HANDLER: mention_help called, text={message.text!r}")
-    if message.from_user and message.from_user.is_bot:
-        return
-
-    text = _get_message_text(message)
-    entities = _get_message_entities(message)
-    me = await bot.get_me()
-    has_possible_mention = False
-    if text and "@" in text:
-        has_possible_mention = True
-    if any(entity.type in {"mention", "text_mention"} for entity in entities):
-        has_possible_mention = True
-    if _is_bot_name_called(text, me):
-        has_possible_mention = True
-    if not has_possible_mention:
-        return
-
-    if _is_bot_mentioned(message, me) or _is_bot_name_called(text, me):
-        username = getattr(me, "username", None)
-        if username:
-            logger.info(f"HANDLER: mention_help MATCH @{username}")
-        else:
-            logger.info("HANDLER: mention_help MATCH by id")
-        await message.reply(random.choice(MENTION_REPLIES))
-        logger.info("OUT: MENTION_REPLY")

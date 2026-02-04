@@ -35,9 +35,14 @@ STOP_FLAG = Path("/app/data/.stopped")
 
 async def _ensure_admin(message: Message, bot: Bot) -> bool:
     if message.from_user is None:
+        if message.sender_chat and message.sender_chat.id in {
+            settings.forum_chat_id,
+            message.chat.id,
+        }:
+            return True
         return False
     try:
-        return await is_admin(bot, message.chat.id, message.from_user.id)
+        return await is_admin(bot, settings.forum_chat_id, message.from_user.id)
     except Exception:  # noqa: BLE001 - не выдаём доступ при ошибке проверки
         logger.exception("Не удалось проверить права администратора.")
         return False
