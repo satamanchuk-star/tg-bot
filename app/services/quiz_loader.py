@@ -13,7 +13,7 @@ from zipfile import ZipFile
 import httpx
 from aiogram import Bot
 from bs4 import BeautifulSoup
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import QuizQuestion
@@ -461,35 +461,44 @@ def _normalize_question(text: str) -> str:
     return " ".join(text.lower().split())
 
 
+async def sync_questions_from_text(session: AsyncSession) -> tuple[int, int]:
+    """Полностью пересобирает банк вопросов только из текстового файла."""
+    questions = await collect_questions(load_questions_from_text())
+    unique: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for question, answer in questions:
+        normalized = _normalize_question(question)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append((question, answer))
+
+    await session.execute(delete(QuizQuestion))
+    for question, answer in unique:
+        session.add(QuizQuestion(question=question, answer=answer))
+    await session.commit()
+    return len(questions), len(unique)
+
+
 async def auto_load_quiz_questions(bot: Bot) -> None:
     """Автозагружает вопросы из текстового файла и логирует результат."""
     from app.config import settings
     from app.db import get_session
 
-    sources = [("app/data/quiz_questions.txt", load_questions_from_text)]
-    all_questions: list[tuple[str, str]] = []
-    source_stats: list[tuple[str, int]] = []
+    async for session in get_session():
+        total, unique = await sync_questions_from_text(session)
 
-    for name, loader_factory in sources:
-        questions = await collect_questions(loader_factory())
-        source_stats.append((name, len(questions)))
-        all_questions.extend(questions)
-
-    if not all_questions:
+    if total == 0:
         await bot.send_message(
             settings.admin_log_chat_id,
-            "Автозагрузка викторины: вопросы не найдены.",
+            "Автозагрузка викторины: вопросы в app/data/quiz_questions.txt не найдены.",
         )
         return
 
-    async for session in get_session():
-        added = await save_questions_to_db(session, all_questions)
-
-    details = "\n".join(f"• {name}: найдено {count}" for name, count in source_stats)
     await bot.send_message(
         settings.admin_log_chat_id,
-        "Автозагрузка викторины завершена.\n"
-        f"Найдено всего: {sum(count for _, count in source_stats)}\n"
-        f"Добавлено новых: {added}\n"
-        f"{details}",
+        "Автозагрузка викторины завершена (только текстовый файл).\n"
+        f"Источник: app/data/quiz_questions.txt\n"
+        f"Прочитано строк: {total}\n"
+        f"Уникальных вопросов в БД: {unique}",
     )

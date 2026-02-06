@@ -268,7 +268,7 @@ async def load_quiz_questions(message: Message, bot: Bot) -> None:
 
     from app.services.quiz_loader import (
         load_questions_from_text,
-        save_questions_to_db,
+        sync_questions_from_text,
     )
 
     status_msg = await message.reply("Начинаю загрузку вопросов...")
@@ -312,15 +312,15 @@ async def load_quiz_questions(message: Message, bot: Bot) -> None:
         await status_msg.edit_text("Вопросы не найдены ни в одном источнике.")
         return
 
-    # Сохраняем в БД
+    # Полностью пересобираем БД викторины из текстового файла
     async for session in get_session():
-        added = await save_questions_to_db(session, questions)
+        total, unique = await sync_questions_from_text(session)
 
     details = "\n".join(f"• {name}: найдено {count}" for name, count in source_stats)
     await status_msg.edit_text(
         f"Загрузка завершена!\n"
-        f"Найдено вопросов: {len(questions)}\n"
-        f"Добавлено новых: {added}\n"
+        f"Прочитано вопросов: {total}\n"
+        f"Уникальных в БД: {unique}\n"
         f"{details}"
     )
 

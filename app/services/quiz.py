@@ -7,10 +7,17 @@ import random
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import QuizDailyLimit, QuizQuestion, QuizSession, QuizUserStat, UserStat
+from app.models import (
+    QuizDailyLimit,
+    QuizQuestion,
+    QuizSession,
+    QuizUsedQuestion,
+    QuizUserStat,
+    UserStat,
+)
 from app.utils.time import is_game_time_allowed, now_tz
 
 QUIZ_MAX_LAUNCHES_PER_DAY = 2
@@ -35,6 +42,10 @@ def add_used_question_id(quiz_session: QuizSession, question_id: int) -> None:
         quiz_session.used_question_ids = json.dumps(used_ids)
 
 
+def _normalize_question_text(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
 async def can_start_quiz(
     session: AsyncSession,
     chat_id: int,
@@ -46,11 +57,9 @@ async def can_start_quiz(
 
     Возвращает (можно_ли, причина_отказа).
     """
-    # Проверка времени: 20:00-22:00 МСК
     if enforce_time_window and not is_game_time_allowed(20, 22):
         return False, "Викторина доступна с 20:00 до 22:00 по Москве."
 
-    # Проверка активной сессии
     active = await session.execute(
         select(QuizSession).where(
             QuizSession.chat_id == chat_id,
@@ -61,7 +70,6 @@ async def can_start_quiz(
     if active.scalar_one_or_none():
         return False, "Викторина уже запущена в этом топике."
 
-    # Проверка дневного лимита
     date_key = now_tz().date().isoformat()
     limit_row = await session.get(QuizDailyLimit, (chat_id, topic_id, date_key))
     if limit_row and limit_row.launches >= QUIZ_MAX_LAUNCHES_PER_DAY:
@@ -70,7 +78,6 @@ async def can_start_quiz(
             f"Достигнут лимит викторин на сегодня ({QUIZ_MAX_LAUNCHES_PER_DAY}).",
         )
 
-    # Проверка наличия достаточного количества вопросов
     count_result = await session.execute(select(func.count(QuizQuestion.id)))
     questions_count = count_result.scalar()
     if questions_count < QUIZ_QUESTIONS_COUNT:
@@ -88,7 +95,6 @@ async def start_quiz_session(
     topic_id: int,
 ) -> QuizSession:
     """Создаёт новую сессию викторины."""
-    # Увеличиваем счётчик дневного лимита
     date_key = now_tz().date().isoformat()
     limit_row = await session.get(QuizDailyLimit, (chat_id, topic_id, date_key))
     if limit_row:
@@ -134,7 +140,7 @@ async def get_random_question(
     session: AsyncSession,
     quiz_session: QuizSession | None = None,
 ) -> QuizQuestion | None:
-    """Возвращает случайный вопрос из БД, исключая использованные в сессии."""
+    """Возвращает случайный вопрос из БД без повторов по глобальной истории."""
     query = select(QuizQuestion)
     if quiz_session:
         exclude_ids = get_used_question_ids(quiz_session)
@@ -145,7 +151,15 @@ async def get_random_question(
     questions = result.scalars().all()
     if not questions:
         return None
-    return random.choice(questions)
+
+    used_result = await session.execute(select(QuizUsedQuestion.question_normalized))
+    used_questions = {row[0] for row in used_result.fetchall()}
+    available = [
+        q for q in questions if _normalize_question_text(q.question) not in used_questions
+    ]
+    if not available:
+        return None
+    return random.choice(available)
 
 
 async def set_current_question(
@@ -153,11 +167,16 @@ async def set_current_question(
     quiz_session: QuizSession,
     question: QuizQuestion,
 ) -> None:
-    """Устанавливает текущий вопрос для сессии и помечает его как использованный."""
+    """Устанавливает текущий вопрос и сохраняет его в глобальную историю использованных."""
     quiz_session.current_question_id = question.id
     quiz_session.question_number += 1
     quiz_session.question_started_at = datetime.now(timezone.utc)
     add_used_question_id(quiz_session, question.id)
+
+    normalized = _normalize_question_text(question.question)
+    used_row = await session.get(QuizUsedQuestion, normalized)
+    if used_row is None:
+        session.add(QuizUsedQuestion(question_normalized=normalized))
 
 
 async def get_current_question(
@@ -188,13 +207,7 @@ def _levenshtein_distance(left: str, right: str) -> int:
         curr = [i]
         for j, rch in enumerate(right, start=1):
             cost = 0 if lch == rch else 1
-            curr.append(
-                min(
-                    prev[j] + 1,
-                    curr[j - 1] + 1,
-                    prev[j - 1] + cost,
-                )
-            )
+            curr.append(min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost))
         prev = curr
     return prev[-1]
 
