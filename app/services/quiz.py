@@ -229,17 +229,13 @@ def check_answer(question: QuizQuestion, answer: str) -> bool:
     answer_text = _normalize_text(answer)
     if not correct_text or not answer_text:
         return False
-    if correct_text == answer_text:
-        return True
-    if correct_text in answer_text or answer_text in correct_text:
-        return True
-    if _is_typo_tolerant_match(correct_text, answer_text):
-        return True
-
     correct_words = _normalize_words(correct_text)
     answer_words = _normalize_words(answer_text)
     if len(correct_words) != len(answer_words):
         return False
+
+    if len(correct_words) == 1:
+        return _is_typo_tolerant_match(correct_words[0], answer_words[0])
 
     total_typos = 0
     for correct_word, answer_word in zip(correct_words, answer_words, strict=False):
