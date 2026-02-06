@@ -10,12 +10,14 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import QuizDailyLimit, QuizQuestion, QuizSession, QuizUserStat
+from app.models import QuizDailyLimit, QuizQuestion, QuizSession, QuizUserStat, UserStat
 from app.utils.time import is_game_time_allowed, now_tz
 
 QUIZ_MAX_LAUNCHES_PER_DAY = 2
 QUIZ_QUESTIONS_COUNT = 10
 QUIZ_QUESTION_TIMEOUT_SEC = 60
+QUIZ_BREAK_BETWEEN_QUESTIONS_SEC = 60
+QUIZ_WINNER_COINS_BONUS = 50
 
 
 def get_used_question_ids(quiz_session: QuizSession) -> list[int]:
@@ -59,17 +61,21 @@ async def can_start_quiz(
 
     # Проверка дневного лимита
     date_key = now_tz().date().isoformat()
-    limit_row = await session.get(
-        QuizDailyLimit, (chat_id, topic_id, date_key)
-    )
+    limit_row = await session.get(QuizDailyLimit, (chat_id, topic_id, date_key))
     if limit_row and limit_row.launches >= QUIZ_MAX_LAUNCHES_PER_DAY:
-        return False, f"Достигнут лимит викторин на сегодня ({QUIZ_MAX_LAUNCHES_PER_DAY})."
+        return (
+            False,
+            f"Достигнут лимит викторин на сегодня ({QUIZ_MAX_LAUNCHES_PER_DAY}).",
+        )
 
     # Проверка наличия достаточного количества вопросов
     count_result = await session.execute(select(func.count(QuizQuestion.id)))
     questions_count = count_result.scalar()
     if questions_count < QUIZ_QUESTIONS_COUNT:
-        return False, f"Недостаточно вопросов в базе (нужно минимум {QUIZ_QUESTIONS_COUNT}, сейчас {questions_count}). Пополните базу вопросов."
+        return (
+            False,
+            f"Недостаточно вопросов в базе (нужно минимум {QUIZ_QUESTIONS_COUNT}, сейчас {questions_count}). Пополните базу вопросов.",
+        )
 
     return True, ""
 
@@ -86,12 +92,14 @@ async def start_quiz_session(
     if limit_row:
         limit_row.launches += 1
     else:
-        session.add(QuizDailyLimit(
-            chat_id=chat_id,
-            topic_id=topic_id,
-            date_key=date_key,
-            launches=1,
-        ))
+        session.add(
+            QuizDailyLimit(
+                chat_id=chat_id,
+                topic_id=topic_id,
+                date_key=date_key,
+                launches=1,
+            )
+        )
 
     quiz_session = QuizSession(
         chat_id=chat_id,
@@ -165,6 +173,34 @@ def _normalize_text(text: str) -> str:
     return " ".join(cleaned.split())
 
 
+def _levenshtein_distance(left: str, right: str) -> int:
+    if left == right:
+        return 0
+    if not left:
+        return len(right)
+    if not right:
+        return len(left)
+
+    prev = list(range(len(right) + 1))
+    for i, lch in enumerate(left, start=1):
+        curr = [i]
+        for j, rch in enumerate(right, start=1):
+            cost = 0 if lch == rch else 1
+            curr.append(
+                min(
+                    prev[j] + 1,
+                    curr[j - 1] + 1,
+                    prev[j - 1] + cost,
+                )
+            )
+        prev = curr
+    return prev[-1]
+
+
+def _is_typo_tolerant_match(correct_text: str, answer_text: str) -> bool:
+    return _levenshtein_distance(correct_text, answer_text) <= 2
+
+
 def _normalize_words(text: str) -> list[str]:
     normalized = _normalize_text(text)
     if not normalized:
@@ -173,7 +209,7 @@ def _normalize_words(text: str) -> list[str]:
 
 
 def check_answer(question: QuizQuestion, answer: str) -> bool:
-    """Проверяет ответ на вопрос без учёта регистра и пунктуации."""
+    """Проверяет ответ на вопрос с допуском до двух грамматических ошибок."""
     correct_text = _normalize_text(question.answer)
     answer_text = _normalize_text(answer)
     if not correct_text or not answer_text:
@@ -182,13 +218,21 @@ def check_answer(question: QuizQuestion, answer: str) -> bool:
         return True
     if correct_text in answer_text or answer_text in correct_text:
         return True
+    if _is_typo_tolerant_match(correct_text, answer_text):
+        return True
 
-    correct_words = correct_text.split()
-    answer_words = answer_text.split()
-    common = set(correct_words) & set(answer_words)
-    if len(correct_words) == 1:
+    correct_words = _normalize_words(correct_text)
+    answer_words = _normalize_words(answer_text)
+    if len(correct_words) != len(answer_words):
         return False
-    return len(common) >= min(2, len(correct_words))
+
+    total_typos = 0
+    for correct_word, answer_word in zip(correct_words, answer_words, strict=False):
+        distance = _levenshtein_distance(correct_word, answer_word)
+        if distance > 1:
+            return False
+        total_typos += distance
+    return total_typos <= 2
 
 
 def is_question_timed_out(quiz_session: QuizSession) -> bool:
@@ -252,3 +296,23 @@ async def get_quiz_leaderboard(
 async def is_quiz_finished(quiz_session: QuizSession) -> bool:
     """Проверяет, завершена ли викторина (10 вопросов)."""
     return quiz_session.question_number >= QUIZ_QUESTIONS_COUNT
+
+
+async def award_winner_bonus_coins(
+    session: AsyncSession,
+    user_id: int,
+    chat_id: int,
+    display_name: str | None = None,
+) -> UserStat:
+    """Начисляет победителю викторины бонусные монеты для игры в 21."""
+    stats = await session.get(UserStat, {"user_id": user_id, "chat_id": chat_id})
+    if stats is None:
+        stats = UserStat(
+            user_id=user_id, chat_id=chat_id, coins=100, display_name=display_name
+        )
+        session.add(stats)
+    if display_name:
+        stats.display_name = display_name
+    stats.coins += QUIZ_WINNER_COINS_BONUS
+    await session.flush()
+    return stats

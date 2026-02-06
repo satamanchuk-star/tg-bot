@@ -7,6 +7,8 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -15,9 +17,12 @@ from app.config import settings
 from app.db import get_session
 from app.utils.admin import is_admin_message
 from app.services.quiz import (
+    QUIZ_BREAK_BETWEEN_QUESTIONS_SEC,
     QUIZ_QUESTION_TIMEOUT_SEC,
     QUIZ_QUESTIONS_COUNT,
+    QUIZ_WINNER_COINS_BONUS,
     award_point,
+    award_winner_bonus_coins,
     can_start_quiz,
     check_answer,
     end_quiz_session,
@@ -58,18 +63,87 @@ def _pluralize_points(n: int) -> str:
     return "очков"
 
 
-def _format_results(chat_id: int, topic_id: int) -> str:
+def _format_results(
+    chat_id: int, topic_id: int
+) -> tuple[str, list[tuple[int, str, int]]]:
     """Форматирует итоги викторины и очищает результаты сессии."""
     key = (chat_id, topic_id)
     results = _session_results.pop(key, {})
     if not results:
-        return "Викторина завершена! Никто не ответил правильно."
+        return "Викторина завершена! Никто не ответил правильно.", []
 
-    lines = ["Викторина завершена!\n\nИтоги:"]
     sorted_results = sorted(results.items(), key=lambda x: -x[1][1])
-    for user_id, (name, points) in sorted_results:
+    lines = ["Викторина завершена!\n\nИтоги:"]
+    for _user_id, (name, points) in sorted_results:
         lines.append(f"• @{name}: +{points} {_pluralize_points(points)}")
-    return "\n".join(lines)
+    winners_points = sorted_results[0][1][1]
+    winners = [
+        (user_id, name, points)
+        for user_id, (name, points) in sorted_results
+        if points == winners_points
+    ]
+    return "\n".join(lines), winners
+
+
+async def _finish_quiz_and_notify(
+    session: AsyncSession,
+    bot: Bot,
+    chat_id: int,
+    topic_id: int,
+    quiz_session: QuizSession,
+) -> None:
+    await end_quiz_session(session, quiz_session)
+    results_text, winners = _format_results(chat_id, topic_id)
+
+    bonus_line = ""
+    if winners:
+        winner_names = []
+        for user_id, name, _points in winners:
+            await award_winner_bonus_coins(session, user_id, chat_id, display_name=name)
+            winner_names.append(name)
+        bonus_line = (
+            f"\n\nПобедитель(и): {', '.join(winner_names)}. "
+            f"Начислено +{QUIZ_WINNER_COINS_BONUS} монет в игре 21."
+        )
+
+    await session.commit()
+    await bot.send_message(
+        chat_id,
+        f"{results_text}{bonus_line}",
+        message_thread_id=topic_id,
+    )
+
+
+async def _send_next_question_after_break(
+    bot: Bot,
+    chat_id: int,
+    topic_id: int,
+) -> None:
+    """Ждёт минуту и отправляет следующий вопрос, если сессия ещё активна."""
+    await asyncio.sleep(QUIZ_BREAK_BETWEEN_QUESTIONS_SEC)
+
+    async for session in get_session():
+        quiz_session = await get_active_session(session, chat_id, topic_id)
+        if not quiz_session or not quiz_session.is_active:
+            return
+
+        next_question = await get_random_question(session, quiz_session)
+        if not next_question:
+            await _finish_quiz_and_notify(session, bot, chat_id, topic_id, quiz_session)
+            _cancel_timeout(chat_id, topic_id)
+            return
+
+        await set_current_question(session, quiz_session, next_question)
+        await session.commit()
+        await _send_question(
+            bot,
+            chat_id,
+            topic_id,
+            quiz_session.question_number,
+            next_question.question,
+        )
+        _start_timeout(bot, chat_id, topic_id, quiz_session.question_started_at)
+        return
 
 
 def _display_name(message: Message) -> str | None:
@@ -126,7 +200,9 @@ async def start_quiz_auto(bot: Bot) -> None:
         quiz_session = await start_quiz_session(session, chat_id, topic_id)
         question = await get_random_question(session, quiz_session)
         if not question:
-            await bot.send_message(chat_id, "Нет доступных вопросов.", message_thread_id=topic_id)
+            await bot.send_message(
+                chat_id, "Нет доступных вопросов.", message_thread_id=topic_id
+            )
             return
 
         await set_current_question(session, quiz_session, question)
@@ -138,7 +214,7 @@ async def start_quiz_auto(bot: Bot) -> None:
 
     await bot.send_message(
         chat_id,
-        "Викторина начинается! У вас 60 секунд на каждый вопрос.",
+        "Викторина начинается! У вас 60 секунд на каждый вопрос. Между вопросами перерыв 1 минута.",
         message_thread_id=topic_id,
     )
     await _send_question(bot, chat_id, topic_id, 1, question.question)
@@ -150,11 +226,13 @@ async def start_quiz_auto(bot: Bot) -> None:
     )
 
 
-async def _send_question(bot: Bot, chat_id: int, topic_id: int, question_num: int, question_text: str) -> None:
+async def _send_question(
+    bot: Bot, chat_id: int, topic_id: int, question_num: int, question_text: str
+) -> None:
     """Отправляет вопрос в чат."""
     await bot.send_message(
         chat_id,
-        f"Вопрос {question_num}/{QUIZ_QUESTIONS_COUNT}:\n\n{question_text}",
+        f"Вопрос {question_num}/{QUIZ_QUESTIONS_COUNT}:\n\n{question_text}\n\nФормат ответа: 1 слово или несколько слов (если ответ длиннее 2 слов).",
         message_thread_id=topic_id,
     )
 
@@ -187,39 +265,19 @@ async def _handle_timeout(bot: Bot, chat_id: int, topic_id: int) -> None:
 
         # Проверяем, закончилась ли викторина
         if await is_quiz_finished(quiz_session):
-            await end_quiz_session(session, quiz_session)
-            await session.commit()
-            await bot.send_message(
-                chat_id,
-                _format_results(chat_id, topic_id),
-                message_thread_id=topic_id,
-            )
+            await _finish_quiz_and_notify(session, bot, chat_id, topic_id, quiz_session)
             _cancel_timeout(chat_id, topic_id)
             return
 
-        # Следующий вопрос
-        next_question = await get_random_question(session, quiz_session)
-        if next_question:
-            await set_current_question(session, quiz_session, next_question)
-            await session.commit()
-            await _send_question(
-                bot, chat_id, topic_id,
-                quiz_session.question_number, next_question.question
-            )
-            # Запускаем новый таймаут
-            _start_timeout(bot, chat_id, topic_id, quiz_session.question_started_at)
-        else:
-            await end_quiz_session(session, quiz_session)
-            await session.commit()
-            await bot.send_message(
-                chat_id,
-                _format_results(chat_id, topic_id),
-                message_thread_id=topic_id,
-            )
-            _cancel_timeout(chat_id, topic_id)
+        # Следующий вопрос с обязательным перерывом
+        break
+
+    await _send_next_question_after_break(bot, chat_id, topic_id)
 
 
-def _start_timeout(bot: Bot, chat_id: int, topic_id: int, question_started_at: datetime | None) -> None:
+def _start_timeout(
+    bot: Bot, chat_id: int, topic_id: int, question_started_at: datetime | None
+) -> None:
     """Запускает таймаут для текущего вопроса."""
     _cancel_timeout(chat_id, topic_id)
     key = (chat_id, topic_id)
@@ -273,7 +331,9 @@ async def _start_quiz_from_message(
         await session.commit()
         question_started_at = quiz_session.question_started_at
 
-    await message.reply("Викторина начинается! У вас 60 секунд на каждый вопрос.")
+    await message.reply(
+        "Викторина начинается! У вас 60 секунд на каждый вопрос. Между вопросами перерыв 1 минута."
+    )
     await _send_question(bot, chat_id, topic_id, 1, question.question)
     _start_timeout(bot, chat_id, topic_id, question_started_at)
 
@@ -438,40 +498,17 @@ async def check_quiz_answer(message: Message, bot: Bot) -> None:
             results[user_id] = (name, results[user_id][1] + 1)
         else:
             results[user_id] = (name, 1)
-        await message.reply(
-            f"Правильно, @{name}! +1 очко (всего: {stat.total_points})"
-        )
+        await message.reply(f"Правильно, @{name}! +1 очко (всего: {stat.total_points})")
 
         # Проверяем, закончилась ли викторина
         if await is_quiz_finished(quiz_session):
-            await end_quiz_session(session, quiz_session)
-            await session.commit()
-            await bot.send_message(
-                chat_id,
-                _format_results(chat_id, topic_id),
-                message_thread_id=topic_id,
-            )
+            await _finish_quiz_and_notify(session, bot, chat_id, topic_id, quiz_session)
             return
 
         # Следующий вопрос
         quiz_session.current_question_id = None
         quiz_session.question_started_at = None
         await session.commit()
-        await asyncio.sleep(60)
-        next_question = await get_random_question(session, quiz_session)
-        if next_question:
-            await set_current_question(session, quiz_session, next_question)
-            await session.commit()
-            await _send_question(
-                bot, chat_id, topic_id,
-                quiz_session.question_number, next_question.question
-            )
-            _start_timeout(bot, chat_id, topic_id, quiz_session.question_started_at)
-        else:
-            await end_quiz_session(session, quiz_session)
-            await session.commit()
-            await bot.send_message(
-                chat_id,
-                _format_results(chat_id, topic_id),
-                message_thread_id=topic_id,
-            )
+        break
+
+    await _send_next_question_after_break(bot, chat_id, topic_id)

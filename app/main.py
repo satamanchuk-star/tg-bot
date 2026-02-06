@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from app.config import settings
 from app.db import Base, engine, get_session
 from app.handlers import admin, forms, games, help as help_handler, moderation, quiz
-from app.models import MigrationFlag, QuizQuestion, UserStat
+from app.models import MigrationFlag, UserStat
 from app.services.topic_stats import bump_topic_stat
 from app.services.quiz_loader import auto_load_quiz_questions
 from app.services.games import (
@@ -85,6 +85,8 @@ class LoggingMiddleware(BaseMiddleware):
                     )
                     await session.commit()
         return await handler(event, data)
+
+
 OFFLINE_THRESHOLD_MIN = 30
 
 
@@ -100,7 +102,9 @@ async def init_db(async_engine: AsyncEngine) -> None:
 
             # Миграция user_stats
             if inspector.has_table("user_stats"):
-                columns = {column["name"] for column in inspector.get_columns("user_stats")}
+                columns = {
+                    column["name"] for column in inspector.get_columns("user_stats")
+                }
                 if "display_name" not in columns:
                     sync_conn.execute(
                         text("ALTER TABLE user_stats ADD COLUMN display_name TEXT")
@@ -114,7 +118,9 @@ async def init_db(async_engine: AsyncEngine) -> None:
                 }
                 if "used_question_ids" not in columns:
                     sync_conn.execute(
-                        text("ALTER TABLE quiz_sessions ADD COLUMN used_question_ids TEXT")
+                        text(
+                            "ALTER TABLE quiz_sessions ADD COLUMN used_question_ids TEXT"
+                        )
                     )
                 is_active_column = columns.get("is_active")
                 if (
@@ -146,19 +152,25 @@ async def apply_v11_stats_reset(session: AsyncSession) -> None:
 
 
 async def load_initial_quiz_questions(session: AsyncSession) -> None:
-    """Загружает начальные вопросы для викторины."""
+    """Первичная загрузка вопросов только из локального XLSX-файла."""
     flag = await session.get(MigrationFlag, "quiz_questions_initial_load")
     if flag:
         return
 
-    from app.data.quiz_questions import INITIAL_QUESTIONS
+    from app.services.quiz_loader import (
+        collect_questions,
+        load_questions_from_xlsx,
+        save_questions_to_db,
+    )
 
-    for question, answer in INITIAL_QUESTIONS:
-        session.add(QuizQuestion(question=question, answer=answer))
+    questions = await collect_questions(load_questions_from_xlsx())
+    added = 0
+    if questions:
+        added = await save_questions_to_db(session, questions)
 
     session.add(MigrationFlag(key="quiz_questions_initial_load"))
     await session.commit()
-    logger.info(f"Загружено {len(INITIAL_QUESTIONS)} вопросов для викторины")
+    logger.info("Первичная загрузка вопросов завершена, добавлено %s", added)
 
 
 async def send_daily_summary(bot: Bot) -> None:
@@ -289,9 +301,7 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler.add_job(
         heartbeat_job, "interval", minutes=HEARTBEAT_INTERVAL_MIN, args=[bot]
     )
-    scheduler.add_job(
-        check_game_timeouts, "interval", minutes=1, args=[bot]
-    )
+    scheduler.add_job(check_game_timeouts, "interval", minutes=1, args=[bot])
     scheduler.add_job(
         cleanup_blackjack_commands,
         "cron",
@@ -368,11 +378,15 @@ async def on_startup(bot: Bot) -> None:
             BotCommand(command="strike", description="Добавить страйк (реплай)"),
             BotCommand(command="addcoins", description="Выдать монеты (реплай)"),
             BotCommand(command="bal", description="Добавить балл викторины (реплай)"),
-            BotCommand(command="umnij_start", description="Запустить викторину вручную"),
+            BotCommand(
+                command="umnij_start", description="Запустить викторину вручную"
+            ),
             BotCommand(command="reload_profanity", description="Обновить список матов"),
             BotCommand(command="load_quiz", description="Загрузить вопросы викторины"),
             BotCommand(command="restart_jobs", description="Сбросить зависшие задачи"),
-            BotCommand(command="reset_routing_state", description="Сбросить ожидание /help"),
+            BotCommand(
+                command="reset_routing_state", description="Сбросить ожидание /help"
+            ),
             BotCommand(command="shutdown_bot", description="Остановить бота"),
         ],
         scope=BotCommandScopeChatAdministrators(chat_id=settings.forum_chat_id),

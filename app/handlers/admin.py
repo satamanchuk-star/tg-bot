@@ -250,7 +250,9 @@ async def reset_routing_state(message: Message, bot: Bot) -> None:
         return
 
     cleared = clear_routing_state(user_id=target_id, chat_id=settings.forum_chat_id)
-    await message.reply(f"Ожидание для пользователя {display_name or target_id} сброшено.")
+    await message.reply(
+        f"Ожидание для пользователя {display_name or target_id} сброшено."
+    )
     if cleared:
         await bot.send_message(
             settings.admin_log_chat_id,
@@ -265,8 +267,7 @@ async def load_quiz_questions(message: Message, bot: Bot) -> None:
         return
 
     from app.services.quiz_loader import (
-        load_questions_from_gotquestions,
-        load_questions_from_quizvopros,
+        load_questions_from_xlsx,
         save_questions_to_db,
     )
 
@@ -296,8 +297,7 @@ async def load_quiz_questions(message: Message, bot: Bot) -> None:
         return collected
 
     sources = [
-        ("quizvopros.ru", load_questions_from_quizvopros),
-        ("gotquestions.online", load_questions_from_gotquestions),
+        ("viktorinavopros_QA.xlsx", load_questions_from_xlsx),
     ]
 
     for source_name, loader_factory in sources:
@@ -316,9 +316,7 @@ async def load_quiz_questions(message: Message, bot: Bot) -> None:
     async for session in get_session():
         added = await save_questions_to_db(session, questions)
 
-    details = "\n".join(
-        f"• {name}: найдено {count}" for name, count in source_stats
-    )
+    details = "\n".join(f"• {name}: найдено {count}" for name, count in source_stats)
     await status_msg.edit_text(
         f"Загрузка завершена!\n"
         f"Найдено вопросов: {len(questions)}\n"
@@ -337,6 +335,7 @@ async def restart_jobs(message: Message, bot: Bot, state: FSMContext) -> None:
 
     # 1. Отменяем таймауты квиза
     from app.handlers.quiz import _timeout_tasks
+
     if _timeout_tasks:
         for task in _timeout_tasks.values():
             task.cancel()
@@ -364,7 +363,7 @@ async def restart_jobs(message: Message, bot: Bot, state: FSMContext) -> None:
     # 3. Очищаем FSM (через storage)
     storage = state.storage
     # MemoryStorage хранит данные в _data dict
-    if hasattr(storage, '_data'):
+    if hasattr(storage, "_data"):
         storage._data.clear()
         cleared.append("FSM-состояния")
 
