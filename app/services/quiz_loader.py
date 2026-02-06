@@ -1,11 +1,14 @@
-"""Сервис загрузки вопросов для викторины из внешних источников."""
+"""Почему: единый источник вопросов — локальный XLSX-файл викторины."""
 
 from __future__ import annotations
 
 import asyncio
 import re
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from urllib.parse import urljoin
+from xml.etree import ElementTree
+from zipfile import ZipFile
 
 import httpx
 from aiogram import Bot
@@ -26,6 +29,74 @@ DEFAULT_HEADERS = {
     "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
     "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
 }
+QUIZ_XLSX_PATH = Path(__file__).resolve().parents[2] / "viktorinavopros_QA.xlsx"
+_NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+
+
+def _column_index(cell_ref: str) -> int:
+    letters = "".join(ch for ch in cell_ref if ch.isalpha()).upper()
+    idx = 0
+    for char in letters:
+        idx = idx * 26 + (ord(char) - ord("A") + 1)
+    return idx
+
+
+def _read_xlsx_questions(path: Path) -> list[tuple[str, str]]:
+    """Читает пары вопрос/ответ из XLSX (колонки A/B)."""
+    with ZipFile(path) as archive:
+        shared_strings: list[str] = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            shared_root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+            for item in shared_root.findall("x:si", _NS):
+                text_parts = [node.text or "" for node in item.findall(".//x:t", _NS)]
+                shared_strings.append("".join(text_parts))
+
+        sheet = ElementTree.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+        rows = sheet.findall(".//x:sheetData/x:row", _NS)
+
+    questions: list[tuple[str, str]] = []
+    for row in rows[1:]:  # пропускаем заголовок
+        values: dict[int, str] = {}
+        for cell in row.findall("x:c", _NS):
+            cell_ref = cell.get("r", "")
+            col_idx = _column_index(cell_ref)
+            value_node = cell.find("x:v", _NS)
+            if value_node is None:
+                continue
+            value = value_node.text or ""
+            if cell.get("t") == "s" and value.isdigit():
+                shared_idx = int(value)
+                if 0 <= shared_idx < len(shared_strings):
+                    value = shared_strings[shared_idx]
+            values[col_idx] = " ".join(value.split())
+
+        question = values.get(1, "")
+        answer = values.get(2, "")
+        if not question or not answer:
+            continue
+        if question.lower() == "вопрос" and answer.lower() == "ответ":
+            continue
+        questions.append((question, answer))
+    return questions
+
+
+async def load_questions_from_xlsx() -> AsyncGenerator[str, None]:
+    """Загружает вопросы из viktorinavopros_QA.xlsx рядом с проектом."""
+    yield "Читаю вопросы из viktorinavopros_QA.xlsx..."
+    if not QUIZ_XLSX_PATH.exists():
+        yield "DONE"
+        return
+
+    questions = _read_xlsx_questions(QUIZ_XLSX_PATH)
+    if not questions:
+        yield "DONE"
+        return
+
+    parts = ["DONE"]
+    for question, answer in questions:
+        parts.append(question)
+        parts.append(answer)
+    yield "|".join(parts)
 
 
 async def _fetch_page(client: httpx.AsyncClient, url: str) -> str | None:
@@ -110,7 +181,9 @@ def _parse_questions_page(html: str) -> list[tuple[str, str]]:
         tag.decompose()
 
     content = soup.select_one("article, .entry-content, .post-content, main")
-    text = content.get_text(separator="\n") if content else soup.get_text(separator="\n")
+    text = (
+        content.get_text(separator="\n") if content else soup.get_text(separator="\n")
+    )
 
     return _extract_questions(text)
 
@@ -344,11 +417,8 @@ def _normalize_question(text: str) -> str:
 
 
 async def auto_load_quiz_questions(bot: Bot) -> None:
-    """Автозагружает вопросы из внешних источников и логирует результат."""
-    sources = [
-        ("quizvopros.ru", load_questions_from_quizvopros),
-        ("gotquestions.online", load_questions_from_gotquestions),
-    ]
+    """Автозагружает вопросы из XLSX-файла и логирует результат."""
+    sources = [("viktorinavopros_QA.xlsx", load_questions_from_xlsx)]
     all_questions: list[tuple[str, str]] = []
     source_stats: list[tuple[str, int]] = []
 
@@ -367,9 +437,7 @@ async def auto_load_quiz_questions(bot: Bot) -> None:
     async for session in get_session():
         added = await save_questions_to_db(session, all_questions)
 
-    details = "\n".join(
-        f"• {name}: найдено {count}" for name, count in source_stats
-    )
+    details = "\n".join(f"• {name}: найдено {count}" for name, count in source_stats)
     await bot.send_message(
         settings.admin_log_chat_id,
         "Автозагрузка викторины завершена.\n"
