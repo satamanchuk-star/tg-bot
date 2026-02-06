@@ -152,25 +152,15 @@ async def apply_v11_stats_reset(session: AsyncSession) -> None:
 
 
 async def load_initial_quiz_questions(session: AsyncSession) -> None:
-    """Первичная загрузка вопросов только из локального XLSX-файла."""
-    flag = await session.get(MigrationFlag, "quiz_questions_initial_load")
-    if flag:
-        return
+    """При каждом старте пересобирает банк вопросов только из текстового файла."""
+    from app.services.quiz_loader import sync_questions_from_text
 
-    from app.services.quiz_loader import (
-        collect_questions,
-        load_questions_from_xlsx,
-        save_questions_to_db,
+    total, unique = await sync_questions_from_text(session)
+    logger.info(
+        "Загрузка вопросов из text завершена: прочитано=%s, уникальных=%s",
+        total,
+        unique,
     )
-
-    questions = await collect_questions(load_questions_from_xlsx())
-    added = 0
-    if questions:
-        added = await save_questions_to_db(session, questions)
-
-    session.add(MigrationFlag(key="quiz_questions_initial_load"))
-    await session.commit()
-    logger.info("Первичная загрузка вопросов завершена, добавлено %s", added)
 
 
 async def send_daily_summary(bot: Bot) -> None:

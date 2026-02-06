@@ -84,6 +84,13 @@ class QuizQuestion(Base):
     answer: Mapped[str] = mapped_column(Text)
 
 
+class QuizUsedQuestion(Base):
+    __tablename__ = "quiz_used_questions"
+
+    question_normalized: Mapped[str] = mapped_column(Text, primary_key=True)
+    used_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class QuizSession(Base):
     __tablename__ = "quiz_sessions"
 
