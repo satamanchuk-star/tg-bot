@@ -13,6 +13,7 @@ ADMIN_HELP = (
     "/reload_profanity\n"
     "/load_quiz — загрузить вопросы викторины из текстового файла\n"
     "/restart_jobs — сброс зависших задач (формы, квизы, игры)\n"
+    "/reset_stats — обнулить статистику и сессии игр\n"
     "/reset_routing_state — сбросить ожидание /help (реплай/@username/id или без параметров)\n"
     "/shutdown_bot — полная остановка бота"
 )

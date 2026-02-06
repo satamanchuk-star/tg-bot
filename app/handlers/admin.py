@@ -16,7 +16,14 @@ from sqlalchemy import delete, update
 
 from app.config import settings
 from app.db import get_session
-from app.models import GameState, QuizSession
+from app.models import (
+    GameState,
+    QuizDailyLimit,
+    QuizSession,
+    QuizUsedQuestion,
+    QuizUserStat,
+    UserStat,
+)
 from app.services.games import can_grant_coins, get_or_create_stats, register_coin_grant
 from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import extract_target_user, is_admin
@@ -323,6 +330,64 @@ async def load_quiz_questions(message: Message, bot: Bot) -> None:
         f"Уникальных в БД: {unique}\n"
         f"{details}"
     )
+
+
+@router.message(Command("reset_stats"))
+async def reset_stats(message: Message, bot: Bot) -> None:
+    """Обнуляет статистику игр и викторины, сбрасывая сессию."""
+    if not await _ensure_admin(message, bot):
+        return
+
+    from app.handlers.quiz import _question_started_at, _session_results, _timeout_tasks
+
+    cleared: list[str] = []
+
+    if _timeout_tasks:
+        for task in _timeout_tasks.values():
+            task.cancel()
+        _timeout_tasks.clear()
+        _question_started_at.clear()
+        cleared.append("таймауты викторины")
+
+    async for session in get_session():
+        game_stats_result = await session.execute(delete(UserStat))
+        game_stats_rows = game_stats_result.rowcount or 0
+        if game_stats_rows > 0:
+            cleared.append(f"статистика игры 21 ({game_stats_rows})")
+
+        game_states_result = await session.execute(delete(GameState))
+        game_states_rows = game_states_result.rowcount or 0
+        if game_states_rows > 0:
+            cleared.append(f"активные игры 21 ({game_states_rows})")
+
+        quiz_stats_result = await session.execute(delete(QuizUserStat))
+        quiz_stats_rows = quiz_stats_result.rowcount or 0
+        if quiz_stats_rows > 0:
+            cleared.append(f"статистика викторины ({quiz_stats_rows})")
+
+        quiz_limits_result = await session.execute(delete(QuizDailyLimit))
+        quiz_limits_rows = quiz_limits_result.rowcount or 0
+        if quiz_limits_rows > 0:
+            cleared.append(f"лимиты запусков викторины ({quiz_limits_rows})")
+
+        used_questions_result = await session.execute(delete(QuizUsedQuestion))
+        used_questions_rows = used_questions_result.rowcount or 0
+        if used_questions_rows > 0:
+            cleared.append(f"глобальная история вопросов ({used_questions_rows})")
+
+        quiz_sessions_result = await session.execute(delete(QuizSession))
+        quiz_sessions_rows = quiz_sessions_result.rowcount or 0
+        if quiz_sessions_rows > 0:
+            cleared.append(f"сессии викторины ({quiz_sessions_rows})")
+
+        await session.commit()
+
+    _session_results.clear()
+
+    if cleared:
+        await message.reply("Статистика и сессии сброшены: " + ", ".join(cleared))
+    else:
+        await message.reply("Статистика уже пустая, сессия сброшена.")
 
 
 @router.message(Command("restart_jobs"))
