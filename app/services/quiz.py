@@ -39,13 +39,15 @@ async def can_start_quiz(
     session: AsyncSession,
     chat_id: int,
     topic_id: int,
+    *,
+    enforce_time_window: bool = True,
 ) -> tuple[bool, str]:
     """Проверяет возможность запуска викторины.
 
     Возвращает (можно_ли, причина_отказа).
     """
     # Проверка времени: 20:00-22:00 МСК
-    if not is_game_time_allowed(20, 22):
+    if enforce_time_window and not is_game_time_allowed(20, 22):
         return False, "Викторина доступна с 20:00 до 22:00 по Москве."
 
     # Проверка активной сессии
