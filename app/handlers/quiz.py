@@ -315,7 +315,12 @@ async def _start_quiz_from_message(
     _session_results[(chat_id, topic_id)] = {}
 
     async for session in get_session():
-        can_start, reason = await can_start_quiz(session, chat_id, topic_id)
+        can_start, reason = await can_start_quiz(
+            session,
+            chat_id,
+            topic_id,
+            enforce_time_window=False,
+        )
         if not can_start:
             await message.reply(reason)
             return

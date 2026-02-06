@@ -1,4 +1,4 @@
-"""Почему: единый источник вопросов — локальный XLSX-файл викторины."""
+"""Почему: загрузка вопросов викторины из локального текстового файла и резервных источников."""
 
 from __future__ import annotations
 
@@ -16,8 +16,6 @@ from bs4 import BeautifulSoup
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-from app.db import get_session
 from app.models import QuizQuestion
 
 BASE_URL = "https://quizvopros.ru/"
@@ -30,7 +28,54 @@ DEFAULT_HEADERS = {
     "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
 }
 QUIZ_XLSX_PATH = Path(__file__).resolve().parents[2] / "viktorinavopros_QA.xlsx"
+QUIZ_TEXT_PATH = Path(__file__).resolve().parents[1] / "data" / "quiz_questions.txt"
 _NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+
+
+def _read_text_questions(path: Path) -> list[tuple[str, str]]:
+    """Читает пары вопрос/ответ из текстового файла.
+
+    Поддерживаемые форматы строки:
+    - вопрос|ответ
+    - вопрос;ответ
+    - вопрос<TAB>ответ
+    Пустые строки и комментарии (#) пропускаются.
+    """
+    questions: list[tuple[str, str]] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        separator = next((sep for sep in ("|", ";", "\t") if sep in line), None)
+        if separator is None:
+            continue
+
+        question, answer = (part.strip() for part in line.split(separator, 1))
+        if not question or not answer:
+            continue
+
+        questions.append((" ".join(question.split()), " ".join(answer.split())))
+    return questions
+
+
+async def load_questions_from_text() -> AsyncGenerator[str, None]:
+    """Загружает вопросы из app/data/quiz_questions.txt."""
+    yield "Читаю вопросы из app/data/quiz_questions.txt..."
+    if not QUIZ_TEXT_PATH.exists():
+        yield "DONE"
+        return
+
+    questions = _read_text_questions(QUIZ_TEXT_PATH)
+    if not questions:
+        yield "DONE"
+        return
+
+    parts = ["DONE"]
+    for question, answer in questions:
+        parts.append(question)
+        parts.append(answer)
+    yield "|".join(parts)
 
 
 def _column_index(cell_ref: str) -> int:
@@ -417,8 +462,11 @@ def _normalize_question(text: str) -> str:
 
 
 async def auto_load_quiz_questions(bot: Bot) -> None:
-    """Автозагружает вопросы из XLSX-файла и логирует результат."""
-    sources = [("viktorinavopros_QA.xlsx", load_questions_from_xlsx)]
+    """Автозагружает вопросы из текстового файла и логирует результат."""
+    from app.config import settings
+    from app.db import get_session
+
+    sources = [("app/data/quiz_questions.txt", load_questions_from_text)]
     all_questions: list[tuple[str, str]] = []
     source_stats: list[tuple[str, int]] = []
 

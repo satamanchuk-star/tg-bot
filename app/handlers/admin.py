@@ -262,12 +262,12 @@ async def reset_routing_state(message: Message, bot: Bot) -> None:
 
 @router.message(Command("load_quiz"))
 async def load_quiz_questions(message: Message, bot: Bot) -> None:
-    """Загружает вопросы для викторины из внешних источников."""
+    """Загружает вопросы для викторины из текстового файла."""
     if not await _ensure_admin(message, bot):
         return
 
     from app.services.quiz_loader import (
-        load_questions_from_xlsx,
+        load_questions_from_text,
         save_questions_to_db,
     )
 
@@ -297,7 +297,7 @@ async def load_quiz_questions(message: Message, bot: Bot) -> None:
         return collected
 
     sources = [
-        ("viktorinavopros_QA.xlsx", load_questions_from_xlsx),
+        ("app/data/quiz_questions.txt", load_questions_from_text),
     ]
 
     for source_name, loader_factory in sources:
