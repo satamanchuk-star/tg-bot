@@ -1,81 +1,36 @@
-"""Почему: загрузка вопросов викторины из локального текстового файла и резервных источников."""
+"""Почему: загружаем единый официальный набор вопросов викторины из XLSX в БД."""
 
 from __future__ import annotations
 
-import asyncio
-import re
-from collections.abc import AsyncGenerator
 from pathlib import Path
-from urllib.parse import urljoin
 from xml.etree import ElementTree
 from zipfile import ZipFile
 
-import httpx
 from aiogram import Bot
-from bs4 import BeautifulSoup
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import QuizQuestion
 
-BASE_URL = "https://quizvopros.ru/"
-GOTQUESTIONS_URL = "https://gotquestions.online/"
-MAX_PAGES = 15
-MAX_GOTQUESTIONS_PAGES = 10
-DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-}
 QUIZ_XLSX_PATH = Path(__file__).resolve().parents[2] / "viktorinavopros_QA.xlsx"
 QUIZ_TEXT_PATH = Path(__file__).resolve().parents[1] / "data" / "quiz_questions.txt"
 _NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 
 
 def _read_text_questions(path: Path) -> list[tuple[str, str]]:
-    """Читает пары вопрос/ответ из текстового файла.
-
-    Поддерживаемые форматы строки:
-    - вопрос|ответ
-    - вопрос;ответ
-    - вопрос<TAB>ответ
-    Пустые строки и комментарии (#) пропускаются.
-    """
+    """Совместимость с тестами: читаем пары вопрос/ответ из текстового файла."""
     questions: list[tuple[str, str]] = []
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-
         separator = next((sep for sep in ("|", ";", "\t") if sep in line), None)
         if separator is None:
             continue
-
         question, answer = (part.strip() for part in line.split(separator, 1))
-        if not question or not answer:
-            continue
-
-        questions.append((" ".join(question.split()), " ".join(answer.split())))
+        if question and answer:
+            questions.append((" ".join(question.split()), " ".join(answer.split())))
     return questions
-
-
-async def load_questions_from_text() -> AsyncGenerator[str, None]:
-    """Загружает вопросы из app/data/quiz_questions.txt."""
-    yield "Читаю вопросы из app/data/quiz_questions.txt..."
-    if not QUIZ_TEXT_PATH.exists():
-        yield "DONE"
-        return
-
-    questions = _read_text_questions(QUIZ_TEXT_PATH)
-    if not questions:
-        yield "DONE"
-        return
-
-    parts = ["DONE"]
-    for question, answer in questions:
-        parts.append(question)
-        parts.append(answer)
-    yield "|".join(parts)
 
 
 def _column_index(cell_ref: str) -> int:
@@ -87,7 +42,6 @@ def _column_index(cell_ref: str) -> int:
 
 
 def _read_xlsx_questions(path: Path) -> list[tuple[str, str]]:
-    """Читает пары вопрос/ответ из XLSX (колонки A/B)."""
     with ZipFile(path) as archive:
         shared_strings: list[str] = []
         if "xl/sharedStrings.xml" in archive.namelist():
@@ -100,11 +54,10 @@ def _read_xlsx_questions(path: Path) -> list[tuple[str, str]]:
         rows = sheet.findall(".//x:sheetData/x:row", _NS)
 
     questions: list[tuple[str, str]] = []
-    for row in rows[1:]:  # пропускаем заголовок
+    for row in rows[1:]:
         values: dict[int, str] = {}
         for cell in row.findall("x:c", _NS):
-            cell_ref = cell.get("r", "")
-            col_idx = _column_index(cell_ref)
+            col_idx = _column_index(cell.get("r", ""))
             value_node = cell.find("x:v", _NS)
             if value_node is None:
                 continue
@@ -125,348 +78,18 @@ def _read_xlsx_questions(path: Path) -> list[tuple[str, str]]:
     return questions
 
 
-async def load_questions_from_xlsx() -> AsyncGenerator[str, None]:
-    """Загружает вопросы из viktorinavopros_QA.xlsx рядом с проектом."""
-    yield "Читаю вопросы из viktorinavopros_QA.xlsx..."
-    if not QUIZ_XLSX_PATH.exists():
-        yield "DONE"
-        return
-
-    questions = _read_xlsx_questions(QUIZ_XLSX_PATH)
-    if not questions:
-        yield "DONE"
-        return
-
-    parts = ["DONE"]
-    for question, answer in questions:
-        parts.append(question)
-        parts.append(answer)
-    yield "|".join(parts)
-
-
-async def _fetch_page(client: httpx.AsyncClient, url: str) -> str | None:
-    """Загружает страницу."""
-    try:
-        response = await client.get(url, follow_redirects=True)
-        response.raise_for_status()
-        return response.text
-    except httpx.HTTPError:
-        return None
-
-
-def _extract_questions_from_text(text: str) -> list[tuple[str, str]]:
-    """Извлекает вопросы и ответы из текста страницы."""
-    questions = []
-    text_lower = text.lower()
-
-    # Ищем маркер раздела ответов
-    answer_markers = ["ответы", "ответы:", "ответы на вопросы"]
-    answer_start = -1
-    for marker in answer_markers:
-        pos = text_lower.rfind(marker)
-        if pos > answer_start:
-            answer_start = pos
-
-    if answer_start == -1:
-        return questions
-
-    questions_text = text[:answer_start]
-    answers_text = text[answer_start:]
-
-    # Паттерн для нумерованных пунктов
-    pattern = r"(\d+)[.\)]\s*(.+?)(?=\d+[.\)]|\Z)"
-
-    q_matches = re.findall(pattern, questions_text, re.DOTALL)
-    q_dict = {int(num): txt.strip() for num, txt in q_matches if txt.strip()}
-
-    a_matches = re.findall(pattern, answers_text, re.DOTALL)
-    a_dict = {int(num): txt.strip() for num, txt in a_matches if txt.strip()}
-
-    for num in sorted(q_dict.keys()):
-        if num in a_dict:
-            question = " ".join(q_dict[num].split())
-            answer = " ".join(a_dict[num].split())
-            if 10 < len(question) < 500 and 1 < len(answer) < 200:
-                questions.append((question, answer))
-
-    return questions
-
-
-def _extract_question_answer_blocks(text: str) -> list[tuple[str, str]]:
-    """Ищет пары вопрос/ответ в свободном тексте."""
-    patterns = [
-        r"(?:вопрос|question)\s*[:\-–]\s*(.+?)\s*(?:ответ|answer)\s*[:\-–]\s*(.+?)(?=(?:вопрос|question)\s*[:\-–]|\Z)",
-        r"(?:вопрос|question)\s*\d*\s*[:\-–]\s*(.+?)\s*(?:ответ|answer)\s*\d*\s*[:\-–]\s*(.+?)(?=(?:вопрос|question)\s*\d*\s*[:\-–]|\Z)",
-    ]
-    questions: list[tuple[str, str]] = []
-    for pattern in patterns:
-        for match in re.findall(pattern, text, re.IGNORECASE | re.DOTALL):
-            question = " ".join(match[0].split())
-            answer = " ".join(match[1].split())
-            if 10 < len(question) < 500 and 1 < len(answer) < 200:
-                questions.append((question, answer))
-        if questions:
-            break
-    return questions
-
-
-def _extract_questions(text: str) -> list[tuple[str, str]]:
-    """Извлекает вопросы/ответы из текста с fallback-паттернами."""
-    questions = _extract_question_answer_blocks(text)
-    if questions:
-        return questions
-    return _extract_questions_from_text(text)
-
-
-def _parse_questions_page(html: str) -> list[tuple[str, str]]:
-    """Парсит страницу с вопросами."""
-    soup = BeautifulSoup(html, "html.parser")
-
-    for tag in soup.select("script, style, nav, header, footer, .sidebar, .comments"):
-        tag.decompose()
-
-    content = soup.select_one("article, .entry-content, .post-content, main")
-    text = (
-        content.get_text(separator="\n") if content else soup.get_text(separator="\n")
-    )
-
-    return _extract_questions(text)
-
-
-def _get_article_links(
-    html: str,
-    base_url: str,
-    include_keywords: list[str] | None = None,
-    exclude_keywords: list[str] | None = None,
-) -> list[str]:
-    """Извлекает ссылки на статьи с вопросами."""
-    soup = BeautifulSoup(html, "html.parser")
-    links = set()
-    include_keywords = include_keywords or []
-    exclude_keywords = exclude_keywords or []
-
-    for a in soup.select("a[href]"):
-        href = a.get("href", "")
-        if base_url in href or href.startswith("/"):
-            full_url = urljoin(base_url, href)
-            lower_url = full_url.lower()
-            if any(
-                x in lower_url
-                for x in [
-                    "/category/",
-                    "/tag/",
-                    "/page/",
-                    "/author/",
-                    "#",
-                    "?",
-                    ".jpg",
-                    ".png",
-                ]
-            ):
-                continue
-            if exclude_keywords and any(x in lower_url for x in exclude_keywords):
-                continue
-            if include_keywords and not any(x in lower_url for x in include_keywords):
-                continue
-            links.add(full_url)
-
-    return list(links)
-
-
-async def load_questions_from_quizvopros() -> AsyncGenerator[str, None]:
-    """Загружает вопросы с quizvopros.ru, yield'ит сообщения о прогрессе.
-
-    Последнее сообщение содержит итоговый список вопросов в формате:
-    "DONE|question1|answer1|question2|answer2|..."
-    """
-    all_questions: list[tuple[str, str]] = []
-    seen_questions: set[str] = set()
-    all_links: set[str] = set()
-
-    async with httpx.AsyncClient(
-        timeout=30.0,
-        follow_redirects=True,
-        headers=DEFAULT_HEADERS,
-    ) as client:
-        yield "Сбор ссылок на страницы..."
-
-        # Главная страница
-        html = await _fetch_page(client, BASE_URL)
-        if html:
-            all_links.update(
-                _get_article_links(
-                    html,
-                    BASE_URL,
-                    include_keywords=["вопрос", "квиз", "интеллектуальн"],
-                )
-            )
-
-        # Пагинация
-        for page in range(2, MAX_PAGES + 1):
-            url = f"{BASE_URL}page/{page}/"
-            html = await _fetch_page(client, url)
-            if not html:
-                break
-            links = _get_article_links(
-                html,
-                BASE_URL,
-                include_keywords=["вопрос", "квиз", "интеллектуальн"],
-            )
-            if not links:
-                break
-            all_links.update(links)
-            await asyncio.sleep(0.3)
-
-        yield f"Найдено {len(all_links)} страниц с вопросами"
-
-        # Парсим каждую страницу
-        for i, url in enumerate(all_links, 1):
-            html = await _fetch_page(client, url)
-            if not html:
-                continue
-
-            questions = _parse_questions_page(html)
-            new_count = 0
-            for q, a in questions:
-                if q not in seen_questions:
-                    seen_questions.add(q)
-                    all_questions.append((q, a))
-                    new_count += 1
-
-            if new_count > 0:
-                yield f"[{i}/{len(all_links)}] +{new_count} вопросов"
-
-            await asyncio.sleep(0.5)
-
-    # Финальное сообщение с данными
-    if all_questions:
-        parts = ["DONE"]
-        for q, a in all_questions:
-            parts.append(q)
-            parts.append(a)
-        yield "|".join(parts)
-    else:
-        yield "DONE"
-
-
-async def load_questions_from_gotquestions() -> AsyncGenerator[str, None]:
-    """Загружает вопросы с gotquestions.online, yield'ит сообщения о прогрессе."""
-    all_questions: list[tuple[str, str]] = []
-    seen_questions: set[str] = set()
-    all_links: set[str] = set()
-
-    async with httpx.AsyncClient(
-        timeout=30.0,
-        follow_redirects=True,
-        headers=DEFAULT_HEADERS,
-    ) as client:
-        yield "Сбор ссылок gotquestions.online..."
-
-        html = await _fetch_page(client, GOTQUESTIONS_URL)
-        if html:
-            all_links.update(
-                _get_article_links(
-                    html,
-                    GOTQUESTIONS_URL,
-                    include_keywords=["question", "вопрос", "quiz"],
-                    exclude_keywords=["/page/"],
-                )
-            )
-
-        for page in range(2, MAX_GOTQUESTIONS_PAGES + 1):
-            url = f"{GOTQUESTIONS_URL}page/{page}/"
-            html = await _fetch_page(client, url)
-            if not html:
-                break
-            links = _get_article_links(
-                html,
-                GOTQUESTIONS_URL,
-                include_keywords=["question", "вопрос", "quiz"],
-                exclude_keywords=["/page/"],
-            )
-            if not links:
-                break
-            all_links.update(links)
-            await asyncio.sleep(0.3)
-
-        yield f"Найдено {len(all_links)} страниц с вопросами (gotquestions.online)"
-
-        for i, url in enumerate(all_links, 1):
-            html = await _fetch_page(client, url)
-            if not html:
-                continue
-
-            questions = _parse_questions_page(html)
-            new_count = 0
-            for q, a in questions:
-                if q not in seen_questions:
-                    seen_questions.add(q)
-                    all_questions.append((q, a))
-                    new_count += 1
-
-            if new_count > 0:
-                yield f"[{i}/{len(all_links)}] +{new_count} вопросов (gotquestions.online)"
-
-            await asyncio.sleep(0.4)
-
-    if all_questions:
-        parts = ["DONE"]
-        for q, a in all_questions:
-            parts.append(q)
-            parts.append(a)
-        yield "|".join(parts)
-    else:
-        yield "DONE"
-
-
-async def collect_questions(
-    loader: AsyncGenerator[str, None],
-) -> list[tuple[str, str]]:
-    """Собирает вопросы из loader-генератора."""
-    questions: list[tuple[str, str]] = []
-    async for progress in loader:
-        if progress.startswith("DONE"):
-            parts = progress.split("|")
-            if len(parts) > 1:
-                for i in range(1, len(parts) - 1, 2):
-                    questions.append((parts[i], parts[i + 1]))
-    return questions
-
-
-async def save_questions_to_db(
-    session: AsyncSession,
-    questions: list[tuple[str, str]],
-) -> int:
-    """Сохраняет вопросы в БД, пропуская дубликаты. Возвращает кол-во добавленных."""
-    result = await session.execute(select(QuizQuestion.question))
-    existing = {row[0] for row in result.fetchall()}
-    existing_normalized = {_normalize_question(question) for question in existing}
-
-    added = 0
-    for question, answer in questions:
-        normalized = _normalize_question(question)
-        if normalized in existing_normalized:
-            continue
-        session.add(QuizQuestion(question=question, answer=answer))
-        existing.add(question)
-        existing_normalized.add(normalized)
-        added += 1
-
-    await session.commit()
-    return added
-
-
 def _normalize_question(text: str) -> str:
-    """Нормализует текст вопроса для проверки дубликатов."""
     return " ".join(text.lower().split())
 
 
-async def sync_questions_from_text(session: AsyncSession) -> tuple[int, int]:
-    """Полностью пересобирает банк вопросов только из текстового файла."""
-    questions = await collect_questions(load_questions_from_text())
+async def sync_questions_from_xlsx(session: AsyncSession) -> tuple[int, int]:
+    if not QUIZ_XLSX_PATH.exists():
+        return 0, 0
+
+    source = _read_xlsx_questions(QUIZ_XLSX_PATH)
     unique: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for question, answer in questions:
+    for question, answer in source:
         normalized = _normalize_question(question)
         if normalized in seen:
             continue
@@ -477,28 +100,33 @@ async def sync_questions_from_text(session: AsyncSession) -> tuple[int, int]:
     for question, answer in unique:
         session.add(QuizQuestion(question=question, answer=answer))
     await session.commit()
-    return len(questions), len(unique)
+    return len(source), len(unique)
+
+
+async def sync_questions_from_text(session: AsyncSession) -> tuple[int, int]:
+    """Совместимость: старый вызов теперь синхронизирует из XLSX."""
+    return await sync_questions_from_xlsx(session)
 
 
 async def auto_load_quiz_questions(bot: Bot) -> None:
-    """Автозагружает вопросы из текстового файла и логирует результат."""
     from app.config import settings
     from app.db import get_session
 
     async for session in get_session():
-        total, unique = await sync_questions_from_text(session)
+        total, unique = await sync_questions_from_xlsx(session)
+        break
 
     if total == 0:
         await bot.send_message(
             settings.admin_log_chat_id,
-            "Автозагрузка викторины: вопросы в app/data/quiz_questions.txt не найдены.",
+            "Автозагрузка викторины: файл viktorinavopros_QA.xlsx не найден или пуст.",
         )
         return
 
     await bot.send_message(
         settings.admin_log_chat_id,
-        "Автозагрузка викторины завершена (только текстовый файл).\n"
-        f"Источник: app/data/quiz_questions.txt\n"
+        "Автозагрузка викторины завершена.\n"
+        "Источник: viktorinavopros_QA.xlsx\n"
         f"Прочитано строк: {total}\n"
         f"Уникальных вопросов в БД: {unique}",
     )

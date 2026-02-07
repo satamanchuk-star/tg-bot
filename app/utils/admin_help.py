@@ -11,7 +11,7 @@ ADMIN_HELP = (
     "/bal (реплай, +1 балл в викторине)\n"
     "/umnij_start — ручной запуск викторины (топик Игры)\n"
     "/reload_profanity\n"
-    "/load_quiz — загрузить вопросы викторины из текстового файла\n"
+    "/load_quiz — загрузить вопросы викторины из viktorinavopros_QA.xlsx\n"
     "/restart_jobs — сброс зависших задач (формы, квизы, игры)\n"
     "/reset_stats — обнулить статистику и сессии игр\n"
     "/reset_routing_state — сбросить ожидание /help (реплай/@username/id или без параметров)\n"

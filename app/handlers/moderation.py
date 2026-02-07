@@ -6,8 +6,6 @@ import logging
 from datetime import datetime, timedelta
 
 from aiogram import Bot, Router
-
-logger = logging.getLogger(__name__)
 from aiogram.filters import Command, StateFilter
 from aiogram.types import ChatPermissions, Message
 
@@ -24,6 +22,7 @@ from app.utils.profanity import (
 )
 from app.utils.text import contains_forbidden_link, contains_profanity, normalize_words
 
+logger = logging.getLogger(__name__)
 router = Router()
 
 PROFANITY_WORDS = load_profanity()

@@ -12,11 +12,10 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import Message
 
-logger = logging.getLogger(__name__)
-
 from app.config import settings
 from app.utils.admin import is_admin
 
+logger = logging.getLogger(__name__)
 router = Router()
 
 

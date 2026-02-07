@@ -152,12 +152,12 @@ async def apply_v11_stats_reset(session: AsyncSession) -> None:
 
 
 async def load_initial_quiz_questions(session: AsyncSession) -> None:
-    """При каждом старте пересобирает банк вопросов только из текстового файла."""
-    from app.services.quiz_loader import sync_questions_from_text
+    """При каждом старте пересобирает банк вопросов из XLSX-файла."""
+    from app.services.quiz_loader import sync_questions_from_xlsx
 
-    total, unique = await sync_questions_from_text(session)
+    total, unique = await sync_questions_from_xlsx(session)
     logger.info(
-        "Загрузка вопросов из text завершена: прочитано=%s, уникальных=%s",
+        "Загрузка вопросов из xlsx завершена: прочитано=%s, уникальных=%s",
         total,
         unique,
     )
@@ -254,7 +254,7 @@ async def check_game_timeouts(bot: Bot) -> None:
                 try:
                     await bot.send_message(
                         chat_id,
-                        f"Время вышло! Игра отменена.",
+                        "Время вышло! Игра отменена.",
                         message_thread_id=settings.topic_games,
                     )
                 except Exception:
@@ -307,6 +307,13 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         args=[bot],
     )
     scheduler.add_job(
+        quiz.announce_questions_left,
+        "cron",
+        hour=19,
+        minute=59,
+        args=[bot],
+    )
+    scheduler.add_job(
         quiz.start_quiz_auto,
         "cron",
         hour=20,
@@ -318,6 +325,13 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         "cron",
         hour=20,
         minute=55,
+        args=[bot],
+    )
+    scheduler.add_job(
+        quiz.announce_questions_left,
+        "cron",
+        hour=20,
+        minute=59,
         args=[bot],
     )
     scheduler.add_job(
@@ -399,7 +413,7 @@ async def error_handler(event: ErrorEvent) -> bool:
 
     if event.update and event.update.message:
         msg = event.update.message
-        error_text += f"\n\nКонтекст:\n"
+        error_text += "\n\nКонтекст:\n"
         error_text += f"Chat: {msg.chat.id}\n"
         error_text += f"User: {msg.from_user.id if msg.from_user else 'N/A'}\n"
         error_text += f"Text: {(msg.text or '')[:100]}"
