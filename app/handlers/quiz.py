@@ -107,7 +107,7 @@ async def start_quiz_auto(bot: Bot) -> None:
     await _start_quiz(bot, settings.forum_chat_id, settings.topic_games, actor="авто")
 
 
-async def _start_quiz(bot: Bot, chat_id: int, topic_id: int, actor: str) -> None:
+async def _start_quiz(bot: Bot, chat_id: int, topic_id: int, actor: str) -> tuple[bool, str]:
     _session_results[(chat_id, topic_id)] = {}
 
     async for session in get_session():
@@ -115,13 +115,13 @@ async def _start_quiz(bot: Bot, chat_id: int, topic_id: int, actor: str) -> None
         if not can_start:
             if actor == "авто":
                 await bot.send_message(settings.admin_log_chat_id, f"Автозапуск викторины отменён: {reason}")
-            return
+            return False, reason
 
         quiz_session = await start_quiz_session(session, chat_id, topic_id)
         question = await get_random_question(session, quiz_session)
         if not question:
             await bot.send_message(chat_id, "Вопросы закончились. Загрузите новую базу.", message_thread_id=topic_id)
-            return
+            return False, "Вопросы закончились. Загрузите новую базу."
 
         await set_current_question(session, quiz_session, question)
         await session.commit()
@@ -138,6 +138,7 @@ async def _start_quiz(bot: Bot, chat_id: int, topic_id: int, actor: str) -> None
     )
     await _send_question(bot, chat_id, topic_id, question_number, question_text, hint)
     _start_timeout(bot, chat_id, topic_id, question_started_at)
+    return True, ""
 
 
 async def _send_question(
@@ -270,9 +271,14 @@ async def start_quiz_admin(message: Message, bot: Bot) -> None:
         await message.reply("Команда доступна только в топике игры.")
         return
     if not await is_admin_message(bot, settings.forum_chat_id, message):
+        await message.reply("Команда доступна только администраторам.")
         return
 
-    await _start_quiz(bot, settings.forum_chat_id, settings.topic_games, actor="admin")
+    started, reason = await _start_quiz(bot, settings.forum_chat_id, settings.topic_games, actor="admin")
+    if not started:
+        await message.reply(f"Ручной запуск не выполнен: {reason}")
+        return
+
     await message.reply("Ручной запуск викторины выполнен.")
 
 
