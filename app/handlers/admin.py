@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import signal
-from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta
 
 from aiogram import Bot, Router
@@ -269,66 +268,26 @@ async def reset_routing_state(message: Message, bot: Bot) -> None:
 
 @router.message(Command("load_quiz"))
 async def load_quiz_questions(message: Message, bot: Bot) -> None:
-    """Загружает вопросы для викторины из текстового файла."""
+    """Загружает вопросы для викторины из XLSX-файла проекта."""
     if not await _ensure_admin(message, bot):
         return
 
-    from app.services.quiz_loader import (
-        load_questions_from_text,
-        sync_questions_from_text,
-    )
+    status_msg = await message.reply("Пересобираю банк вопросов из viktorinavopros_QA.xlsx...")
+    from app.services.quiz_loader import sync_questions_from_xlsx
 
-    status_msg = await message.reply("Начинаю загрузку вопросов...")
-    questions: list[tuple[str, str]] = []
-    source_stats: list[tuple[str, int]] = []
+    async for session in get_session():
+        total, unique = await sync_questions_from_xlsx(session)
+        break
 
-    async def collect_with_progress(
-        loader: AsyncGenerator[str, None],
-        prefix: str,
-    ) -> list[tuple[str, str]]:
-        collected: list[tuple[str, str]] = []
-        last_update = ""
-        async for progress in loader:
-            if progress.startswith("DONE"):
-                parts = progress.split("|")
-                if len(parts) > 1:
-                    for i in range(1, len(parts) - 1, 2):
-                        collected.append((parts[i], parts[i + 1]))
-            else:
-                if progress != last_update:
-                    last_update = progress
-                    try:
-                        await status_msg.edit_text(f"{prefix}: {progress}")
-                    except Exception:
-                        pass
-        return collected
-
-    sources = [
-        ("app/data/quiz_questions.txt", load_questions_from_text),
-    ]
-
-    for source_name, loader_factory in sources:
-        source_questions = await collect_with_progress(
-            loader_factory(),
-            source_name,
-        )
-        source_stats.append((source_name, len(source_questions)))
-        questions.extend(source_questions)
-
-    if not questions:
-        await status_msg.edit_text("Вопросы не найдены ни в одном источнике.")
+    if total == 0:
+        await status_msg.edit_text("Файл с вопросами не найден или пуст.")
         return
 
-    # Полностью пересобираем БД викторины из текстового файла
-    async for session in get_session():
-        total, unique = await sync_questions_from_text(session)
-
-    details = "\n".join(f"• {name}: найдено {count}" for name, count in source_stats)
     await status_msg.edit_text(
-        f"Загрузка завершена!\n"
+        "Загрузка завершена!\n"
+        f"Источник: viktorinavopros_QA.xlsx\n"
         f"Прочитано вопросов: {total}\n"
-        f"Уникальных в БД: {unique}\n"
-        f"{details}"
+        f"Уникальных в БД: {unique}"
     )
 
 
@@ -417,7 +376,7 @@ async def restart_jobs(message: Message, bot: Bot, state: FSMContext) -> None:
         # Квизы
         result = await session.execute(
             update(QuizSession)
-            .where(QuizSession.is_active == True)
+            .where(QuizSession.is_active.is_(True))
             .values(is_active=False)
         )
         if result.rowcount > 0:

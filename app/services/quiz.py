@@ -1,4 +1,4 @@
-"""Почему: логика викторины изолирована от хендлеров."""
+"""Почему: выделяем доменную логику викторины в единый сервис для переиспользования и тестов."""
 
 from __future__ import annotations
 
@@ -7,20 +7,11 @@ import random
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import (
-    QuizDailyLimit,
-    QuizQuestion,
-    QuizSession,
-    QuizUsedQuestion,
-    QuizUserStat,
-    UserStat,
-)
-from app.utils.time import is_game_time_allowed, now_tz
+from app.models import QuizQuestion, QuizSession, QuizUsedQuestion, QuizUserStat, UserStat
 
-QUIZ_MAX_LAUNCHES_PER_DAY = 2
 QUIZ_QUESTIONS_COUNT = 10
 QUIZ_QUESTION_TIMEOUT_SEC = 60
 QUIZ_BREAK_BETWEEN_QUESTIONS_SEC = 60
@@ -28,18 +19,13 @@ QUIZ_WINNER_COINS_BONUS = 50
 
 
 def get_used_question_ids(quiz_session: QuizSession) -> list[int]:
-    """Возвращает список ID использованных вопросов."""
     if not quiz_session.used_question_ids:
         return []
     return json.loads(quiz_session.used_question_ids)
 
 
-def add_used_question_id(quiz_session: QuizSession, question_id: int) -> None:
-    """Добавляет ID вопроса в список использованных."""
-    used_ids = get_used_question_ids(quiz_session)
-    if question_id not in used_ids:
-        used_ids.append(question_id)
-        quiz_session.used_question_ids = json.dumps(used_ids)
+def _save_used_question_ids(quiz_session: QuizSession, ids: list[int]) -> None:
+    quiz_session.used_question_ids = json.dumps(ids)
 
 
 def _normalize_question_text(text: str) -> str:
@@ -50,128 +36,69 @@ async def can_start_quiz(
     session: AsyncSession,
     chat_id: int,
     topic_id: int,
-    *,
-    enforce_time_window: bool = True,
 ) -> tuple[bool, str]:
-    """Проверяет возможность запуска викторины.
-
-    Возвращает (можно_ли, причина_отказа).
-    """
-    if enforce_time_window and not is_game_time_allowed(20, 22):
-        return False, "Викторина доступна с 20:00 до 22:00 по Москве."
-
-    active = await session.execute(
-        select(QuizSession).where(
-            QuizSession.chat_id == chat_id,
-            QuizSession.topic_id == topic_id,
-            QuizSession.is_active == True,
-        )
-    )
-    if active.scalar_one_or_none():
+    active = await get_active_session(session, chat_id, topic_id)
+    if active:
         return False, "Викторина уже запущена в этом топике."
 
-    date_key = now_tz().date().isoformat()
-    limit_row = await session.get(QuizDailyLimit, (chat_id, topic_id, date_key))
-    if limit_row and limit_row.launches >= QUIZ_MAX_LAUNCHES_PER_DAY:
-        return (
-            False,
-            f"Достигнут лимит викторин на сегодня ({QUIZ_MAX_LAUNCHES_PER_DAY}).",
-        )
-
     count_result = await session.execute(select(func.count(QuizQuestion.id)))
-    questions_count = count_result.scalar()
+    questions_count = int(count_result.scalar() or 0)
     if questions_count < QUIZ_QUESTIONS_COUNT:
         return (
             False,
-            f"Недостаточно вопросов в базе (нужно минимум {QUIZ_QUESTIONS_COUNT}, сейчас {questions_count}). Пополните базу вопросов.",
+            "Недостаточно вопросов в базе: "
+            f"нужно минимум {QUIZ_QUESTIONS_COUNT}, сейчас {questions_count}.",
         )
-
     return True, ""
 
 
-async def start_quiz_session(
-    session: AsyncSession,
-    chat_id: int,
-    topic_id: int,
-) -> QuizSession:
-    """Создаёт новую сессию викторины."""
-    date_key = now_tz().date().isoformat()
-    limit_row = await session.get(QuizDailyLimit, (chat_id, topic_id, date_key))
-    if limit_row:
-        limit_row.launches += 1
-    else:
-        session.add(
-            QuizDailyLimit(
-                chat_id=chat_id,
-                topic_id=topic_id,
-                date_key=date_key,
-                launches=1,
-            )
-        )
-
-    quiz_session = QuizSession(
-        chat_id=chat_id,
-        topic_id=topic_id,
-        is_active=True,
-        question_number=0,
-    )
+async def start_quiz_session(session: AsyncSession, chat_id: int, topic_id: int) -> QuizSession:
+    quiz_session = QuizSession(chat_id=chat_id, topic_id=topic_id, is_active=True, question_number=0)
     session.add(quiz_session)
     await session.flush()
     return quiz_session
 
 
-async def get_active_session(
-    session: AsyncSession,
-    chat_id: int,
-    topic_id: int,
-) -> QuizSession | None:
-    """Возвращает активную сессию викторины."""
+async def get_active_session(session: AsyncSession, chat_id: int, topic_id: int) -> QuizSession | None:
     result = await session.execute(
         select(QuizSession).where(
             QuizSession.chat_id == chat_id,
             QuizSession.topic_id == topic_id,
-            QuizSession.is_active == True,
+            QuizSession.is_active.is_(True),
         )
     )
     return result.scalar_one_or_none()
 
 
-async def get_random_question(
-    session: AsyncSession,
-    quiz_session: QuizSession | None = None,
-) -> QuizQuestion | None:
-    """Возвращает случайный вопрос из БД без повторов по глобальной истории."""
+async def get_random_question(session: AsyncSession, quiz_session: QuizSession | None = None) -> QuizQuestion | None:
     query = select(QuizQuestion)
     if quiz_session:
-        exclude_ids = get_used_question_ids(quiz_session)
-        if exclude_ids:
-            query = query.where(QuizQuestion.id.notin_(exclude_ids))
+        used_ids = get_used_question_ids(quiz_session)
+        if used_ids:
+            query = query.where(QuizQuestion.id.notin_(used_ids))
 
     result = await session.execute(query)
-    questions = result.scalars().all()
+    questions = list(result.scalars().all())
     if not questions:
         return None
 
     used_result = await session.execute(select(QuizUsedQuestion.question_normalized))
     used_questions = {row[0] for row in used_result.fetchall()}
-    available = [
-        q for q in questions if _normalize_question_text(q.question) not in used_questions
-    ]
+    available = [q for q in questions if _normalize_question_text(q.question) not in used_questions]
     if not available:
         return None
     return random.choice(available)
 
 
-async def set_current_question(
-    session: AsyncSession,
-    quiz_session: QuizSession,
-    question: QuizQuestion,
-) -> None:
-    """Устанавливает текущий вопрос и сохраняет его в глобальную историю использованных."""
+async def set_current_question(session: AsyncSession, quiz_session: QuizSession, question: QuizQuestion) -> None:
     quiz_session.current_question_id = question.id
     quiz_session.question_number += 1
     quiz_session.question_started_at = datetime.now(timezone.utc)
-    add_used_question_id(quiz_session, question.id)
+
+    used_ids = get_used_question_ids(quiz_session)
+    if question.id not in used_ids:
+        used_ids.append(question.id)
+        _save_used_question_ids(quiz_session, used_ids)
 
     normalized = _normalize_question_text(question.question)
     used_row = await session.get(QuizUsedQuestion, normalized)
@@ -179,11 +106,7 @@ async def set_current_question(
         session.add(QuizUsedQuestion(question_normalized=normalized))
 
 
-async def get_current_question(
-    session: AsyncSession,
-    quiz_session: QuizSession,
-) -> QuizQuestion | None:
-    """Возвращает текущий вопрос сессии."""
+async def get_current_question(session: AsyncSession, quiz_session: QuizSession) -> QuizQuestion | None:
     if quiz_session.current_question_id is None:
         return None
     return await session.get(QuizQuestion, quiz_session.current_question_id)
@@ -192,6 +115,11 @@ async def get_current_question(
 def _normalize_text(text: str) -> str:
     cleaned = re.sub(r"[^\w\s]+", " ", text.lower())
     return " ".join(cleaned.split())
+
+
+def _normalize_words(text: str) -> list[str]:
+    normalized = _normalize_text(text)
+    return normalized.split() if normalized else []
 
 
 def _levenshtein_distance(left: str, right: str) -> int:
@@ -212,49 +140,53 @@ def _levenshtein_distance(left: str, right: str) -> int:
     return prev[-1]
 
 
-def _is_typo_tolerant_match(correct_text: str, answer_text: str) -> bool:
-    return _levenshtein_distance(correct_text, answer_text) <= 2
+def _match_words(correct_words: list[str], answer_words: list[str], needed_matches: int, typo_budget: int) -> bool:
+    if not correct_words or not answer_words:
+        return False
 
+    pairs: list[tuple[int, int, int]] = []
+    for c_idx, c_word in enumerate(correct_words):
+        for a_idx, a_word in enumerate(answer_words):
+            distance = _levenshtein_distance(c_word, a_word)
+            if distance <= typo_budget:
+                pairs.append((distance, c_idx, a_idx))
 
-def _normalize_words(text: str) -> list[str]:
-    normalized = _normalize_text(text)
-    if not normalized:
-        return []
-    return normalized.split()
+    pairs.sort(key=lambda item: item[0])
+    used_c: set[int] = set()
+    used_a: set[int] = set()
+    total_typos = 0
+    matches = 0
+
+    for distance, c_idx, a_idx in pairs:
+        if c_idx in used_c or a_idx in used_a:
+            continue
+        if total_typos + distance > typo_budget:
+            continue
+        used_c.add(c_idx)
+        used_a.add(a_idx)
+        total_typos += distance
+        matches += 1
+        if matches >= needed_matches:
+            return True
+    return False
 
 
 def check_answer(question: QuizQuestion, answer: str) -> bool:
-    """Проверяет ответ на вопрос с допуском до двух грамматических ошибок."""
-    correct_text = _normalize_text(question.answer)
-    answer_text = _normalize_text(answer)
-    if not correct_text or not answer_text:
-        return False
-    correct_words = _normalize_words(correct_text)
-    answer_words = _normalize_words(answer_text)
-    if len(correct_words) != len(answer_words):
+    """Проверяет ответ по правилам викторины с допуском опечаток и частичных совпадений."""
+    correct_words = _normalize_words(question.answer)
+    answer_words = _normalize_words(answer)
+    if not correct_words or not answer_words:
         return False
 
     if len(correct_words) == 1:
-        return _is_typo_tolerant_match(correct_words[0], answer_words[0])
-
-    total_typos = 0
-    for correct_word, answer_word in zip(correct_words, answer_words, strict=False):
-        distance = _levenshtein_distance(correct_word, answer_word)
-        if distance > 1:
+        if len(answer_words) != 1:
             return False
-        total_typos += distance
-    return total_typos <= 2
+        return _match_words(correct_words, answer_words, needed_matches=1, typo_budget=1)
 
+    if len(correct_words) == 2:
+        return _match_words(correct_words, answer_words, needed_matches=1, typo_budget=2)
 
-def is_question_timed_out(quiz_session: QuizSession) -> bool:
-    """Проверяет, истекло ли время на ответ."""
-    if quiz_session.question_started_at is None:
-        return False
-    started = quiz_session.question_started_at
-    if started.tzinfo is None:
-        started = started.replace(tzinfo=timezone.utc)
-    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
-    return elapsed >= QUIZ_QUESTION_TIMEOUT_SEC
+    return _match_words(correct_words, answer_words, needed_matches=2, typo_budget=2)
 
 
 async def award_point(
@@ -263,38 +195,27 @@ async def award_point(
     chat_id: int,
     display_name: str | None = None,
 ) -> QuizUserStat:
-    """Начисляет балл пользователю."""
     stat = await session.get(QuizUserStat, (user_id, chat_id))
     if stat:
         stat.total_points += 1
         if display_name:
             stat.display_name = display_name
     else:
-        stat = QuizUserStat(
-            user_id=user_id,
-            chat_id=chat_id,
-            total_points=1,
-            display_name=display_name,
-        )
+        stat = QuizUserStat(user_id=user_id, chat_id=chat_id, total_points=1, display_name=display_name)
         session.add(stat)
     return stat
 
 
-async def end_quiz_session(
-    session: AsyncSession,
-    quiz_session: QuizSession,
-) -> None:
-    """Завершает сессию викторины."""
+async def end_quiz_session(session: AsyncSession, quiz_session: QuizSession) -> None:
     quiz_session.is_active = False
     quiz_session.current_question_id = None
 
+    used_ids = get_used_question_ids(quiz_session)
+    if used_ids:
+        await session.execute(delete(QuizQuestion).where(QuizQuestion.id.in_(used_ids)))
 
-async def get_quiz_leaderboard(
-    session: AsyncSession,
-    chat_id: int,
-    limit: int = 5,
-) -> list[QuizUserStat]:
-    """Возвращает топ игроков по очкам."""
+
+async def get_quiz_leaderboard(session: AsyncSession, chat_id: int, limit: int = 5) -> list[QuizUserStat]:
     result = await session.execute(
         select(QuizUserStat)
         .where(QuizUserStat.chat_id == chat_id)
@@ -305,7 +226,6 @@ async def get_quiz_leaderboard(
 
 
 async def is_quiz_finished(quiz_session: QuizSession) -> bool:
-    """Проверяет, завершена ли викторина (10 вопросов)."""
     return quiz_session.question_number >= QUIZ_QUESTIONS_COUNT
 
 
@@ -315,15 +235,45 @@ async def award_winner_bonus_coins(
     chat_id: int,
     display_name: str | None = None,
 ) -> UserStat:
-    """Начисляет победителю викторины бонусные монеты для игры в 21."""
     stats = await session.get(UserStat, {"user_id": user_id, "chat_id": chat_id})
     if stats is None:
-        stats = UserStat(
-            user_id=user_id, chat_id=chat_id, coins=100, display_name=display_name
-        )
+        stats = UserStat(user_id=user_id, chat_id=chat_id, coins=100, display_name=display_name)
         session.add(stats)
     if display_name:
         stats.display_name = display_name
     stats.coins += QUIZ_WINNER_COINS_BONUS
     await session.flush()
     return stats
+
+
+async def get_questions_left(session: AsyncSession) -> int:
+    result = await session.execute(select(func.count(QuizQuestion.id)))
+    return int(result.scalar() or 0)
+
+
+def build_answer_hint(answer: str) -> str:
+    words_count = len(_normalize_words(answer))
+    if words_count <= 1:
+        return "Ответ: 1 слово."
+    return "В ответе много слов."
+
+
+def build_session_stats(results: dict[int, tuple[str, int]]) -> str:
+    if not results:
+        return "В этой сессии никто не ответил правильно."
+    sorted_rows = sorted(results.values(), key=lambda item: item[1], reverse=True)
+    lines = ["Статистика сессии:"]
+    for name, points in sorted_rows:
+        lines.append(f"• @{name}: {points}")
+    return "\n".join(lines)
+
+
+def winners_from_results(results: dict[int, tuple[str, int]]) -> list[tuple[int, str, int]]:
+    if not results:
+        return []
+    top_points = max(points for _, points in results.values())
+    return [
+        (user_id, name, points)
+        for user_id, (name, points) in results.items()
+        if points == top_points
+    ]
