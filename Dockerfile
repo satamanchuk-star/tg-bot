@@ -34,6 +34,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
+COPY viktorinavopros_QA.xlsx ./viktorinavopros_QA.xlsx
 
 RUN mkdir -p /app/data
 
