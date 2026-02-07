@@ -32,6 +32,19 @@ def _normalize_question_text(text: str) -> str:
     return " ".join(text.lower().split())
 
 
+async def get_available_questions_count(session: AsyncSession) -> int:
+    used_result = await session.execute(select(QuizUsedQuestion.question_normalized))
+    used_questions = {row[0] for row in used_result.fetchall()}
+
+    all_questions_result = await session.execute(select(QuizQuestion.question))
+    available = [
+        question_text
+        for question_text in all_questions_result.scalars().all()
+        if _normalize_question_text(question_text) not in used_questions
+    ]
+    return len(available)
+
+
 async def can_start_quiz(
     session: AsyncSession,
     chat_id: int,
@@ -41,13 +54,12 @@ async def can_start_quiz(
     if active:
         return False, "Викторина уже запущена в этом топике."
 
-    count_result = await session.execute(select(func.count(QuizQuestion.id)))
-    questions_count = int(count_result.scalar() or 0)
-    if questions_count < QUIZ_QUESTIONS_COUNT:
+    available_count = await get_available_questions_count(session)
+    if available_count < QUIZ_QUESTIONS_COUNT:
         return (
             False,
-            "Недостаточно вопросов в базе: "
-            f"нужно минимум {QUIZ_QUESTIONS_COUNT}, сейчас {questions_count}.",
+            "Недостаточно новых вопросов в базе: "
+            f"нужно минимум {QUIZ_QUESTIONS_COUNT}, сейчас {available_count}.",
         )
     return True, ""
 
@@ -247,8 +259,7 @@ async def award_winner_bonus_coins(
 
 
 async def get_questions_left(session: AsyncSession) -> int:
-    result = await session.execute(select(func.count(QuizQuestion.id)))
-    return int(result.scalar() or 0)
+    return await get_available_questions_count(session)
 
 
 def build_answer_hint(answer: str) -> str:
