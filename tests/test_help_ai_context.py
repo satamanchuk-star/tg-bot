@@ -107,17 +107,38 @@ def test_ai_reply_rate_limit_blocks_fast_repeat() -> None:
     assert _is_ai_reply_rate_limited(1, 2) is False
 
 
-def test_ai_command_returns_hint_outside_forum_chat() -> None:
+def test_ai_command_returns_hint_outside_assistant_chats() -> None:
     message = _DummyIncomingMessage(
-        chat_id=settings.forum_chat_id + 1,
+        chat_id=settings.admin_log_chat_id + 1,
         user_id=100,
         text="/ai test",
     )
 
     asyncio.run(ai_command(message))
 
-    assert message.replies == ["Команда /ai работает только в форуме ЖК."]
+    assert message.replies == ["Команда /ai работает только в форуме ЖК и чате логов."]
 
+
+
+
+def test_ai_command_works_in_admin_log_chat(monkeypatch) -> None:
+    class _DummyAiClient:
+        async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int) -> str:
+            assert prompt == "test"
+            assert context == []
+            assert chat_id == settings.admin_log_chat_id
+            return "ok"
+
+    monkeypatch.setattr("app.handlers.help.get_ai_client", lambda: _DummyAiClient())
+    message = _DummyIncomingMessage(
+        chat_id=settings.admin_log_chat_id,
+        user_id=100,
+        text="/ai test",
+    )
+
+    asyncio.run(ai_command(message))
+
+    assert message.replies == ["ok"]
 
 def test_mention_help_returns_rate_limit_message() -> None:
     message = _DummyIncomingMessage(
