@@ -15,6 +15,7 @@ ADMIN_HELP = (
     "/ai_off — локальный режим (заглушка ИИ)\n"
     "/ai_status — статус заглушки ИИ\n"
     "/ai_ping — проверка stub-провайдера\n"
+    "/ai_probe — проверка ИИ в 3 слоя (конфиг/API/usage)\n"
     "/ai_reset — очистить будущие AI-счетчики\n"
     "/reload_profanity\n"
     "/load_quiz — загрузить вопросы викторины из viktorinavopros_QA.xlsx\n"

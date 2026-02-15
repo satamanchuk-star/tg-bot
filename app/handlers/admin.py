@@ -30,6 +30,7 @@ from app.utils.admin_help import ADMIN_HELP
 from app.handlers.help import clear_routing_state
 from app.services.ai_module import get_ai_client, is_ai_runtime_enabled, set_ai_runtime_enabled
 from app.services.ai_module import get_ai_runtime_status, get_ai_usage_for_today
+from app.services.ai_module import get_ai_diagnostics
 from app.services.ai_usage import next_reset_delta, reset_ai_usage
 from app.utils.profanity import load_profanity, load_profanity_exceptions
 
@@ -264,6 +265,21 @@ async def ai_ping(message: Message, bot: Bot) -> None:
     result = await get_ai_client().probe()
     status = "✅" if result.ok else "⚠️"
     await message.reply(f"{status} {result.details}\nLatency: {result.latency_ms} ms")
+
+
+@router.message(Command("ai_probe"))
+async def ai_probe(message: Message, bot: Bot) -> None:
+    if not await _ensure_admin(message, bot):
+        return
+    report = await get_ai_diagnostics(settings.forum_chat_id)
+    status = "✅" if report.probe_ok else "⚠️"
+    await message.reply(
+        "AI probe (3 слоя):\n"
+        f"1) Конфиг: ai_enabled={report.ai_enabled}, ai_key={'set' if report.has_api_key else 'empty'}, "
+        f"provider={report.provider_mode}, api_url={report.api_url}\n"
+        f"2) Реальный вызов: {status} {report.probe_details} (latency={report.probe_latency_ms} ms)\n"
+        f"3) Учёт usage сегодня: requests={report.requests_used_today}, tokens={report.tokens_used_today}"
+    )
 
 
 @router.message(Command("ai_reset"))

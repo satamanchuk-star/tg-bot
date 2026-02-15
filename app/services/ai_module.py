@@ -147,6 +147,19 @@ class AiRuntimeStatus:
     last_error_at: datetime | None
 
 
+@dataclass(slots=True)
+class AiDiagnosticsReport:
+    provider_mode: Literal["remote", "stub"]
+    ai_enabled: bool
+    has_api_key: bool
+    api_url: str
+    requests_used_today: int
+    tokens_used_today: int
+    probe_ok: bool
+    probe_details: str
+    probe_latency_ms: int
+
+
 class AiProvider(Protocol):
     async def probe(self) -> AiProbeResult: ...
 
@@ -230,6 +243,7 @@ class OpenRouterProvider:
             "Authorization": f"Bearer {settings.ai_key}",
             "Content-Type": "application/json",
         }
+        logger.info("AI request -> model=%s chat_id=%s", self._model, chat_id)
 
         for attempt in range(self._retries + 1):
             try:
@@ -241,6 +255,7 @@ class OpenRouterProvider:
                 content = str(data["choices"][0]["message"]["content"])
                 tokens = int(data.get("usage", {}).get("total_tokens") or 0)
                 await _add_remote_usage(chat_id, tokens)
+                logger.info("AI response <- tokens=%s chat_id=%s", tokens, chat_id)
                 return content, tokens
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 if attempt >= self._retries:
@@ -590,6 +605,23 @@ async def get_ai_usage_for_today(chat_id: int) -> tuple[int, int]:
         usage = await get_usage_stats(session, date_key=date_key, chat_id=chat_id)
         return usage.requests_used, usage.tokens_used
     return 0, 0
+
+
+async def get_ai_diagnostics(chat_id: int) -> AiDiagnosticsReport:
+    provider_mode: Literal["remote", "stub"] = "remote" if settings.ai_enabled and bool(settings.ai_key) else "stub"
+    req_used, tok_used = await get_ai_usage_for_today(chat_id)
+    probe_result = await get_ai_client().probe()
+    return AiDiagnosticsReport(
+        provider_mode=provider_mode,
+        ai_enabled=settings.ai_enabled,
+        has_api_key=bool(settings.ai_key),
+        api_url=settings.ai_api_url or "https://openrouter.ai/api/v1",
+        requests_used_today=req_used,
+        tokens_used_today=tok_used,
+        probe_ok=probe_result.ok,
+        probe_details=probe_result.details,
+        probe_latency_ms=probe_result.latency_ms,
+    )
 
 
 def set_ai_admin_notifier(notifier: Callable[[str], Awaitable[None]] | None) -> None:

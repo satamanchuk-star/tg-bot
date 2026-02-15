@@ -7,6 +7,7 @@ from app.services.ai_module import (
     OpenRouterProvider,
     build_local_assistant_reply,
     detect_profanity,
+    get_ai_diagnostics,
     is_assistant_topic_allowed,
     local_quiz_answer_decision,
     mask_personal_data,
@@ -93,3 +94,13 @@ def test_openrouter_summary_fallback_on_runtime_error(monkeypatch) -> None:
     result = asyncio.run(provider.generate_daily_summary("ctx", chat_id=1))
     assert result is None
     asyncio.run(provider.aclose())
+
+
+def test_get_ai_diagnostics_for_stub(monkeypatch) -> None:
+    async def _fake_usage(chat_id: int) -> tuple[int, int]:
+        return (0, 0)
+
+    monkeypatch.setattr("app.services.ai_module.get_ai_usage_for_today", _fake_usage)
+    report = asyncio.run(get_ai_diagnostics(chat_id=1))
+    assert report.provider_mode == "stub"
+    assert report.probe_ok is False
