@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     ai_retries: int = 2
     ai_daily_request_limit: int = 2000
     ai_daily_token_limit: int = 400000
+    ai_feature_moderation: bool = True
+    ai_feature_assistant: bool = True
+    ai_feature_quiz: bool = True
+    ai_feature_daily_summary: bool = True
     ai_summary_hour: int = 21
     ai_summary_minute: int = 0
     ai_summary_topic_id: int | None = None

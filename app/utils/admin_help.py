@@ -15,6 +15,7 @@ ADMIN_HELP = (
     "/ai_off — выключить ИИ-функции бота\n"
     "/ai_status — статус ИИ-функций\n"
     "/ai_ping — проверить доступность AI endpoint\n"
+    "/ai_reset — сбросить дневные AI-счетчики\n"
     "/reload_profanity\n"
     "/load_quiz — загрузить вопросы викторины из viktorinavopros_QA.xlsx\n"
     "/restart_jobs — сброс зависших задач (формы, квизы, игры)\n"

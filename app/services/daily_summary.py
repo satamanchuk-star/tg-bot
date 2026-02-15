@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -23,6 +23,8 @@ class DailySummary:
     topics: list[str]
     mood: str
     positive: str
+    top_words: list[str]
+    top_tagged_users: list[int]
 
 
 async def build_daily_summary(session: AsyncSession, chat_id: int) -> DailySummary:
@@ -70,6 +72,28 @@ async def build_daily_summary(session: AsyncSession, chat_id: int) -> DailySumma
     ).all()
     topics = [f"тема {row[0]} ({row[1]} сообщений)" for row in topic_rows if row[0] is not None]
 
+    text_rows = (
+        await session.execute(
+            select(MessageLog.text, MessageLog.user_id)
+            .where(and_(MessageLog.chat_id == chat_id, MessageLog.created_at >= since))
+            .limit(2000)
+        )
+    ).all()
+    word_counter: Counter[str] = Counter()
+    tagged_counter: Counter[int] = Counter()
+    for text, user_id in text_rows:
+        if isinstance(user_id, int):
+            tagged_counter[user_id] += 1
+        if not text:
+            continue
+        for word in text.lower().split():
+            cleaned = word.strip(".,!?()[]{}\"'`“”«»")
+            if len(cleaned) < 4:
+                continue
+            if cleaned.startswith("http"):
+                continue
+            word_counter[cleaned] += 1
+
     conflict_buckets: dict[int, set[int]] = defaultdict(set)
     for item in events:
         if item.severity >= 2:
@@ -90,6 +114,27 @@ async def build_daily_summary(session: AsyncSession, chat_id: int) -> DailySumma
         topics=topics,
         mood=mood,
         positive=positive,
+        top_words=[word for word, _ in word_counter.most_common(8)],
+        top_tagged_users=[uid for uid, _ in tagged_counter.most_common(5)],
+    )
+
+
+def build_ai_summary_context(summary: DailySummary) -> str:
+    topics = ", ".join(summary.topics) if summary.topics else "нет выделенных тем"
+    words = ", ".join(summary.top_words) if summary.top_words else "недостаточно данных"
+    tagged = ", ".join(str(uid) for uid in summary.top_tagged_users) if summary.top_tagged_users else "н/д"
+    return (
+        "Контекст за последние 24 часа:\n"
+        f"- Сообщений: {summary.messages}\n"
+        f"- Активных пользователей: {summary.active_users}\n"
+        f"- Предупреждений: {summary.warnings}\n"
+        f"- Удалений: {summary.deletions}\n"
+        f"- Страйков: {summary.strikes}\n"
+        f"- Конфликтных часов: {summary.conflicts}\n"
+        f"- Основные темы: {topics}\n"
+        f"- Топ слов: {words}\n"
+        f"- Самые активные пользователи (id): {tagged}\n"
+        "Сформируй короткое резюме для админов."
     )
 
 
@@ -97,8 +142,11 @@ def render_daily_summary(summary: DailySummary) -> str:
     topics = ", ".join(summary.topics) if summary.topics else "темы не выделились"
     heat = "Было пару горячих моментов, но всё спокойно." if summary.conflicts else "День прошёл ровно и спокойно."
     return (
-        "Сегодня в чате было оживлённо 🙂\n"
-        f"{summary.messages} сообщений и {summary.active_users} активных соседей.\n"
-        f"Чаще всего обсуждали: {topics}.\n"
-        f"{heat}"
+        "Статистика за день:\n"
+        f"• Сообщений: {summary.messages}\n"
+        f"• Активных соседей: {summary.active_users}\n"
+        f"• Предупреждений: {summary.warnings}, удалений: {summary.deletions}, страйков: {summary.strikes}\n"
+        f"• Часто обсуждали: {topics}\n"
+        f"• Общий фон: {summary.mood}\n"
+        f"• Комментарий: {heat}"
     )

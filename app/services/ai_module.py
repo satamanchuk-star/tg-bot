@@ -1,22 +1,33 @@
-"""Почему: инкапсулируем ИИ-политику, чтобы модерация и ассистент были предсказуемы и тестируемы."""
+"""Почему: инкапсулируем ИИ-политику, лимиты и fallback в одном месте."""
 
 from __future__ import annotations
 
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
-from typing import Literal
+from datetime import datetime, timedelta
+from typing import Awaitable, Callable, Literal
 
 import httpx
 
 from app.config import settings
+from app.db import get_session
+from app.services.ai_usage import add_usage, can_consume_ai, get_usage_stats
+from app.utils.time import now_tz
 
 logger = logging.getLogger(__name__)
 
-MODERATION_SYSTEM_PROMPT = """Ты — модератор чата жилого комплекса.\n\nТвоя задача — анализировать сообщения и определять:\n- наличие мата (включая замаскированный),\n- грубость,\n- агрессию,\n- угрозы.\n\nТы возвращаешь только JSON без пояснений.\n\nУчитывай замены букв символами, пробелы между буквами, латиницу вместо кириллицы, цифры, транслитерацию и частично скрытые слова.\nМат считается нарушением даже если он замаскирован.\n\nУровни severity:\n0 — нет нарушения\n1 — мягкая грубость\n2 — явное нарушение\n3 — серьёзное нарушение\n\nФормат ответа:\n{\n  "label": "PROFANITY|RUDE|HATE|THREAT|NONE",\n  "severity": 0,\n  "confidence": 0.0,\n  "recommended_action": "ALLOW|WARN|DELETE|STRIKE|ADMIN_ALERT",\n  "user_message": "короткая живая фраза",\n  "admin_note": "краткое пояснение для админов"\n}\n\nПравила:\n- Никакого текста вне JSON.\n- user_message до 200 символов.\n- Спокойный живой тон без канцелярита.\n- Не упоминать алгоритмы, ИИ или систему.\n"""
+MODERATION_SYSTEM_PROMPT = """Ты — модератор чата жилого комплекса.\n\nТвоя задача — анализировать сообщения и определять:\n- наличие мата (включая замаскированный),\n- грубость,\n- агрессию,\n- угрозы.\n\nТы возвращаешь только JSON без пояснений.\n\nУчитывай замены букв символами, пробелы между буквами, латиницу вместо кириллицы, цифры, транслитерацию и частично скрытые слова.\nМат считается нарушением даже если он замаскирован.\n\nУровни severity:\n0 — нет нарушения\n1 — мягкая грубость\n2 — явное нарушение\n3 — серьёзное нарушение\n\nФормат ответа:\n{\n  \"label\": \"PROFANITY|RUDE|HATE|THREAT|NONE\",\n  \"severity\": 0,\n  \"confidence\": 0.0,\n  \"recommended_action\": \"ALLOW|WARN|DELETE|STRIKE|ADMIN_ALERT\",\n  \"user_message\": \"короткая живая фраза\",\n  \"admin_note\": \"краткое пояснение для админов\"\n}\n\nПравила:\n- Никакого текста вне JSON.\n- user_message до 200 символов.\n- Спокойный живой тон без канцелярита.\n- Не упоминать алгоритмы, ИИ или систему.\n"""
 
 ASSISTANT_SYSTEM_PROMPT = """Ты — участник чата жилого комплекса.\nОтвечай как живой человек: коротко, дружелюбно, спокойно, по делу.\nДопускается лёгкий нейтральный юмор без сарказма.\n\nЗапрещено: \"как ИИ\", упоминания алгоритмов и автоматической модерации, канцелярит, моральный тон.\nНе давай медицинские, юридические и финансовые советы, не обсуждай политику и религию.\nЕсли тема вне зоны — мягко откажи: \"С этим лучше к профильному специалисту 🙌 Я тут больше про жизнь дома.\"\n\nОграничения: максимум 800 символов, без таблиц и длинных абзацев.\nЕсли есть конфликт, мягко деэскалируй: \"Можно спорить, но спокойно.\"\n"""
+
+DAILY_SUMMARY_SYSTEM_PROMPT = """Ты — помощник модераторов. Составь короткую сводку дня по входному контексту.
+Формат: 4-6 маркеров, только факты и полезные выводы. Тон нейтральный.
+Не придумывай факты и не упоминай ИИ. Максимум 900 символов."""
+
+_USER_FALLBACK = "AI временно недоступен, включен упрощенный режим."
 
 _ALLOWED_ASSISTANT_TOPICS = (
     "жк",
@@ -101,6 +112,27 @@ class QuizAnswerDecision:
 class AiProbeResult:
     ok: bool
     details: str
+    latency_ms: int
+
+
+@dataclass(slots=True)
+class AiRuntimeStatus:
+    last_error: str | None
+    last_error_at: datetime | None
+
+
+@dataclass(slots=True)
+class AiCallOutcome:
+    ok: bool
+    data: dict[str, object] | None
+    reason: str
+
+
+_ADMIN_ALERT_COOLDOWN = timedelta(minutes=10)
+_ADMIN_ALERT_NOTIFIER: Callable[[str], Awaitable[None]] | None = None
+_LAST_ADMIN_ALERT_AT: dict[str, datetime] = {}
+_LAST_ERROR: str | None = None
+_LAST_ERROR_AT: datetime | None = None
 
 
 class AiModuleClient:
@@ -111,12 +143,120 @@ class AiModuleClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    async def _maybe_alert_admin(self, reason_key: str, details: str) -> None:
+        now = now_tz()
+        previous = _LAST_ADMIN_ALERT_AT.get(reason_key)
+        if previous and now - previous < _ADMIN_ALERT_COOLDOWN:
+            return
+        _LAST_ADMIN_ALERT_AT[reason_key] = now
+        if _ADMIN_ALERT_NOTIFIER is None:
+            return
+        await _ADMIN_ALERT_NOTIFIER(details)
+
+    async def _check_limits(self, chat_id: int) -> str | None:
+        date_key = now_tz().date().isoformat()
+        async for session in get_session():
+            allowed, reason = await can_consume_ai(
+                session,
+                date_key=date_key,
+                chat_id=chat_id,
+                request_limit=settings.ai_daily_request_limit,
+                token_limit=settings.ai_daily_token_limit,
+            )
+            if allowed:
+                return None
+            await self._maybe_alert_admin(
+                f"limit:{chat_id}:{reason}",
+                f"AI отключен по лимиту для chat_id={chat_id}: {reason}.",
+            )
+            return reason
+        return "лимит недоступен"
+
+    async def _save_usage(self, chat_id: int, data: dict[str, object]) -> None:
+        usage = data.get("usage")
+        tokens_used = 0
+        if isinstance(usage, dict):
+            total_tokens = usage.get("total_tokens")
+            if isinstance(total_tokens, (int, float)):
+                tokens_used = int(total_tokens)
+        date_key = now_tz().date().isoformat()
+        async for session in get_session():
+            await add_usage(
+                session,
+                date_key=date_key,
+                chat_id=chat_id,
+                tokens_used=tokens_used,
+            )
+
+    async def _post_with_retries(
+        self,
+        *,
+        payload: dict[str, object],
+        headers: dict[str, str],
+    ) -> AiCallOutcome:
+        attempts = settings.ai_retries + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                response = await self._client.post(settings.ai_api_url, json=payload, headers=headers)
+            except httpx.TimeoutException:
+                if attempt >= attempts:
+                    return AiCallOutcome(False, None, "timeout")
+                continue
+            except httpx.HTTPError as exc:
+                if attempt >= attempts:
+                    return AiCallOutcome(False, None, f"network_error:{exc.__class__.__name__}")
+                continue
+
+            if response.status_code in {401, 403}:
+                return AiCallOutcome(False, None, f"http_{response.status_code}")
+            if response.status_code >= 500:
+                if attempt >= attempts:
+                    return AiCallOutcome(False, None, f"http_{response.status_code}")
+                continue
+            if response.status_code >= 400:
+                return AiCallOutcome(False, None, f"http_{response.status_code}")
+
+            try:
+                data = response.json()
+            except json.JSONDecodeError:
+                return AiCallOutcome(False, None, "invalid_json")
+            if not isinstance(data, dict):
+                return AiCallOutcome(False, None, "invalid_schema")
+            return AiCallOutcome(True, data, "ok")
+        return AiCallOutcome(False, None, "unknown_error")
+
+    async def _run_ai(
+        self,
+        *,
+        payload: dict[str, object],
+        chat_id: int,
+        operation: str,
+    ) -> AiCallOutcome:
+        if not is_ai_runtime_enabled() or not settings.ai_api_url:
+            return AiCallOutcome(False, None, "disabled")
+
+        limit_reason = await self._check_limits(chat_id)
+        if limit_reason:
+            return AiCallOutcome(False, None, f"limit:{limit_reason}")
+
+        headers = {"Authorization": f"Bearer {settings.ai_key}"} if settings.ai_key else {}
+        result = await self._post_with_retries(payload=payload, headers=headers)
+        if result.ok and result.data is not None:
+            await self._save_usage(chat_id, result.data)
+            return result
+
+        _set_last_error(f"{operation}: {result.reason}")
+        await self._maybe_alert_admin(
+            f"error:{operation}:{result.reason}",
+            f"AI ошибка в {operation}: {result.reason}",
+        )
+        return result
+
     async def probe(self) -> AiProbeResult:
-        """Выполняет минимальный запрос к AI endpoint и возвращает человекочитаемый статус."""
         if not settings.ai_api_url:
-            return AiProbeResult(False, "Не задан AI_API_URL.")
+            return AiProbeResult(False, "Не задан AI_API_URL.", 0)
         if not settings.ai_key:
-            return AiProbeResult(False, "Не задан AI_KEY.")
+            return AiProbeResult(False, "Не задан AI_KEY.", 0)
 
         payload = {
             "mode": "moderation",
@@ -125,36 +265,24 @@ class AiModuleClient:
             "policy": "severity_0_3",
             "system_prompt": MODERATION_SYSTEM_PROMPT,
         }
-        headers = {"Authorization": f"Bearer {settings.ai_key}"}
-
+        start = time.monotonic()
+        result = await self._post_with_retries(
+            payload=payload,
+            headers={"Authorization": f"Bearer {settings.ai_key}"},
+        )
+        latency = int((time.monotonic() - start) * 1000)
+        if not result.ok:
+            return AiProbeResult(False, f"Проверка не пройдена: {result.reason}", latency)
         try:
-            response = await self._client.post(settings.ai_api_url, json=payload, headers=headers)
-        except httpx.TimeoutException:
-            return AiProbeResult(False, "Timeout: нет ответа от AI endpoint.")
-        except httpx.HTTPError as exc:
-            return AiProbeResult(False, f"Сетевая ошибка: {exc.__class__.__name__}.")
+            parse_moderation_response(result.data or {})
+        except (ValueError, KeyError, TypeError):
+            return AiProbeResult(False, "Ответ получен, но схема moderation невалидна.", latency)
+        return AiProbeResult(True, "AI endpoint ответил корректно.", latency)
 
-        if response.status_code == 401:
-            return AiProbeResult(False, "401 Unauthorized: ключ невалиден или не передан.")
-        if response.status_code == 403:
-            return AiProbeResult(False, "403 Forbidden: нет доступа к модели или endpoint.")
-        if response.status_code == 404:
-            return AiProbeResult(False, "404 Not Found: проверь AI_API_URL.")
-        if response.status_code >= 400:
-            return AiProbeResult(False, f"HTTP {response.status_code}: {response.text[:120]}")
-
-        try:
-            data = response.json()
-            parse_moderation_response(data)
-        except (json.JSONDecodeError, ValueError, KeyError):
-            return AiProbeResult(False, "Ответ получен, но формат JSON не распознан для режима moderation.")
-        return AiProbeResult(True, "AI endpoint ответил корректно.")
-
-    async def moderate(self, text: str) -> ModerationDecision:
+    async def moderate(self, text: str, *, chat_id: int) -> ModerationDecision:
         local_decision = local_moderation(text)
-        if not is_ai_runtime_enabled() or not settings.ai_api_url:
+        if not settings.ai_feature_moderation:
             return local_decision
-
         payload = {
             "mode": "moderation",
             "text": text,
@@ -162,35 +290,27 @@ class AiModuleClient:
             "policy": "severity_0_3",
             "system_prompt": MODERATION_SYSTEM_PROMPT,
         }
-        headers = {"Authorization": f"Bearer {settings.ai_key}"} if settings.ai_key else {}
-
-        for attempt in range(settings.ai_retries + 1):
+        result = await self._run_ai(payload=payload, chat_id=chat_id, operation="moderation")
+        if result.ok and result.data:
             try:
-                response = await self._client.post(settings.ai_api_url, json=payload, headers=headers)
-                if response.status_code >= 500:
-                    raise httpx.HTTPStatusError("5xx", request=response.request, response=response)
-                response.raise_for_status()
-                data = response.json()
-                return parse_moderation_response(data)
-            except (httpx.TimeoutException, httpx.HTTPStatusError, json.JSONDecodeError, KeyError, ValueError):
-                if attempt >= settings.ai_retries:
-                    logger.warning("AI moderation недоступна, используем локальный фильтр.")
-                    return ModerationDecision(
-                        violation_type=local_decision.violation_type,
-                        severity=local_decision.severity,
-                        confidence=local_decision.confidence,
-                        action=local_decision.action,
-                        used_fallback=True,
-                    )
-        return local_decision
+                return parse_moderation_response(result.data)
+            except (ValueError, KeyError, TypeError):
+                _set_last_error("moderation: invalid_schema")
 
-    async def assistant_reply(self, prompt: str, context: list[str]) -> str:
+        return ModerationDecision(
+            violation_type=local_decision.violation_type,
+            severity=local_decision.severity,
+            confidence=local_decision.confidence,
+            action=local_decision.action,
+            used_fallback=True,
+        )
+
+    async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int) -> str:
         safe_prompt = mask_personal_data(prompt)[:1000]
+        if not settings.ai_feature_assistant:
+            return build_local_assistant_reply(safe_prompt)
         if not is_assistant_topic_allowed(safe_prompt):
             return "С этим лучше к профильному специалисту 🙌 Я тут больше про жизнь дома."
-
-        if not is_ai_runtime_enabled() or not settings.ai_api_url:
-            return build_local_assistant_reply(safe_prompt)
 
         payload = {
             "mode": "assistant",
@@ -201,41 +321,22 @@ class AiModuleClient:
             "prompt": safe_prompt,
             "context": [mask_personal_data(item) for item in context[-20:]],
         }
-        headers = {"Authorization": f"Bearer {settings.ai_key}"} if settings.ai_key else {}
+        result = await self._run_ai(payload=payload, chat_id=chat_id, operation="assistant")
+        if result.ok and result.data:
+            text = str(result.data.get("reply", "")).strip()
+            if text:
+                return text[:800]
+        return f"{_USER_FALLBACK} {build_local_assistant_reply(safe_prompt)}"
 
-        try:
-            response = await self._client.post(settings.ai_api_url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-            text = str(data.get("reply", "")).strip()
-            if not text:
-                return "Сейчас не сориентирую сразу. Дайте чуть больше деталей, и разберём."
-            return text[:800]
-        except (httpx.HTTPError, json.JSONDecodeError):
-            logger.warning("AI assistant недоступен, используем локальный ответ.")
-            return build_local_assistant_reply(safe_prompt)
-
-    async def evaluate_quiz_answer(self, question: str, correct_answer: str, user_answer: str) -> QuizAnswerDecision:
-        if not is_ai_runtime_enabled() or not settings.ai_api_url:
-            return local_quiz_answer_decision(correct_answer, user_answer)
-
-        payload = {
-            "mode": "quiz_judge",
-            "language": "ru",
-            "question": question[:1200],
-            "correct_answer": correct_answer[:400],
-            "user_answer": user_answer[:400],
-            "policy": "contextual_equivalence_with_close_answers",
-        }
-        headers = {"Authorization": f"Bearer {settings.ai_key}"} if settings.ai_key else {}
-
-        try:
-            response = await self._client.post(settings.ai_api_url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-            return parse_quiz_answer_response(data)
-        except (httpx.HTTPError, json.JSONDecodeError, ValueError, KeyError):
-            logger.warning("AI оценка викторины недоступна, используем локальную эвристику.")
+    async def evaluate_quiz_answer(
+        self,
+        question: str,
+        correct_answer: str,
+        user_answer: str,
+        *,
+        chat_id: int,
+    ) -> QuizAnswerDecision:
+        if not settings.ai_feature_quiz:
             decision = local_quiz_answer_decision(correct_answer, user_answer)
             return QuizAnswerDecision(
                 is_correct=decision.is_correct,
@@ -244,6 +345,47 @@ class AiModuleClient:
                 reason=decision.reason,
                 used_fallback=True,
             )
+        payload = {
+            "mode": "quiz_judge",
+            "language": "ru",
+            "question": question[:1200],
+            "correct_answer": correct_answer[:400],
+            "user_answer": user_answer[:400],
+            "policy": "contextual_equivalence_with_close_answers",
+        }
+        result = await self._run_ai(payload=payload, chat_id=chat_id, operation="quiz")
+        if result.ok and result.data:
+            try:
+                return parse_quiz_answer_response(result.data)
+            except (ValueError, KeyError, TypeError):
+                _set_last_error("quiz: invalid_schema")
+
+        decision = local_quiz_answer_decision(correct_answer, user_answer)
+        return QuizAnswerDecision(
+            is_correct=decision.is_correct,
+            is_close=decision.is_close,
+            confidence=decision.confidence,
+            reason=decision.reason,
+            used_fallback=True,
+        )
+
+    async def generate_daily_summary(self, context: str, *, chat_id: int) -> str | None:
+        if not settings.ai_feature_daily_summary:
+            return None
+        payload = {
+            "mode": "assistant",
+            "language": "ru",
+            "style": "brief_friendly_human",
+            "max_chars": 900,
+            "system_prompt": DAILY_SUMMARY_SYSTEM_PROMPT,
+            "prompt": context[:3500],
+            "context": [],
+        }
+        result = await self._run_ai(payload=payload, chat_id=chat_id, operation="daily_summary")
+        if not result.ok or not result.data:
+            return None
+        text = str(result.data.get("reply", "")).strip()
+        return text[:900] if text else None
 
 
 def parse_moderation_response(data: dict[str, object]) -> ModerationDecision:
@@ -378,8 +520,33 @@ def local_quiz_answer_decision(correct_answer: str, user_answer: str) -> QuizAns
         return QuizAnswerDecision(False, True, 0.6, "частично близкий ответ", False)
     return QuizAnswerDecision(False, False, 0.2, "не совпадает", False)
 
+
 _AI_CLIENT: AiModuleClient | None = None
 _AI_RUNTIME_ENABLED: bool | None = None
+
+
+def _set_last_error(error: str) -> None:
+    global _LAST_ERROR, _LAST_ERROR_AT
+    _LAST_ERROR = error
+    _LAST_ERROR_AT = datetime.utcnow()
+    logger.warning("AI degraded: %s", error)
+
+
+def get_ai_runtime_status() -> AiRuntimeStatus:
+    return AiRuntimeStatus(last_error=_LAST_ERROR, last_error_at=_LAST_ERROR_AT)
+
+
+async def get_ai_usage_for_today(chat_id: int) -> tuple[int, int]:
+    date_key = now_tz().date().isoformat()
+    async for session in get_session():
+        stats = await get_usage_stats(session, date_key=date_key, chat_id=chat_id)
+        return stats.requests_used, stats.tokens_used
+    return 0, 0
+
+
+def set_ai_admin_notifier(notifier: Callable[[str], Awaitable[None]] | None) -> None:
+    global _ADMIN_ALERT_NOTIFIER
+    _ADMIN_ALERT_NOTIFIER = notifier
 
 
 def is_ai_runtime_enabled() -> bool:

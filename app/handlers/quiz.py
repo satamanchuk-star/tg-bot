@@ -371,7 +371,12 @@ async def check_quiz_answer(message: Message, bot: Bot) -> None:
                 return
 
             ai_client = get_ai_client()
-            decision = await ai_client.evaluate_quiz_answer(question.question, question.answer, message_text)
+            decision = await ai_client.evaluate_quiz_answer(
+                question.question,
+                question.answer,
+                message_text,
+                chat_id=chat_id,
+            )
             if not (decision.is_correct or decision.is_close):
                 return
 

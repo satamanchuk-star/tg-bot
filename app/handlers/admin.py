@@ -29,6 +29,8 @@ from app.utils.admin import extract_target_user, is_admin
 from app.utils.admin_help import ADMIN_HELP
 from app.handlers.help import clear_routing_state
 from app.services.ai_module import get_ai_client, is_ai_runtime_enabled, set_ai_runtime_enabled
+from app.services.ai_module import get_ai_runtime_status, get_ai_usage_for_today
+from app.services.ai_usage import next_reset_delta, reset_ai_usage
 from app.utils.profanity import load_profanity, load_profanity_exceptions
 
 router = Router()
@@ -238,7 +240,24 @@ async def ai_status(message: Message, bot: Bot) -> None:
     if not await _ensure_admin(message, bot):
         return
     status = "включены" if is_ai_runtime_enabled() else "выключены"
-    await message.reply(f"ИИ-функции сейчас {status}.")
+    req_used, tok_used = await get_ai_usage_for_today(settings.forum_chat_id)
+    req_left = max(0, settings.ai_daily_request_limit - req_used)
+    tok_left = max(0, settings.ai_daily_token_limit - tok_used)
+    reset_in = next_reset_delta()
+    runtime = get_ai_runtime_status()
+    last_error = runtime.last_error or "нет"
+    if runtime.last_error_at:
+        last_error = f"{last_error} ({runtime.last_error_at.isoformat(timespec='seconds')} UTC)"
+
+    await message.reply(
+        "Статус AI:\n"
+        f"• Runtime: {status}\n"
+        f"• Endpoint: {settings.ai_api_url or 'не задан'}\n"
+        f"• Лимит запросов/сутки: {settings.ai_daily_request_limit} (использовано {req_used}, осталось {req_left})\n"
+        f"• Лимит токенов/сутки: {settings.ai_daily_token_limit} (использовано {tok_used}, осталось {tok_left})\n"
+        f"• До сброса лимитов: {reset_in}\n"
+        f"• Последняя ошибка: {last_error}"
+    )
 
 
 @router.message(Command("ai_ping"))
@@ -247,7 +266,16 @@ async def ai_ping(message: Message, bot: Bot) -> None:
         return
     result = await get_ai_client().probe()
     status = "✅ AI работает" if result.ok else "❌ AI недоступен"
-    await message.reply(f"{status}\n{result.details}")
+    await message.reply(f"{status}\nLatency: {result.latency_ms} ms\n{result.details}")
+
+
+@router.message(Command("ai_reset"))
+async def ai_reset(message: Message, bot: Bot) -> None:
+    if not await _ensure_admin(message, bot):
+        return
+    async for session in get_session():
+        deleted = await reset_ai_usage(session)
+    await message.reply(f"AI usage сброшен. Удалено записей: {deleted}.")
 
 @router.message(Command("reload_profanity"))
 async def reload_profanity(message: Message, bot: Bot) -> None:

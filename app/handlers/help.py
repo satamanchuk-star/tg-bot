@@ -661,7 +661,7 @@ async def ai_command(message: Message) -> None:
     user = message.from_user
     user_id = user.id if user else 0
     context = _get_ai_context(message.chat.id, user_id)
-    reply = await ai_client.assistant_reply(text, context)
+    reply = await ai_client.assistant_reply(text, context, chat_id=message.chat.id)
     _remember_ai_exchange(message.chat.id, user_id, text, reply)
     await message.reply(reply)
 
@@ -680,7 +680,7 @@ async def mention_help(message: Message, bot: Bot) -> None:
     user = message.from_user
     user_id = user.id if user else 0
     context = _get_ai_context(message.chat.id, user_id)
-    reply = await ai_client.assistant_reply(text, context)
+    reply = await ai_client.assistant_reply(text, context, chat_id=message.chat.id)
     _remember_ai_exchange(message.chat.id, user_id, text, reply)
     await message.reply(reply)
     logger.info("OUT: MENTION_REPLY_AI")
