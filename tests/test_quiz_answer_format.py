@@ -1,30 +1,26 @@
-"""Почему: фиксируем правила проверки ответов и подсказки формата ответа."""
+"""Почему: фиксируем поведение ИИ-fallback для оценки ответов викторины и подсказки формата."""
 
 from __future__ import annotations
 
-from app.models import QuizQuestion
-from app.services.quiz import build_answer_hint, check_answer
+from app.services.ai_module import local_quiz_answer_decision
+from app.services.quiz import build_answer_hint
 
 
-def test_check_answer_single_word_accepts_one_typo() -> None:
-    question = QuizQuestion(question="Столица Франции?", answer="Париж")
-    assert check_answer(question, "Парих") is True
+def test_local_quiz_answer_exact_match_is_correct() -> None:
+    decision = local_quiz_answer_decision("Лев Толстой", "лев толстой")
+    assert decision.is_correct is True
 
 
-def test_check_answer_single_word_rejects_extra_words() -> None:
-    question = QuizQuestion(question="Столица Франции?", answer="Париж")
-    assert check_answer(question, "Париж Франция") is False
+def test_local_quiz_answer_partial_match_is_close() -> None:
+    decision = local_quiz_answer_decision("Александр Сергеевич Пушкин", "Пушкин")
+    assert decision.is_correct is False
+    assert decision.is_close is True
 
 
-def test_check_answer_two_words_accepts_one_matching_word() -> None:
-    question = QuizQuestion(question="Кто написал Войну и мир?", answer="Лев Толстой")
-    assert check_answer(question, "Толстой") is True
-
-
-def test_check_answer_three_words_requires_two_matches() -> None:
-    question = QuizQuestion(question="Автор романа Евгений Онегин?", answer="Александр Сергеевич Пушкин")
-    assert check_answer(question, "Пушкин") is False
-    assert check_answer(question, "Александр Пушкин") is True
+def test_local_quiz_answer_wrong_is_not_close() -> None:
+    decision = local_quiz_answer_decision("Париж", "Берлин")
+    assert decision.is_correct is False
+    assert decision.is_close is False
 
 
 def test_build_answer_hint() -> None:

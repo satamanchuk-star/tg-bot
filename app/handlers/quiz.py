@@ -26,7 +26,6 @@ from app.services.quiz import (
     build_answer_hint,
     build_session_stats,
     can_start_quiz,
-    check_answer,
     end_quiz_session,
     get_active_session,
     get_current_question,
@@ -38,6 +37,7 @@ from app.services.quiz import (
     start_quiz_session,
     winners_from_results,
 )
+from app.services.ai_module import get_ai_client
 from app.utils.admin import is_admin_message
 
 if TYPE_CHECKING:
@@ -49,6 +49,9 @@ router = Router()
 _timeout_tasks: dict[tuple[int, int], asyncio.Task] = {}
 _question_started_at: dict[tuple[int, int], datetime | None] = {}
 _session_results: dict[tuple[int, int], dict[int, tuple[str, int]]] = {}
+_answer_grace_tasks: dict[tuple[int, int], asyncio.Task[None]] = {}
+_pending_answers: dict[tuple[int, int], dict[int, tuple[str, bool]]] = {}
+_session_locks: dict[tuple[int, int], asyncio.Lock] = {}
 
 _MAIN_CHAT_INVITES = cycle(
     [
@@ -109,6 +112,7 @@ async def start_quiz_auto(bot: Bot) -> None:
 
 async def _start_quiz(bot: Bot, chat_id: int, topic_id: int, actor: str) -> tuple[bool, str]:
     _session_results[(chat_id, topic_id)] = {}
+    _cancel_answer_grace(chat_id, topic_id)
 
     async for session in get_session():
         can_start, reason = await can_start_quiz(session, chat_id, topic_id)
@@ -169,6 +173,21 @@ def _cancel_timeout(chat_id: int, topic_id: int) -> None:
         task.cancel()
 
 
+def _get_session_lock(chat_id: int, topic_id: int) -> asyncio.Lock:
+    key = (chat_id, topic_id)
+    if key not in _session_locks:
+        _session_locks[key] = asyncio.Lock()
+    return _session_locks[key]
+
+
+def _cancel_answer_grace(chat_id: int, topic_id: int) -> None:
+    key = (chat_id, topic_id)
+    task = _answer_grace_tasks.pop(key, None)
+    if task:
+        task.cancel()
+    _pending_answers.pop(key, None)
+
+
 async def _handle_timeout(bot: Bot, chat_id: int, topic_id: int) -> None:
     key = (chat_id, topic_id)
     started_before = _question_started_at.get(key)
@@ -188,6 +207,10 @@ async def _handle_timeout(bot: Bot, chat_id: int, topic_id: int) -> None:
                 f"Время вышло! Правильный ответ: {question.answer}",
                 message_thread_id=topic_id,
             )
+
+        quiz_session.current_question_id = None
+        quiz_session.question_started_at = None
+        await session.commit()
 
         if await is_quiz_finished(quiz_session):
             await _finish_quiz_and_notify(session, bot, chat_id, topic_id, quiz_session)
@@ -232,6 +255,7 @@ async def _finish_quiz_and_notify(
 ) -> None:
     await end_quiz_session(session, quiz_session)
     key = (chat_id, topic_id)
+    _cancel_answer_grace(chat_id, topic_id)
     results = _session_results.pop(key, {})
     winners = winners_from_results(results)
 
@@ -334,36 +358,99 @@ async def check_quiz_answer(message: Message, bot: Bot) -> None:
 
     chat_id = settings.forum_chat_id
     topic_id = settings.topic_games
+    key = (chat_id, topic_id)
 
-    async for session in get_session():
-        quiz_session = await get_active_session(session, chat_id, topic_id)
-        if not quiz_session:
+    async with _get_session_lock(chat_id, topic_id):
+        async for session in get_session():
+            quiz_session = await get_active_session(session, chat_id, topic_id)
+            if not quiz_session:
+                return
+
+            question = await get_current_question(session, quiz_session)
+            if not question:
+                return
+
+            ai_client = get_ai_client()
+            decision = await ai_client.evaluate_quiz_answer(question.question, question.answer, message_text)
+            if not (decision.is_correct or decision.is_close):
+                return
+
+            display_name = _display_name(message) or str(message.from_user.id)
+            if key not in _pending_answers:
+                _pending_answers[key] = {}
+            _pending_answers[key][message.from_user.id] = (display_name, decision.is_close and not decision.is_correct)
+
+            if key in _answer_grace_tasks:
+                await message.reply(
+                    f"Ответ @{display_name} принят. Проверяю одновременно пришедшие ответы..."
+                )
+                return
+
+            _cancel_timeout(chat_id, topic_id)
+            _answer_grace_tasks[key] = asyncio.create_task(
+                _finalize_answers_after_grace(
+                    bot=bot,
+                    chat_id=chat_id,
+                    topic_id=topic_id,
+                    question_id=question.id,
+                    question_started_at=quiz_session.question_started_at,
+                )
+            )
+            await message.reply(
+                f"Ответ @{display_name} принят. Даю 1 секунду на возможные одновременные ответы."
+            )
             return
 
-        question = await get_current_question(session, quiz_session)
-        if not question or not check_answer(question, message_text):
-            return
 
-        _cancel_timeout(chat_id, topic_id)
-        _question_started_at[(chat_id, topic_id)] = None
+async def _finalize_answers_after_grace(
+    bot: Bot,
+    chat_id: int,
+    topic_id: int,
+    question_id: int,
+    question_started_at: datetime | None,
+) -> None:
+    key = (chat_id, topic_id)
+    try:
+        await asyncio.sleep(1)
+        async with _get_session_lock(chat_id, topic_id):
+            accepted = _pending_answers.get(key, {})
+            if not accepted:
+                return
 
-        display_name = _display_name(message) or str(message.from_user.id)
-        stat = await award_point(session, message.from_user.id, chat_id, display_name=display_name)
+            async for session in get_session():
+                quiz_session = await get_active_session(session, chat_id, topic_id)
+                if not quiz_session or quiz_session.current_question_id != question_id:
+                    return
+                if quiz_session.question_started_at != question_started_at:
+                    return
 
-        if (chat_id, topic_id) not in _session_results:
-            _session_results[(chat_id, topic_id)] = {}
-        prev_points = _session_results[(chat_id, topic_id)].get(message.from_user.id, (display_name, 0))[1]
-        _session_results[(chat_id, topic_id)][message.from_user.id] = (display_name, prev_points + 1)
+                question = await get_current_question(session, quiz_session)
+                if not question:
+                    return
 
-        await message.reply(f"Правильно! @{display_name} получает 1 балл. Всего: {stat.total_points}")
+                lines = [f"Правильный ответ: {question.answer}", "Баллы за вопрос:"]
+                if key not in _session_results:
+                    _session_results[key] = {}
 
-        if await is_quiz_finished(quiz_session):
-            await _finish_quiz_and_notify(session, bot, chat_id, topic_id, quiz_session)
-            return
+                for user_id, (name, is_close) in accepted.items():
+                    stat = await award_point(session, user_id, chat_id, display_name=name)
+                    prev_points = _session_results[key].get(user_id, (name, 0))[1]
+                    _session_results[key][user_id] = (name, prev_points + 1)
+                    suffix = " (близкий ответ, засчитано ИИ)" if is_close else ""
+                    lines.append(f"• @{name} +1, всего: {stat.total_points}{suffix}")
 
-        quiz_session.current_question_id = None
-        quiz_session.question_started_at = None
-        await session.commit()
-        break
+                await bot.send_message(chat_id, "\n".join(lines), message_thread_id=topic_id)
 
-    await _send_next_question_after_break(bot, chat_id, topic_id)
+                if await is_quiz_finished(quiz_session):
+                    await _finish_quiz_and_notify(session, bot, chat_id, topic_id, quiz_session)
+                    return
+
+                quiz_session.current_question_id = None
+                quiz_session.question_started_at = None
+                await session.commit()
+                break
+
+        await _send_next_question_after_break(bot, chat_id, topic_id)
+    finally:
+        _answer_grace_tasks.pop(key, None)
+        _pending_answers.pop(key, None)
