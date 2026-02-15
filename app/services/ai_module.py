@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -18,6 +19,11 @@ from app.services.ai_usage import add_usage, can_consume_ai, get_usage_stats
 from app.utils.time import now_tz
 
 logger = logging.getLogger(__name__)
+
+_MODERATION_SOFT_TIMEOUT_SECONDS = 8
+_ASSISTANT_SOFT_TIMEOUT_SECONDS = 12
+_QUIZ_SOFT_TIMEOUT_SECONDS = 12
+_SUMMARY_SOFT_TIMEOUT_SECONDS = 12
 
 _MODERATION_SYSTEM_PROMPT = (
     "Верни только JSON без дополнительного текста: "
@@ -397,10 +403,32 @@ class AiModuleClient:
         return await self._provider.probe()
 
     async def moderate(self, text: str, *, chat_id: int) -> ModerationDecision:
-        return await self._provider.moderate(text, chat_id=chat_id)
+        try:
+            return await asyncio.wait_for(
+                self._provider.moderate(text, chat_id=chat_id),
+                timeout=_MODERATION_SOFT_TIMEOUT_SECONDS,
+            )
+        except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
+            logger.warning(
+                "AI moderation timeout after %s seconds; using local fallback.",
+                _MODERATION_SOFT_TIMEOUT_SECONDS,
+            )
+            decision = local_moderation(text)
+            decision.used_fallback = True
+            return decision
 
     async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int) -> str:
-        return await self._provider.assistant_reply(prompt, context, chat_id=chat_id)
+        try:
+            return await asyncio.wait_for(
+                self._provider.assistant_reply(prompt, context, chat_id=chat_id),
+                timeout=_ASSISTANT_SOFT_TIMEOUT_SECONDS,
+            )
+        except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
+            logger.warning(
+                "AI assistant timeout after %s seconds; using local fallback.",
+                _ASSISTANT_SOFT_TIMEOUT_SECONDS,
+            )
+            return f"{_USER_FALLBACK} {build_local_assistant_reply(prompt)}"
 
     async def evaluate_quiz_answer(
         self,
@@ -410,15 +438,37 @@ class AiModuleClient:
         *,
         chat_id: int,
     ) -> QuizAnswerDecision:
-        return await self._provider.evaluate_quiz_answer(
-            question,
-            correct_answer,
-            user_answer,
-            chat_id=chat_id,
-        )
+        try:
+            return await asyncio.wait_for(
+                self._provider.evaluate_quiz_answer(
+                    question,
+                    correct_answer,
+                    user_answer,
+                    chat_id=chat_id,
+                ),
+                timeout=_QUIZ_SOFT_TIMEOUT_SECONDS,
+            )
+        except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
+            logger.warning(
+                "AI quiz timeout after %s seconds; using local fallback.",
+                _QUIZ_SOFT_TIMEOUT_SECONDS,
+            )
+            decision = local_quiz_answer_decision(correct_answer, user_answer)
+            decision.used_fallback = True
+            return decision
 
     async def generate_daily_summary(self, context: str, *, chat_id: int) -> str | None:
-        return await self._provider.generate_daily_summary(context, chat_id=chat_id)
+        try:
+            return await asyncio.wait_for(
+                self._provider.generate_daily_summary(context, chat_id=chat_id),
+                timeout=_SUMMARY_SOFT_TIMEOUT_SECONDS,
+            )
+        except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
+            logger.warning(
+                "AI summary timeout after %s seconds; skipping summary.",
+                _SUMMARY_SOFT_TIMEOUT_SECONDS,
+            )
+            return None
 
 
 def local_moderation(text: str) -> ModerationDecision:

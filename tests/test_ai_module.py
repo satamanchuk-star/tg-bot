@@ -16,6 +16,32 @@ from app.services.ai_module import (
 )
 
 
+class _SlowProvider:
+    async def probe(self):  # type: ignore[no-untyped-def]
+        await asyncio.sleep(0.1)
+
+    async def moderate(self, text: str, *, chat_id: int):  # type: ignore[no-untyped-def]
+        await asyncio.sleep(0.1)
+
+    async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int) -> str:
+        await asyncio.sleep(0.1)
+        return "remote"
+
+    async def evaluate_quiz_answer(  # type: ignore[no-untyped-def]
+        self,
+        question: str,
+        correct_answer: str,
+        user_answer: str,
+        *,
+        chat_id: int,
+    ):
+        await asyncio.sleep(0.1)
+
+    async def generate_daily_summary(self, context: str, *, chat_id: int) -> str:
+        await asyncio.sleep(0.1)
+        return "summary"
+
+
 def test_detects_masked_profanity() -> None:
     normalized = normalize_for_profanity("Да ты б*л_я!")
     assert detect_profanity(normalized)
@@ -104,3 +130,22 @@ def test_get_ai_diagnostics_for_stub(monkeypatch) -> None:
     report = asyncio.run(get_ai_diagnostics(chat_id=1))
     assert report.provider_mode == "stub"
     assert report.probe_ok is False
+
+
+def test_ai_module_client_moderation_timeout_fallback(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.ai_module._MODERATION_SOFT_TIMEOUT_SECONDS", 0.01)
+    client = AiModuleClient(provider=_SlowProvider())
+
+    decision = asyncio.run(client.moderate("привет", chat_id=1))
+
+    assert decision.used_fallback is True
+    assert decision.action == "none"
+
+
+def test_ai_module_client_assistant_timeout_fallback(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.ai_module._ASSISTANT_SOFT_TIMEOUT_SECONDS", 0.01)
+    client = AiModuleClient(provider=_SlowProvider())
+
+    reply = asyncio.run(client.assistant_reply("шлагбаум не работает", [], chat_id=1))
+
+    assert "Модуль ИИ" in reply
