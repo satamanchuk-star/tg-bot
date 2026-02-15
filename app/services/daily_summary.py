@@ -94,16 +94,11 @@ async def build_daily_summary(session: AsyncSession, chat_id: int) -> DailySumma
 
 
 def render_daily_summary(summary: DailySummary) -> str:
-    topics = ", ".join(summary.topics) if summary.topics else "темы не выделены"
+    topics = ", ".join(summary.topics) if summary.topics else "темы не выделились"
+    heat = "Было пару горячих моментов, но всё спокойно." if summary.conflicts else "День прошёл ровно и спокойно."
     return (
-        "Ежедневная сводка:\n"
-        f"• Сообщений: {summary.messages}\n"
-        f"• Активных участников: {summary.active_users}\n"
-        f"• Предупреждений: {summary.warnings}\n"
-        f"• Удалений: {summary.deletions}\n"
-        f"• Страйков: {summary.strikes}\n"
-        f"• Конфликтов: {summary.conflicts}\n"
-        f"• Основные темы: {topics}\n"
-        f"• Настроение дня: {summary.mood}\n"
-        f"• Позитив: {summary.positive}"
+        "Сегодня в чате было оживлённо 🙂\n"
+        f"{summary.messages} сообщений и {summary.active_users} активных соседей.\n"
+        f"Чаще всего обсуждали: {topics}.\n"
+        f"{heat}"
     )

@@ -477,9 +477,6 @@ async def help_command(message: Message, bot: Bot) -> None:
     if message.chat.id != settings.forum_chat_id:
         await message.reply("Команда /help работает только в форуме ЖК.")
         return
-    if message.message_thread_id is None:
-        await message.reply("Команда /help работает внутри тем форума.")
-        return
     if message.from_user:
         key = _state_key(message.chat.id, message.from_user.id)
         _clear_waiting_state(key)

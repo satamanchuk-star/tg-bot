@@ -14,6 +14,10 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+MODERATION_SYSTEM_PROMPT = """Ты — модератор чата жилого комплекса.\n\nТвоя задача — анализировать сообщения и определять:\n- наличие мата (включая замаскированный),\n- грубость,\n- агрессию,\n- угрозы.\n\nТы возвращаешь только JSON без пояснений.\n\nУчитывай замены букв символами, пробелы между буквами, латиницу вместо кириллицы, цифры, транслитерацию и частично скрытые слова.\nМат считается нарушением даже если он замаскирован.\n\nУровни severity:\n0 — нет нарушения\n1 — мягкая грубость\n2 — явное нарушение\n3 — серьёзное нарушение\n\nФормат ответа:\n{\n  "label": "PROFANITY|RUDE|HATE|THREAT|NONE",\n  "severity": 0,\n  "confidence": 0.0,\n  "recommended_action": "ALLOW|WARN|DELETE|STRIKE|ADMIN_ALERT",\n  "user_message": "короткая живая фраза",\n  "admin_note": "краткое пояснение для админов"\n}\n\nПравила:\n- Никакого текста вне JSON.\n- user_message до 200 символов.\n- Спокойный живой тон без канцелярита.\n- Не упоминать алгоритмы, ИИ или систему.\n"""
+
+ASSISTANT_SYSTEM_PROMPT = """Ты — участник чата жилого комплекса.\nОтвечай как живой человек: коротко, дружелюбно, спокойно, по делу.\nДопускается лёгкий нейтральный юмор без сарказма.\n\nЗапрещено: \"как ИИ\", упоминания алгоритмов и автоматической модерации, канцелярит, моральный тон.\nНе давай медицинские, юридические и финансовые советы, не обсуждай политику и религию.\nЕсли тема вне зоны — мягко откажи: \"С этим лучше к профильному специалисту 🙌 Я тут больше про жизнь дома.\"\n\nОграничения: максимум 800 символов, без таблиц и длинных абзацев.\nЕсли есть конфликт, мягко деэскалируй: \"Можно спорить, но спокойно.\"\n"""
+
 _ALLOWED_ASSISTANT_TOPICS = (
     "жк",
     "двор",
@@ -111,6 +115,7 @@ class AiModuleClient:
             "text": text,
             "language": "ru",
             "policy": "severity_0_3",
+            "system_prompt": MODERATION_SYSTEM_PROMPT,
         }
         headers = {"Authorization": f"Bearer {settings.ai_key}"} if settings.ai_key else {}
 
@@ -137,7 +142,7 @@ class AiModuleClient:
     async def assistant_reply(self, prompt: str, context: list[str]) -> str:
         safe_prompt = mask_personal_data(prompt)[:1000]
         if not is_assistant_topic_allowed(safe_prompt):
-            return "Извините, с этой темой я не могу помочь. Могу подсказать по вопросам ЖК и бытовым темам."
+            return "С этим лучше к профильному специалисту 🙌 Я тут больше про жизнь дома."
 
         if not is_ai_runtime_enabled() or not settings.ai_api_url:
             return build_local_assistant_reply(safe_prompt)
@@ -145,8 +150,9 @@ class AiModuleClient:
         payload = {
             "mode": "assistant",
             "language": "ru",
-            "style": "brief_friendly",
+            "style": "brief_friendly_human",
             "max_chars": 800,
+            "system_prompt": ASSISTANT_SYSTEM_PROMPT,
             "prompt": safe_prompt,
             "context": [mask_personal_data(item) for item in context[-20:]],
         }
@@ -158,7 +164,7 @@ class AiModuleClient:
             data = response.json()
             text = str(data.get("reply", "")).strip()
             if not text:
-                return "Сейчас не могу ответить подробно. Уточните вопрос, и я помогу."
+                return "Сейчас не сориентирую сразу. Дайте чуть больше деталей, и разберём."
             return text[:800]
         except (httpx.HTTPError, json.JSONDecodeError):
             logger.warning("AI assistant недоступен, используем локальный ответ.")
@@ -196,14 +202,33 @@ class AiModuleClient:
 
 
 def parse_moderation_response(data: dict[str, object]) -> ModerationDecision:
-    violation_type = str(data.get("violation_type", "none"))
+    raw_label = str(data.get("violation_type", data.get("label", "none"))).lower()
+    violation_map = {
+        "none": "none",
+        "profanity": "profanity",
+        "rude": "rude",
+        "hate": "aggression",
+        "threat": "aggression",
+        "aggression": "aggression",
+    }
+    violation_type = violation_map.get(raw_label, "none")
+
     severity = int(data.get("severity", 0))
     confidence = float(data.get("confidence", 0.5))
-    action = str(data.get("action", "none"))
-    if violation_type not in {"none", "profanity", "rude", "aggression"}:
-        violation_type = "none"
-    if action not in {"none", "warn", "delete_warn", "delete_strike"}:
-        action = map_action_by_severity(severity)
+
+    raw_action = str(data.get("action", data.get("recommended_action", "none"))).lower()
+    action_map = {
+        "none": "none",
+        "allow": "none",
+        "warn": "warn",
+        "delete": "delete_warn",
+        "delete_warn": "delete_warn",
+        "strike": "delete_strike",
+        "delete_strike": "delete_strike",
+        "admin_alert": "delete_strike",
+    }
+    action = action_map.get(raw_action, map_action_by_severity(severity))
+
     severity = max(0, min(3, severity))
     confidence = max(0.0, min(1.0, confidence))
     return ModerationDecision(
@@ -277,8 +302,8 @@ def is_assistant_topic_allowed(text: str) -> bool:
 
 def build_local_assistant_reply(prompt: str) -> str:
     if "шлагбаум" in prompt.lower():
-        return "По шлагбауму лучше писать в профильный топик. Укажите номер авто и суть проблемы, помогу сформулировать коротко."
-    return "Понял вопрос. Лучше уточнить адрес/подъезд и желаемый результат — так соседи и админы быстрее помогут."
+        return "По шлагбауму лучше писать в профильную тему. Накиньте номер авто и суть, помогу собрать короткий текст."
+    return "Хороший вопрос. Добавьте адрес или подъезд и что хотите получить на выходе — так быстрее подскажут."
 
 
 def _normalize_quiz_text(text: str) -> str:
