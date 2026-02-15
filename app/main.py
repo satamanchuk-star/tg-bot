@@ -377,7 +377,10 @@ async def on_startup(bot: Bot) -> None:
     # Применяем миграции
     async for session in get_session():
         await apply_v11_stats_reset(session)
-        await load_initial_quiz_questions(session)
+        try:
+            await load_initial_quiz_questions(session)
+        except Exception:  # noqa: BLE001 - не останавливаем запуск из-за проблем с XLSX
+            logger.exception("Не удалось загрузить вопросы викторины при старте.")
     await heartbeat_job(bot)
     await bot.set_my_commands(
         [
@@ -436,7 +439,7 @@ async def error_handler(event: ErrorEvent) -> bool:
 async def main() -> None:
     # Проверка флага остановки — если бот был остановлен командой /shutdown_bot
     if STOP_FLAG.exists():
-        logger.info("Бот остановлен. Удалите /app/data/.stopped для запуска.")
+        logger.info("Бот остановлен. Удалите %s для запуска.", STOP_FLAG)
         return
 
     bot = Bot(token=settings.bot_token)

@@ -27,7 +27,6 @@ from app.services.games import can_grant_coins, get_or_create_stats, register_co
 from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import extract_target_user, is_admin
 from app.utils.admin_help import ADMIN_HELP
-from app.handlers.moderation import update_profanity, update_profanity_exceptions
 from app.handlers.help import clear_routing_state
 from app.services.ai_module import is_ai_runtime_enabled, set_ai_runtime_enabled
 from app.utils.profanity import load_profanity, load_profanity_exceptions
@@ -247,9 +246,10 @@ async def reload_profanity(message: Message, bot: Bot) -> None:
         return
     words = load_profanity()
     exceptions = load_profanity_exceptions()
-    update_profanity(words)
-    update_profanity_exceptions(exceptions)
-    await message.reply(f"Список матов обновлен. Слов: {len(words)}")
+    await message.reply(
+        "Словари перечитаны с диска. "
+        f"Мат-словарь: {len(words)}, исключения: {len(exceptions)}."
+    )
 
 
 @router.message(Command("reset_routing_state"))
