@@ -92,11 +92,11 @@ async def moderate_message(message: Message, bot: Bot) -> None:
         await _store_mod_event(message.chat.id, message.from_user.id, "delete", decision.severity)
 
     if decision.action == "warn":
-        await _warn_user(message, "пожалуйста, без грубости. Давайте общаться уважительно.", bot)
+        await _warn_user(message, "давайте мягче 🙂", bot)
         return
 
     if decision.action == "delete_warn":
-        await _warn_user(message, "сообщение удалено из-за нарушения правил. Без повторов, пожалуйста.", bot)
+        await _warn_user(message, "сообщение убрал, держим тон спокойным.", bot)
         return
 
     if decision.action == "delete_strike":
@@ -106,7 +106,7 @@ async def moderate_message(message: Message, bot: Bot) -> None:
         await _store_mod_event(message.chat.id, message.from_user.id, "strike", decision.severity)
         await _warn_user(
             message,
-            f"зафиксирован страйк {strike_count}/3. Соблюдайте правила общения.",
+            f"сообщение убрал, это уже страйк {strike_count}/3. Давайте без перегиба.",
             bot,
         )
         if strike_count >= 3:
@@ -121,7 +121,7 @@ async def moderate_message(message: Message, bot: Bot) -> None:
             async for session in get_session():
                 await clear_strikes(session, message.from_user.id, settings.forum_chat_id)
                 await session.commit()
-            await _warn_user(message, "3 страйка = мут на 24 часа.", bot)
+            await _warn_user(message, "тут уже перебор — пауза в чате на 24 часа.", bot)
         return
 
     if contains_forbidden_link(text):
