@@ -20,6 +20,16 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///app/data/bot.db"
     timezone: str = "Europe/Moscow"
     build_version: str = "dev"
+    ai_enabled: bool = False
+    ai_api_url: str | None = None
+    ai_key: str | None = None
+    ai_timeout_seconds: int = 20
+    ai_retries: int = 2
+    ai_daily_request_limit: int = 2000
+    ai_daily_token_limit: int = 400000
+    ai_summary_hour: int = 21
+    ai_summary_minute: int = 0
+    ai_summary_topic_id: int | None = None
 
     topic_rules: int | None = None
     topic_important: int | None = None

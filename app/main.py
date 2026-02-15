@@ -38,8 +38,9 @@ from app.services.games import (
     is_game_timed_out,
 )
 from app.services.health import get_health_state, update_heartbeat, update_notice
-from app.services.topic_stats import get_daily_stats
 from app.utils.time import now_tz
+from app.services.ai_module import close_ai_client
+from app.services.daily_summary import build_daily_summary, render_daily_summary
 
 logging.basicConfig(
     level=logging.INFO,
@@ -164,28 +165,29 @@ async def load_initial_quiz_questions(session: AsyncSession) -> None:
 
 
 async def send_daily_summary(bot: Bot) -> None:
-    if settings.topic_smoke is None:
-        logger.info("Ежедневная сводка пропущена: topic_smoke не задан.")
+    if settings.ai_summary_topic_id is None:
+        logger.info("Ежедневная сводка пропущена: AI_SUMMARY_TOPIC_ID не задан.")
         return
-    date_key = now_tz().date().isoformat()
     async for session in get_session():
-        stats_rows = await get_daily_stats(session, settings.forum_chat_id, date_key)
-    if not stats_rows:
-        return
-    lines = ["Ежедневная сводка (с юмором):"]
-    for row in stats_rows[:15]:
-        if row.last_message:
-            cleaned = row.last_message.replace("\n", " ").strip()
-            snippet = f" ({cleaned[:120]})"
-        else:
-            snippet = ""
-        lines.append(f"• Тема {row.topic_id}: сообщений {row.messages_count}.{snippet}")
-    text = "\n".join(lines)
-    await bot.send_message(
-        settings.forum_chat_id,
-        text,
-        message_thread_id=settings.topic_smoke,
-    )
+        summary = await build_daily_summary(session, settings.forum_chat_id)
+    text = render_daily_summary(summary)
+    for attempt in range(1, 4):
+        try:
+            await bot.send_message(
+                settings.forum_chat_id,
+                text,
+                message_thread_id=settings.ai_summary_topic_id,
+            )
+            return
+        except Exception:
+            if attempt >= 3:
+                await bot.send_message(
+                    settings.admin_log_chat_id,
+                    "Не удалось отправить ежедневную сводку после 3 попыток.",
+                )
+                return
+            await asyncio.sleep(2)
+
 
 
 async def send_weekly_leaderboard(bot: Bot) -> None:
@@ -278,8 +280,13 @@ async def cleanup_blackjack_commands(bot: Bot) -> None:
 
 async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
-    # Ежедневные сводки отключены
-    # scheduler.add_job(send_daily_summary, "cron", hour=21, minute=0, args=[bot])
+    scheduler.add_job(
+        send_daily_summary,
+        "cron",
+        hour=settings.ai_summary_hour,
+        minute=settings.ai_summary_minute,
+        args=[bot],
+    )
     scheduler.add_job(
         send_weekly_leaderboard,
         "cron",
@@ -454,6 +461,7 @@ async def main() -> None:
     finally:
         if scheduler is not None:
             scheduler.shutdown()
+        await close_ai_client()
         await bot.session.close()
 
 

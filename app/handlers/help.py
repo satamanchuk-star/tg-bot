@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -22,6 +21,7 @@ from aiogram.types import (
 from app.config import settings
 from app.utils.admin import is_admin
 from app.utils.admin_help import ADMIN_HELP
+from app.services.ai_module import get_ai_client
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -633,6 +633,17 @@ async def help_topic(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.message(Command("ai"), flags={"block": False})
+async def ai_command(message: Message) -> None:
+    text = (message.text or "").removeprefix("/ai").strip()
+    if not text:
+        await message.reply("Напишите запрос после /ai, например: /ai как корректно написать жалобу по подъезду")
+        return
+    ai_client = get_ai_client()
+    reply = await ai_client.assistant_reply(text, [])
+    await message.reply(reply)
+
+
 @router.message(BotMentionFilter(), flags={"block": False})
 async def mention_help(message: Message, bot: Bot) -> None:
     logger.info(f"HANDLER: mention_help called, text={message.text!r}")
@@ -642,8 +653,11 @@ async def mention_help(message: Message, bot: Bot) -> None:
         logger.info(f"HANDLER: mention_help MATCH @{username}")
     else:
         logger.info("HANDLER: mention_help MATCH by id")
-    await message.reply(random.choice(MENTION_REPLIES))
-    logger.info("OUT: MENTION_REPLY")
+    text = _get_message_text(message) or ""
+    ai_client = get_ai_client()
+    reply = await ai_client.assistant_reply(text, [])
+    await message.reply(reply)
+    logger.info("OUT: MENTION_REPLY_AI")
 
 
 @router.message(HelpRoutingActiveFilter(), flags={"block": False})
