@@ -20,6 +20,7 @@ from aiogram.types import (
 )
 
 from app.config import settings
+from app.services.ai_module import get_ai_client
 from app.utils.admin import is_admin
 from app.utils.admin_help import ADMIN_HELP
 
@@ -119,6 +120,7 @@ CALLBACK_TOPIC = f"{CALLBACK_PREFIX}:topic"
 WAITING_TIMEOUT = timedelta(minutes=2)
 HINT_COOLDOWN = timedelta(seconds=30)
 HELP_DELETE_TIMEOUT = timedelta(minutes=2)
+AI_MENTION_COOLDOWN = timedelta(seconds=20)
 MENTION_QUEUE: deque[str] = deque(MENTION_REPLIES)
 
 
@@ -306,6 +308,7 @@ LAST_HINT_TIME: dict[tuple[int, int], datetime] = {}
 HELP_DELETE_TASKS: dict[tuple[int, int], asyncio.Task[None]] = {}
 AI_CHAT_HISTORY: dict[tuple[int, int], deque[str]] = {}
 AI_CHAT_HISTORY_LIMIT = 20
+LAST_AI_REPLY_TIME: dict[tuple[int, int], datetime] = {}
 
 
 async def _get_menu_text(bot: Bot, user_id: int | None) -> str:
@@ -453,6 +456,28 @@ def _remember_ai_exchange(chat_id: int, user_id: int, prompt: str, reply: str) -
     )
     history.append(f"user: {prompt[:1000]}")
     history.append(f"assistant: {reply[:800]}")
+
+
+def _extract_ai_prompt(message: Message) -> str:
+    text = (_get_message_text(message) or "").strip()
+    if not text:
+        return ""
+    if not text.startswith("/"):
+        return text[:1000]
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2:
+        return ""
+    return parts[1].strip()[:1000]
+
+
+def _is_ai_reply_rate_limited(chat_id: int, user_id: int) -> bool:
+    key = _ai_key(chat_id, user_id)
+    now = datetime.now(timezone.utc)
+    last_reply = LAST_AI_REPLY_TIME.get(key)
+    if last_reply and now - last_reply < AI_MENTION_COOLDOWN:
+        return True
+    LAST_AI_REPLY_TIME[key] = now
+    return False
 
 
 async def set_waiting_state(
@@ -656,7 +681,22 @@ async def help_topic(callback: CallbackQuery) -> None:
 
 @router.message(Command("ai"), flags={"block": False})
 async def ai_command(message: Message) -> None:
-    await message.reply("Модуль ИИ временно отключен. Используйте /help для навигации по темам форума.")
+    if message.chat.id != settings.forum_chat_id:
+        return
+    if message.from_user is None or message.from_user.is_bot:
+        return
+    prompt = _extract_ai_prompt(message)
+    if not prompt:
+        await message.reply("Напишите вопрос после команды: /ai <ваш вопрос>")
+        return
+    context = _get_ai_context(message.chat.id, message.from_user.id)
+    reply = await get_ai_client().assistant_reply(
+        prompt,
+        context,
+        chat_id=message.chat.id,
+    )
+    _remember_ai_exchange(message.chat.id, message.from_user.id, prompt, reply)
+    await message.reply(reply)
 
 
 @router.message(BotMentionFilter(), flags={"block": False})
@@ -668,8 +708,23 @@ async def mention_help(message: Message, bot: Bot) -> None:
         logger.info(f"HANDLER: mention_help MATCH @{username}")
     else:
         logger.info("HANDLER: mention_help MATCH by id")
-    await message.reply(_next_mention_reply())
-    logger.info("OUT: MENTION_REPLY_LOCAL")
+    if message.chat.id != settings.forum_chat_id:
+        return
+    if message.from_user is None:
+        return
+    if _is_ai_reply_rate_limited(message.chat.id, message.from_user.id):
+        logger.info("OUT: MENTION_REPLY_SKIPPED_RATE_LIMIT")
+        return
+
+    prompt = _extract_ai_prompt(message)
+    context = _get_ai_context(message.chat.id, message.from_user.id)
+    if prompt:
+        reply = await get_ai_client().assistant_reply(prompt, context, chat_id=message.chat.id)
+        _remember_ai_exchange(message.chat.id, message.from_user.id, prompt, reply)
+    else:
+        reply = _next_mention_reply()
+    await message.reply(reply)
+    logger.info("OUT: MENTION_REPLY")
 
 
 @router.message(HelpRoutingActiveFilter(), flags={"block": False})
