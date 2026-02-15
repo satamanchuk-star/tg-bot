@@ -71,6 +71,10 @@ app/
 Секреты в репозитории (Settings → Secrets → Actions):
 - `DOCKERHUB_USERNAME` — логин Docker Hub
 - `DOCKERHUB_TOKEN` — Access Token
+- `SSH_HOST` — адрес сервера для деплоя
+- `SSH_USER` — пользователь на сервере
+- `SSH_PRIVATE_KEY` — приватный SSH-ключ
+- `AI_KEY` — ключ OpenRouter; при деплое автоматически записывается в `/opt/alexbot/.env`
 
 ## Деплой
 
