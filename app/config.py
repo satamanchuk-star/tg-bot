@@ -12,7 +12,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Настройки приложения, читаются из переменных окружения."""
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+        env_ignore_empty=True,
+    )
 
     bot_token: str
     forum_chat_id: int
@@ -85,6 +89,15 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator("bot_token", mode="before")
+    @classmethod
+    def _validate_bot_token(cls, value: object) -> object:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned:
+                return cleaned
+        raise ValueError("BOT_TOKEN не задан или пуст")
+
 
     @property
     def data_dir(self) -> Path:
@@ -106,11 +119,13 @@ def _load_settings() -> Settings:
             datefmt="%Y-%m-%d %H:%M:%S",
         )
         logger = logging.getLogger(__name__)
-        missing = [
-            ".".join(map(str, err["loc"]))
-            for err in exc.errors()
-            if err.get("type") == "missing"
-        ]
+        missing = []
+        for err in exc.errors():
+            if err.get("type") != "missing":
+                continue
+            loc = err.get("loc", [])
+            field_name = ".".join(map(str, loc))
+            missing.append(field_name.upper())
         if missing:
             logger.error(
                 "Не заданы обязательные переменные окружения: %s",
