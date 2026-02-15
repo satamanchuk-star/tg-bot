@@ -5,6 +5,7 @@ from app.services.ai_module import (
     _ASSISTANT_SYSTEM_PROMPT,
     _MODERATION_SYSTEM_PROMPT,
     OpenRouterProvider,
+    build_local_assistant_reply,
     detect_profanity,
     is_assistant_topic_allowed,
     local_quiz_answer_decision,
@@ -27,6 +28,7 @@ def test_masks_personal_data() -> None:
 
 def test_assistant_topic_restrictions() -> None:
     assert is_assistant_topic_allowed("Как решить проблему со шлагбаумом?")
+    assert is_assistant_topic_allowed("Какие правила по шуму в ЖК?")
     assert not is_assistant_topic_allowed("Дай финансовый совет")
 
 
@@ -50,6 +52,12 @@ def test_probe_returns_stub_status() -> None:
 def test_assistant_reply_uses_local_fallback() -> None:
     reply = asyncio.run(AiModuleClient().assistant_reply("вопрос про шлагбаум", [], chat_id=1))
     assert "Модуль ИИ" in reply
+
+
+def test_local_assistant_reply_handles_rules_and_mentions() -> None:
+    reply = build_local_assistant_reply("@jabchat_bot какие правила по шуму ночью?")
+    assert "шум" in reply.lower()
+    assert "фактов" in reply.lower()
 
 
 def test_assistant_prompt_has_human_style_and_limits() -> None:
