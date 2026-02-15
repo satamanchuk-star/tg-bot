@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     ai_enabled: bool = True
     ai_api_url: str | None = None
     ai_key: str | None = None
+    ai_model: str = "qwen/qwen3-14b"
     ai_timeout_seconds: int = 20
     ai_retries: int = 2
     ai_daily_request_limit: int = 2000
