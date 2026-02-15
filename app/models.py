@@ -158,3 +158,17 @@ class ModerationEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True
     )
+
+
+class AiUsage(Base):
+    __tablename__ = "ai_usage"
+
+    date_key: Mapped[str] = mapped_column(String(10), primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_used: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )

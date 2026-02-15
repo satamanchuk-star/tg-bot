@@ -81,7 +81,7 @@ async def moderate_message(message: Message, bot: Bot) -> None:
 
     text = message.text
     ai_client = get_ai_client()
-    decision = await ai_client.moderate(text)
+    decision = await ai_client.moderate(text, chat_id=message.chat.id)
     await _store_message_log(message, decision.severity)
 
     if decision.severity >= 1:
