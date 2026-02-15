@@ -29,6 +29,7 @@ from app.utils.admin import extract_target_user, is_admin
 from app.utils.admin_help import ADMIN_HELP
 from app.handlers.moderation import update_profanity, update_profanity_exceptions
 from app.handlers.help import clear_routing_state
+from app.services.ai_module import is_ai_runtime_enabled, set_ai_runtime_enabled
 from app.utils.profanity import load_profanity, load_profanity_exceptions
 
 router = Router()
@@ -214,6 +215,31 @@ async def grant_coins(message: Message, bot: Bot) -> None:
         await session.commit()
     await message.reply(f"Начислено {amount} монет.")
 
+
+
+
+@router.message(Command("ai_on"))
+async def ai_on(message: Message, bot: Bot) -> None:
+    if not await _ensure_admin(message, bot):
+        return
+    set_ai_runtime_enabled(True)
+    await message.reply("ИИ-функции включены: модерация, /ai, ответы на упоминания и оценка викторины.")
+
+
+@router.message(Command("ai_off"))
+async def ai_off(message: Message, bot: Bot) -> None:
+    if not await _ensure_admin(message, bot):
+        return
+    set_ai_runtime_enabled(False)
+    await message.reply("ИИ-функции выключены. Бот перешёл на локальные fallback-правила.")
+
+
+@router.message(Command("ai_status"))
+async def ai_status(message: Message, bot: Bot) -> None:
+    if not await _ensure_admin(message, bot):
+        return
+    status = "включены" if is_ai_runtime_enabled() else "выключены"
+    await message.reply(f"ИИ-функции сейчас {status}.")
 
 @router.message(Command("reload_profanity"))
 async def reload_profanity(message: Message, bot: Bot) -> None:
