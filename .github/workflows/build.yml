@@ -32,9 +32,40 @@ jobs:
 
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          AI_KEY: ${{ secrets.AI_KEY }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: AI_KEY
           script: |
-            cd /opt/alexbot && sh reload.sh
+            cd /opt/alexbot
+            python3 - <<'PY'
+            from pathlib import Path
+            import os
+
+            env_path = Path('.env')
+            if not env_path.exists():
+                env_path.touch()
+
+            raw_key = os.getenv('AI_KEY', '').strip()
+            if not raw_key:
+                raise SystemExit('AI_KEY secret is empty')
+
+            lines = env_path.read_text().splitlines()
+            output = []
+            found = False
+            for line in lines:
+                if line.startswith('AI_KEY='):
+                    output.append(f'AI_KEY={raw_key}')
+                    found = True
+                else:
+                    output.append(line)
+
+            if not found:
+                output.append(f'AI_KEY={raw_key}')
+
+            env_path.write_text('\n'.join(output).rstrip() + '\n')
+            PY
+            sh reload.sh
