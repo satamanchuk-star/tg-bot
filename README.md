@@ -113,6 +113,29 @@ python -m app.main
 5. Упомянуть бота в сообщении и проверить локальный ответ.
 6. Запустить/дождаться ежедневной сводки и убедиться, что приходит только статистика.
 
+
+## Проверка OpenRouter API
+
+Быстрый health-check без запуска бота:
+
+```bash
+python scripts/check_openrouter.py --api-key sk-or-...
+```
+
+Если аргументы не переданы, скрипт берёт `AI_KEY`, `AI_MODEL`, `AI_API_URL`
+сначала из переменных окружения процесса, затем из локального файла `.env`.
+
+Или через переменные окружения:
+
+```bash
+AI_KEY=sk-or-... AI_MODEL=qwen/qwen3-14b python scripts/check_openrouter.py
+```
+
+Скрипт вернет `ok/status_code/latency_ms/details` и завершится кодом:
+- `0` — API доступен и вернул `choices`;
+- `1` — API ответил ошибкой или сеть недоступна;
+- `2` — не передан API-ключ.
+
 ## Почему бот может не запускаться
 
 1. Не заполнен `.env` (минимум `BOT_TOKEN`, `FORUM_CHAT_ID`, `ADMIN_LOG_CHAT_ID`).

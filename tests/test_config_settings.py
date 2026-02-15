@@ -17,6 +17,7 @@ BASE_ENV: dict[str, str] = {
 def test_settings_ignores_empty_optional_values() -> None:
     settings = Settings(
         **BASE_ENV,
+        _env_file=None,
         AI_API_URL="",
         TOPIC_GAMES="",
     )
@@ -32,6 +33,7 @@ def test_settings_rejects_empty_bot_token(monkeypatch) -> None:
 
     try:
         Settings(
+            _env_file=None,
             bot_token="   ",
             forum_chat_id="1",
             admin_log_chat_id="1",
