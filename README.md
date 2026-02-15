@@ -126,13 +126,15 @@ python -m app.main
 python scripts/check_openrouter.py --api-key sk-or-...
 ```
 
-Если аргументы не переданы, скрипт берёт `AI_KEY`, `AI_MODEL`, `AI_API_URL`
+Если аргументы не переданы, скрипт берёт `AI_KEY` (или `OPENROUTER_API_KEY`), `AI_MODEL`, `AI_API_URL`
 сначала из переменных окружения процесса, затем из локального файла `.env`.
 
 Или через переменные окружения:
 
 ```bash
 AI_KEY=sk-or-... AI_MODEL=qwen/qwen3-14b python scripts/check_openrouter.py
+# или
+OPENROUTER_API_KEY=sk-or-... AI_MODEL=qwen/qwen3-14b python scripts/check_openrouter.py
 ```
 
 Скрипт вернет `ok/status_code/latency_ms/details` и завершится кодом:

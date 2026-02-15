@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from pydantic import ValidationError, field_validator
+from pydantic import AliasChoices, Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,7 +26,10 @@ class Settings(BaseSettings):
     build_version: str = "dev"
     ai_enabled: bool = True
     ai_api_url: str | None = None
-    ai_key: str | None = None
+    ai_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("AI_KEY", "OPENROUTER_API_KEY"),
+    )
     ai_model: str = "qwen/qwen3-14b"
     ai_timeout_seconds: int = 20
     ai_retries: int = 2

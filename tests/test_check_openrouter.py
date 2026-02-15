@@ -34,3 +34,25 @@ def test_build_parser_prefers_process_env_over_dotenv(tmp_path: Path, monkeypatc
     args = parser.parse_args([])
 
     assert args.api_key == "process-key"
+
+
+def test_build_parser_reads_openrouter_alias_from_dotenv(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("OPENROUTER_API_KEY=dotenv-openrouter-key\n", encoding="utf-8")
+    monkeypatch.delenv("AI_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    parser = check_openrouter.build_parser()
+    args = parser.parse_args([])
+
+    assert args.api_key == "dotenv-openrouter-key"
+
+
+def test_build_parser_prefers_ai_key_over_openrouter_alias(monkeypatch) -> None:
+    monkeypatch.setenv("AI_KEY", "ai-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+
+    parser = check_openrouter.build_parser()
+    args = parser.parse_args([])
+
+    assert args.api_key == "ai-key"
