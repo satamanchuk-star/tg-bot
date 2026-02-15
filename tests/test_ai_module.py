@@ -1,4 +1,10 @@
+import asyncio
+
+import httpx
+
+from app.config import settings
 from app.services.ai_module import (
+    AiModuleClient,
     detect_profanity,
     is_assistant_topic_allowed,
     local_quiz_answer_decision,
@@ -33,3 +39,39 @@ def test_parse_quiz_answer_response() -> None:
 def test_local_quiz_answer_close_match() -> None:
     decision = local_quiz_answer_decision("домофон в подъезде", "домофон")
     assert decision.is_close is True
+
+
+def test_probe_returns_success_for_valid_response(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "ai_api_url", "https://ai.example.test")
+    monkeypatch.setattr(settings, "ai_key", "secret")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get("Authorization") == "Bearer secret"
+        return httpx.Response(
+            200,
+            json={
+                "label": "NONE",
+                "severity": 0,
+                "confidence": 1,
+                "recommended_action": "ALLOW",
+            },
+        )
+
+    client = AiModuleClient()
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    result = asyncio.run(client.probe())
+    assert result.ok is True
+
+
+def test_probe_maps_unauthorized(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "ai_api_url", "https://ai.example.test")
+    monkeypatch.setattr(settings, "ai_key", "bad")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": "Unauthorized"})
+
+    client = AiModuleClient()
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    result = asyncio.run(client.probe())
+    assert result.ok is False
+    assert "401" in result.details

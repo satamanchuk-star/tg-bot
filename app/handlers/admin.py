@@ -28,7 +28,7 @@ from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import extract_target_user, is_admin
 from app.utils.admin_help import ADMIN_HELP
 from app.handlers.help import clear_routing_state
-from app.services.ai_module import is_ai_runtime_enabled, set_ai_runtime_enabled
+from app.services.ai_module import get_ai_client, is_ai_runtime_enabled, set_ai_runtime_enabled
 from app.utils.profanity import load_profanity, load_profanity_exceptions
 
 router = Router()
@@ -239,6 +239,15 @@ async def ai_status(message: Message, bot: Bot) -> None:
         return
     status = "включены" if is_ai_runtime_enabled() else "выключены"
     await message.reply(f"ИИ-функции сейчас {status}.")
+
+
+@router.message(Command("ai_ping"))
+async def ai_ping(message: Message, bot: Bot) -> None:
+    if not await _ensure_admin(message, bot):
+        return
+    result = await get_ai_client().probe()
+    status = "✅ AI работает" if result.ok else "❌ AI недоступен"
+    await message.reply(f"{status}\n{result.details}")
 
 @router.message(Command("reload_profanity"))
 async def reload_profanity(message: Message, bot: Bot) -> None:
