@@ -97,6 +97,12 @@ class QuizAnswerDecision:
     used_fallback: bool
 
 
+@dataclass(slots=True)
+class AiProbeResult:
+    ok: bool
+    details: str
+
+
 class AiModuleClient:
     def __init__(self) -> None:
         timeout = httpx.Timeout(settings.ai_timeout_seconds)
@@ -104,6 +110,45 @@ class AiModuleClient:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+    async def probe(self) -> AiProbeResult:
+        """Выполняет минимальный запрос к AI endpoint и возвращает человекочитаемый статус."""
+        if not settings.ai_api_url:
+            return AiProbeResult(False, "Не задан AI_API_URL.")
+        if not settings.ai_key:
+            return AiProbeResult(False, "Не задан AI_KEY.")
+
+        payload = {
+            "mode": "moderation",
+            "text": "тест",
+            "language": "ru",
+            "policy": "severity_0_3",
+            "system_prompt": MODERATION_SYSTEM_PROMPT,
+        }
+        headers = {"Authorization": f"Bearer {settings.ai_key}"}
+
+        try:
+            response = await self._client.post(settings.ai_api_url, json=payload, headers=headers)
+        except httpx.TimeoutException:
+            return AiProbeResult(False, "Timeout: нет ответа от AI endpoint.")
+        except httpx.HTTPError as exc:
+            return AiProbeResult(False, f"Сетевая ошибка: {exc.__class__.__name__}.")
+
+        if response.status_code == 401:
+            return AiProbeResult(False, "401 Unauthorized: ключ невалиден или не передан.")
+        if response.status_code == 403:
+            return AiProbeResult(False, "403 Forbidden: нет доступа к модели или endpoint.")
+        if response.status_code == 404:
+            return AiProbeResult(False, "404 Not Found: проверь AI_API_URL.")
+        if response.status_code >= 400:
+            return AiProbeResult(False, f"HTTP {response.status_code}: {response.text[:120]}")
+
+        try:
+            data = response.json()
+            parse_moderation_response(data)
+        except (json.JSONDecodeError, ValueError, KeyError):
+            return AiProbeResult(False, "Ответ получен, но формат JSON не распознан для режима moderation.")
+        return AiProbeResult(True, "AI endpoint ответил корректно.")
 
     async def moderate(self, text: str) -> ModerationDecision:
         local_decision = local_moderation(text)
