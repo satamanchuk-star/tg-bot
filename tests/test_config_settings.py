@@ -42,3 +42,13 @@ def test_settings_rejects_empty_bot_token(monkeypatch) -> None:
         assert "BOT_TOKEN не задан или пуст" in str(exc)
     else:
         raise AssertionError("Expected ValidationError for empty BOT_TOKEN")
+
+
+def test_settings_reads_openrouter_api_key_alias() -> None:
+    settings = Settings(
+        **BASE_ENV,
+        _env_file=None,
+        OPENROUTER_API_KEY="or-test-key",
+    )
+
+    assert settings.ai_key == "or-test-key"
