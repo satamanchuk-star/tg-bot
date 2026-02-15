@@ -131,3 +131,30 @@ class GameCommandMessage(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True
     )
+
+
+class MessageLog(Base):
+    __tablename__ = "message_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    topic_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    severity: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
+class ModerationEvent(Base):
+    __tablename__ = "moderation_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    event_type: Mapped[str] = mapped_column(String(20), index=True)
+    severity: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
