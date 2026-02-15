@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -300,6 +301,8 @@ HELP_ROUTING_STATE: dict[tuple[int, int], HelpRoutingState] = {}
 HELP_TIMEOUT_TASKS: dict[tuple[int, int], asyncio.Task[None]] = {}
 LAST_HINT_TIME: dict[tuple[int, int], datetime] = {}
 HELP_DELETE_TASKS: dict[tuple[int, int], asyncio.Task[None]] = {}
+AI_CHAT_HISTORY: dict[tuple[int, int], deque[str]] = {}
+AI_CHAT_HISTORY_LIMIT = 20
 
 
 async def _get_menu_text(bot: Bot, user_id: int | None) -> str:
@@ -426,8 +429,27 @@ async def _run_timeout(bot: Bot, key: tuple[int, int]) -> None:
         chat_id=state.chat_id,
         message_id=state.message_id,
         reply_markup=_menu_keyboard(),
-        parse_mode="HTML",
     )
+
+
+def _ai_key(chat_id: int, user_id: int) -> tuple[int, int]:
+    return (chat_id, user_id)
+
+
+def _get_ai_context(chat_id: int, user_id: int) -> list[str]:
+    history = AI_CHAT_HISTORY.get(_ai_key(chat_id, user_id))
+    if history is None:
+        return []
+    return list(history)
+
+
+def _remember_ai_exchange(chat_id: int, user_id: int, prompt: str, reply: str) -> None:
+    history = AI_CHAT_HISTORY.setdefault(
+        _ai_key(chat_id, user_id),
+        deque(maxlen=AI_CHAT_HISTORY_LIMIT),
+    )
+    history.append(f"user: {prompt[:1000]}")
+    history.append(f"assistant: {reply[:800]}")
 
 
 async def set_waiting_state(
@@ -484,7 +506,6 @@ async def help_command(message: Message, bot: Bot) -> None:
     response = await message.answer(
         menu_text,
         reply_markup=_menu_keyboard(),
-        parse_mode="HTML",
     )
     schedule_help_delete(message.bot, response.chat.id, response.message_id)
     logger.info("OUT: HELP_MENU")
@@ -549,7 +570,6 @@ async def help_back(callback: CallbackQuery) -> None:
     await callback.message.edit_text(
         menu_text,
         reply_markup=_menu_keyboard(),
-        parse_mode="HTML",
     )
     schedule_help_delete(
         callback.message.bot,
@@ -571,7 +591,6 @@ async def help_where(callback: CallbackQuery, bot: Bot) -> None:
         await callback.message.edit_text(
             HELP_RATE_LIMIT_TEXT,
             reply_markup=_back_keyboard(),
-            parse_mode="HTML",
         )
         schedule_help_delete(
             callback.message.bot,
@@ -590,7 +609,6 @@ async def help_where(callback: CallbackQuery, bot: Bot) -> None:
     await callback.message.edit_text(
         HELP_WAIT_TEXT,
         reply_markup=_back_keyboard(),
-        parse_mode="HTML",
     )
     schedule_help_delete(
         callback.message.bot,
@@ -640,7 +658,11 @@ async def ai_command(message: Message) -> None:
         await message.reply("Напишите запрос после /ai, например: /ai как корректно написать жалобу по подъезду")
         return
     ai_client = get_ai_client()
-    reply = await ai_client.assistant_reply(text, [])
+    user = message.from_user
+    user_id = user.id if user else 0
+    context = _get_ai_context(message.chat.id, user_id)
+    reply = await ai_client.assistant_reply(text, context)
+    _remember_ai_exchange(message.chat.id, user_id, text, reply)
     await message.reply(reply)
 
 
@@ -655,7 +677,11 @@ async def mention_help(message: Message, bot: Bot) -> None:
         logger.info("HANDLER: mention_help MATCH by id")
     text = _get_message_text(message) or ""
     ai_client = get_ai_client()
-    reply = await ai_client.assistant_reply(text, [])
+    user = message.from_user
+    user_id = user.id if user else 0
+    context = _get_ai_context(message.chat.id, user_id)
+    reply = await ai_client.assistant_reply(text, context)
+    _remember_ai_exchange(message.chat.id, user_id, text, reply)
     await message.reply(reply)
     logger.info("OUT: MENTION_REPLY_AI")
 
