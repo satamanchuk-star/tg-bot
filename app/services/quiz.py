@@ -7,7 +7,7 @@ import random
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import QuizQuestion, QuizSession, QuizUsedQuestion, QuizUserStat, UserStat

@@ -88,6 +88,21 @@ pip install -r requirements.txt
 python -m app.main
 ```
 
+## Почему бот может не запускаться
+
+1. Не заполнен `.env` (минимум `BOT_TOKEN`, `FORUM_CHAT_ID`, `ADMIN_LOG_CHAT_ID`).
+2. Бот был остановлен командой `/shutdown_bot` и остался файл-флаг `.stopped` в каталоге данных (`/app/data` или рядом с SQLite-файлом из `DATABASE_URL`).
+3. Неверный `BOT_TOKEN` или нет доступа к Telegram API (на старте есть 3 попытки `get_me`).
+
+Быстрая самопроверка:
+
+```bash
+cp .env.example .env
+# заполните обязательные поля и перезапустите
+python -m app.main
+```
+
+
 ## Викторина: загрузка вопросов
 
 Команда `/load_quiz` загружает вопросы из файла `viktorinavopros_QA.xlsx` в корне проекта.

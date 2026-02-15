@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from xml.etree import ElementTree
 from zipfile import ZipFile
@@ -15,6 +16,8 @@ from app.models import QuizQuestion
 QUIZ_XLSX_PATH = Path(__file__).resolve().parents[2] / "viktorinavopros_QA.xlsx"
 QUIZ_TEXT_PATH = Path(__file__).resolve().parents[1] / "data" / "quiz_questions.txt"
 _NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+
+logger = logging.getLogger(__name__)
 
 
 def _read_text_questions(path: Path) -> list[tuple[str, str]]:
@@ -86,7 +89,11 @@ async def sync_questions_from_xlsx(session: AsyncSession) -> tuple[int, int]:
     if not QUIZ_XLSX_PATH.exists():
         return 0, 0
 
-    source = _read_xlsx_questions(QUIZ_XLSX_PATH)
+    try:
+        source = _read_xlsx_questions(QUIZ_XLSX_PATH)
+    except Exception:  # noqa: BLE001 - битый/неполный XLSX не должен валить бота
+        logger.exception("Не удалось прочитать XLSX-файл викторины: %s", QUIZ_XLSX_PATH)
+        return 0, 0
     unique: list[tuple[str, str]] = []
     seen: set[str] = set()
     for question, answer in source:
