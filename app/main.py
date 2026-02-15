@@ -39,13 +39,8 @@ from app.services.games import (
 )
 from app.services.health import get_health_state, update_heartbeat, update_notice
 from app.utils.time import now_tz
-from app.services.ai_module import close_ai_client, get_ai_client, set_ai_admin_notifier
-from app.services.ai_usage import clear_old_usage
-from app.services.daily_summary import (
-    build_ai_summary_context,
-    build_daily_summary,
-    render_daily_summary,
-)
+from app.services.ai_module import close_ai_client, set_ai_admin_notifier
+from app.services.daily_summary import build_daily_summary, render_daily_summary
 
 logging.basicConfig(
     level=logging.INFO,
@@ -177,21 +172,9 @@ async def send_daily_summary(bot: Bot) -> None:
     async for session in get_session():
         summary = await build_daily_summary(session, settings.forum_chat_id)
     stats_text = render_daily_summary(summary)
-    ai_context = build_ai_summary_context(summary)
-    ai_summary_text = await get_ai_client().generate_daily_summary(
-        ai_context,
-        chat_id=settings.forum_chat_id,
-    )
-    if not ai_summary_text:
-        ai_summary_text = "AI-резюме недоступно (причина: отключено, лимит или ошибка AI)."
 
     for attempt in range(1, 4):
         try:
-            await bot.send_message(
-                target_chat_id,
-                f"AI-резюме дня:\n{ai_summary_text}",
-                message_thread_id=target_thread_id,
-            )
             await bot.send_message(
                 target_chat_id,
                 stats_text,
@@ -206,13 +189,6 @@ async def send_daily_summary(bot: Bot) -> None:
                 )
                 return
             await asyncio.sleep(2)
-
-
-async def clear_ai_usage_job() -> None:
-    async for session in get_session():
-        deleted = await clear_old_usage(session)
-        if deleted:
-            logger.info("Очистка AI usage: удалено %s строк", deleted)
 
 
 
@@ -333,12 +309,6 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         args=[bot],
     )
     scheduler.add_job(
-        clear_ai_usage_job,
-        "cron",
-        hour=0,
-        minute=0,
-    )
-    scheduler.add_job(
         quiz.announce_quiz_soon,
         "cron",
         hour=19,
@@ -427,11 +397,6 @@ async def on_startup(bot: Bot) -> None:
             BotCommand(command="unban", description="Снять бан (реплай)"),
             BotCommand(command="strike", description="Добавить страйк (реплай)"),
             BotCommand(command="addcoins", description="Выдать монеты (реплай)"),
-            BotCommand(command="ai_on", description="Включить AI-функции"),
-            BotCommand(command="ai_off", description="Выключить AI-функции"),
-            BotCommand(command="ai_status", description="Статус AI и лимитов"),
-            BotCommand(command="ai_ping", description="Проверить AI endpoint"),
-            BotCommand(command="ai_reset", description="Сбросить дневные AI лимиты"),
             BotCommand(command="bal", description="Добавить балл викторины (реплай)"),
             BotCommand(
                 command="umnij_start", description="Запустить викторину вручную"

@@ -224,7 +224,7 @@ async def ai_on(message: Message, bot: Bot) -> None:
     if not await _ensure_admin(message, bot):
         return
     set_ai_runtime_enabled(True)
-    await message.reply("ИИ-функции включены: модерация, /ai, ответы на упоминания и оценка викторины.")
+    await message.reply("Режим ИИ пока в заглушке. Архитектура подготовлена, но активен локальный режим.")
 
 
 @router.message(Command("ai_off"))
@@ -232,18 +232,15 @@ async def ai_off(message: Message, bot: Bot) -> None:
     if not await _ensure_admin(message, bot):
         return
     set_ai_runtime_enabled(False)
-    await message.reply("ИИ-функции выключены. Бот перешёл на локальные fallback-правила.")
+    await message.reply("Локальный режим уже активен. Реальный ИИ-провайдер пока не подключен.")
 
 
 @router.message(Command("ai_status"))
 async def ai_status(message: Message, bot: Bot) -> None:
     if not await _ensure_admin(message, bot):
         return
-    status = "включены" if is_ai_runtime_enabled() else "выключены"
+    status = "запрошено включение" if is_ai_runtime_enabled() else "выключен"
     req_used, tok_used = await get_ai_usage_for_today(settings.forum_chat_id)
-    req_left = max(0, settings.ai_daily_request_limit - req_used)
-    tok_left = max(0, settings.ai_daily_token_limit - tok_used)
-    reset_in = next_reset_delta()
     runtime = get_ai_runtime_status()
     last_error = runtime.last_error or "нет"
     if runtime.last_error_at:
@@ -251,12 +248,11 @@ async def ai_status(message: Message, bot: Bot) -> None:
 
     await message.reply(
         "Статус AI:\n"
-        f"• Runtime: {status}\n"
-        f"• Endpoint: {settings.ai_api_url or 'не задан'}\n"
-        f"• Лимит запросов/сутки: {settings.ai_daily_request_limit} (использовано {req_used}, осталось {req_left})\n"
-        f"• Лимит токенов/сутки: {settings.ai_daily_token_limit} (использовано {tok_used}, осталось {tok_left})\n"
-        f"• До сброса лимитов: {reset_in}\n"
-        f"• Последняя ошибка: {last_error}"
+        "• Провайдер: STUB (без внешних запросов)\n"
+        f"• Runtime флаг: {status}\n"
+        f"• Usage сегодня: запросы={req_used}, токены={tok_used}\n"
+        f"• До сброса лимитов: {next_reset_delta()}\n"
+        f"• Последний статус: {last_error}"
     )
 
 
@@ -265,8 +261,8 @@ async def ai_ping(message: Message, bot: Bot) -> None:
     if not await _ensure_admin(message, bot):
         return
     result = await get_ai_client().probe()
-    status = "✅ AI работает" if result.ok else "❌ AI недоступен"
-    await message.reply(f"{status}\nLatency: {result.latency_ms} ms\n{result.details}")
+    status = "✅" if result.ok else "⚠️"
+    await message.reply(f"{status} {result.details}\nLatency: {result.latency_ms} ms")
 
 
 @router.message(Command("ai_reset"))
@@ -275,7 +271,7 @@ async def ai_reset(message: Message, bot: Bot) -> None:
         return
     async for session in get_session():
         deleted = await reset_ai_usage(session)
-    await message.reply(f"AI usage сброшен. Удалено записей: {deleted}.")
+    await message.reply(f"Счётчики AI usage очищены (на будущее). Удалено записей: {deleted}.")
 
 @router.message(Command("reload_profanity"))
 async def reload_profanity(message: Message, bot: Bot) -> None:

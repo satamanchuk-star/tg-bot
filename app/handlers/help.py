@@ -22,7 +22,6 @@ from aiogram.types import (
 from app.config import settings
 from app.utils.admin import is_admin
 from app.utils.admin_help import ADMIN_HELP
-from app.services.ai_module import get_ai_client
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -55,10 +54,7 @@ class BotMentionFilter(BaseFilter):
 
 
 HELP_MENU_TEXT = (
-    "Я подсказываю, где обсуждать вопросы, и умею ИИ-функции:\n"
-    "• /ai <вопрос> — короткий ИИ-ответ по темам ЖК;\n"
-    "• ответы на упоминания бота;\n"
-    "• ИИ-оценка ответов в викторине по контексту.\n\n"
+    "Я подсказываю, где обсуждать вопросы, и отвечаю на упоминания.\n\n"
     "Выберите тему форума или воспользуйтесь советником «Куда писать?»."
 )
 HELP_WAIT_TEXT = (
@@ -123,6 +119,13 @@ CALLBACK_TOPIC = f"{CALLBACK_PREFIX}:topic"
 WAITING_TIMEOUT = timedelta(minutes=2)
 HINT_COOLDOWN = timedelta(seconds=30)
 HELP_DELETE_TIMEOUT = timedelta(minutes=2)
+MENTION_QUEUE: deque[str] = deque(MENTION_REPLIES)
+
+
+def _next_mention_reply() -> str:
+    value = MENTION_QUEUE[0]
+    MENTION_QUEUE.rotate(-1)
+    return value
 
 
 @dataclass
@@ -653,17 +656,7 @@ async def help_topic(callback: CallbackQuery) -> None:
 
 @router.message(Command("ai"), flags={"block": False})
 async def ai_command(message: Message) -> None:
-    text = (message.text or "").removeprefix("/ai").strip()
-    if not text:
-        await message.reply("Напишите запрос после /ai, например: /ai как корректно написать жалобу по подъезду")
-        return
-    ai_client = get_ai_client()
-    user = message.from_user
-    user_id = user.id if user else 0
-    context = _get_ai_context(message.chat.id, user_id)
-    reply = await ai_client.assistant_reply(text, context, chat_id=message.chat.id)
-    _remember_ai_exchange(message.chat.id, user_id, text, reply)
-    await message.reply(reply)
+    await message.reply("Модуль ИИ временно отключен. Используйте /help для навигации по темам форума.")
 
 
 @router.message(BotMentionFilter(), flags={"block": False})
@@ -675,15 +668,8 @@ async def mention_help(message: Message, bot: Bot) -> None:
         logger.info(f"HANDLER: mention_help MATCH @{username}")
     else:
         logger.info("HANDLER: mention_help MATCH by id")
-    text = _get_message_text(message) or ""
-    ai_client = get_ai_client()
-    user = message.from_user
-    user_id = user.id if user else 0
-    context = _get_ai_context(message.chat.id, user_id)
-    reply = await ai_client.assistant_reply(text, context, chat_id=message.chat.id)
-    _remember_ai_exchange(message.chat.id, user_id, text, reply)
-    await message.reply(reply)
-    logger.info("OUT: MENTION_REPLY_AI")
+    await message.reply(_next_mention_reply())
+    logger.info("OUT: MENTION_REPLY_LOCAL")
 
 
 @router.message(HelpRoutingActiveFilter(), flags={"block": False})
