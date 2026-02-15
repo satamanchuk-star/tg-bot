@@ -59,14 +59,22 @@ def _admin_id(message: Message) -> str:
 
 async def _ensure_admin(message: Message, bot: Bot) -> bool:
     if message.from_user is None:
-        if message.sender_chat and message.sender_chat.id == settings.forum_chat_id:
+        if message.sender_chat and message.sender_chat.id in {
+            settings.forum_chat_id,
+            settings.admin_log_chat_id,
+        }:
             return True
         return False
-    try:
-        return await is_admin(bot, settings.forum_chat_id, message.from_user.id)
-    except Exception:  # noqa: BLE001 - не выдаём доступ при ошибке проверки
-        logger.exception("Не удалось проверить права администратора.")
-        return False
+
+    for chat_id in (settings.forum_chat_id, settings.admin_log_chat_id):
+        try:
+            if await is_admin(bot, chat_id, message.from_user.id):
+                return True
+        except Exception:  # noqa: BLE001 - не выдаём доступ на ошибке конкретного чата
+            logger.exception(
+                "Не удалось проверить права администратора в чате %s.", chat_id
+            )
+    return False
 
 
 @router.message(Command("admin"))

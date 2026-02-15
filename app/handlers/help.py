@@ -28,6 +28,7 @@ from app.utils.admin_help import ADMIN_HELP
 logger = logging.getLogger(__name__)
 router = Router()
 _BOT_PROFILE_CACHE: User | None = None
+_ASSISTANT_CHAT_IDS = {settings.forum_chat_id, settings.admin_log_chat_id}
 
 
 async def _get_bot_profile(bot: Bot) -> User:
@@ -693,8 +694,8 @@ async def help_topic(callback: CallbackQuery) -> None:
 
 @router.message(Command("ai"), flags={"block": False})
 async def ai_command(message: Message) -> None:
-    if message.chat.id != settings.forum_chat_id:
-        await message.reply("Команда /ai работает только в форуме ЖК.")
+    if message.chat.id not in _ASSISTANT_CHAT_IDS:
+        await message.reply("Команда /ai работает только в форуме ЖК и чате логов.")
         return
     if message.from_user is None or message.from_user.is_bot:
         return
@@ -721,7 +722,7 @@ async def mention_help(message: Message, bot: Bot) -> None:
         logger.info(f"HANDLER: mention_help MATCH @{username}")
     else:
         logger.info("HANDLER: mention_help MATCH by id")
-    if message.chat.id != settings.forum_chat_id:
+    if message.chat.id not in _ASSISTANT_CHAT_IDS:
         return
     if message.from_user is None:
         return
