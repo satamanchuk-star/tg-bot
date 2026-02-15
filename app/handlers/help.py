@@ -17,6 +17,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
     MessageEntity,
+    User,
 )
 
 from app.config import settings
@@ -26,6 +27,16 @@ from app.utils.admin_help import ADMIN_HELP
 
 logger = logging.getLogger(__name__)
 router = Router()
+_BOT_PROFILE_CACHE: User | None = None
+
+
+async def _get_bot_profile(bot: Bot) -> User:
+    """Почему: снижаем число вызовов Telegram API при частых упоминаниях."""
+
+    global _BOT_PROFILE_CACHE
+    if _BOT_PROFILE_CACHE is None:
+        _BOT_PROFILE_CACHE = await bot.get_me()
+    return _BOT_PROFILE_CACHE
 
 
 class HelpRoutingActiveFilter(BaseFilter):
@@ -50,7 +61,7 @@ class BotMentionFilter(BaseFilter):
         entities = _get_message_entities(message)
         if not text and not entities:
             return False
-        me = await bot.get_me()
+        me = await _get_bot_profile(bot)
         return _is_bot_mentioned(message, me) or _is_bot_name_called(text, me)
 
 
@@ -704,7 +715,7 @@ async def ai_command(message: Message) -> None:
 @router.message(BotMentionFilter(), flags={"block": False})
 async def mention_help(message: Message, bot: Bot) -> None:
     logger.info(f"HANDLER: mention_help called, text={message.text!r}")
-    me = await bot.get_me()
+    me = await _get_bot_profile(bot)
     username = getattr(me, "username", None)
     if username:
         logger.info(f"HANDLER: mention_help MATCH @{username}")
