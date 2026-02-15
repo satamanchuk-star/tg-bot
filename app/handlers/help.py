@@ -69,6 +69,7 @@ HELP_TIMEOUT_TEXT = (
 HELP_RATE_LIMIT_TEXT = (
     "Подсказки слишком частые. Пожалуйста, подождите 30 секунд и попробуйте снова."
 )
+AI_RATE_LIMIT_TEXT = "Слишком часто 🙌 Подождите 20 секунд и повторите вопрос."
 
 MENTION_REPLIES = [
     "Я тут, на посту! Проверяю, чтобы котики не получили бан по ошибке.",
@@ -682,6 +683,7 @@ async def help_topic(callback: CallbackQuery) -> None:
 @router.message(Command("ai"), flags={"block": False})
 async def ai_command(message: Message) -> None:
     if message.chat.id != settings.forum_chat_id:
+        await message.reply("Команда /ai работает только в форуме ЖК.")
         return
     if message.from_user is None or message.from_user.is_bot:
         return
@@ -714,6 +716,7 @@ async def mention_help(message: Message, bot: Bot) -> None:
         return
     if _is_ai_reply_rate_limited(message.chat.id, message.from_user.id):
         logger.info("OUT: MENTION_REPLY_SKIPPED_RATE_LIMIT")
+        await message.reply(AI_RATE_LIMIT_TEXT)
         return
 
     prompt = _extract_ai_prompt(message)
