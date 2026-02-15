@@ -2,13 +2,46 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Awaitable, Callable, Literal, Protocol
 
+import httpx
+
+from app.config import settings
+from app.db import get_session
+from app.services.ai_usage import add_usage, can_consume_ai, get_usage_stats
+from app.utils.time import now_tz
+
 logger = logging.getLogger(__name__)
+
+_MODERATION_SYSTEM_PROMPT = (
+    "Верни только JSON без дополнительного текста: "
+    '{"violation_type":"none|profanity|rude|aggression","severity":0-3,'
+    '"confidence":0..1,"action":"none|warn|delete_warn|delete_strike"}. '
+    "Правила: учитывай замаскированный мат, оскорбления и агрессию; "
+    "не выдумывай факты; при сомнении выбирай более мягкое действие."
+)
+
+_ASSISTANT_SYSTEM_PROMPT = (
+    "Ты виртуальный сосед-помощник в чате ЖК. Отвечай так, как живой человек: "
+    "по-человечески, с эмпатией, без канцелярита и без упоминания, что ты ИИ. "
+    "Пиши на русском, кратко (до 800 символов, обычно 2-5 предложений), "
+    "можно 1 уместный эмодзи, без таблиц и длинных списков. "
+    "Базовые ограничения: не помогай с политикой, религией, нацконфликтами, "
+    "медицинскими назначениями, юридическими консультациями, финансовыми советами, "
+    "сбором персональных данных. Если запрос вне рамок — вежливо откажи и предложи "
+    "безопасную альтернативу по теме ЖК/быта."
+)
+
+_DAILY_SUMMARY_SYSTEM_PROMPT = (
+    "Сформируй краткую сводку для админов чата ЖК на русском: до 800 символов, "
+    "без таблиц, без персональных данных, нейтрально и по фактам."
+)
 
 _USER_FALLBACK = "Модуль ИИ в подготовке, работает локальный режим."
 
@@ -156,6 +189,174 @@ class StubAiProvider:
         return None
 
 
+class OpenRouterProvider:
+    """Почему: подключаем реальный ИИ через API без изменения публичных интерфейсов бота."""
+
+    def __init__(self) -> None:
+        base_url = settings.ai_api_url or "https://openrouter.ai/api/v1"
+        self._client = httpx.AsyncClient(
+            base_url=base_url.rstrip("/"),
+            timeout=httpx.Timeout(settings.ai_timeout_seconds),
+        )
+        self._model = settings.ai_model
+        self._retries = max(0, settings.ai_retries)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def _chat_completion(self, messages: list[dict[str, str]], *, chat_id: int) -> tuple[str, int]:
+        if not settings.ai_key:
+            raise RuntimeError("AI_KEY не задан")
+        allowed, reason = await _can_use_remote_ai(chat_id)
+        if not allowed:
+            raise RuntimeError(f"AI лимит: {reason or 'превышен'}")
+
+        payload = {
+            "model": self._model,
+            "temperature": 0.2,
+            "messages": messages,
+        }
+        headers = {
+            "Authorization": f"Bearer {settings.ai_key}",
+            "Content-Type": "application/json",
+        }
+
+        for attempt in range(self._retries + 1):
+            try:
+                response = await self._client.post("/chat/completions", json=payload, headers=headers)
+                if response.status_code >= 500 and attempt < self._retries:
+                    continue
+                response.raise_for_status()
+                data = response.json()
+                content = str(data["choices"][0]["message"]["content"])
+                tokens = int(data.get("usage", {}).get("total_tokens") or 0)
+                await _add_remote_usage(chat_id, tokens)
+                return content, tokens
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                if attempt >= self._retries:
+                    raise RuntimeError("Сбой соединения с AI API") from exc
+            except (ValueError, KeyError, TypeError) as exc:
+                raise RuntimeError("Некорректный ответ AI API") from exc
+        raise RuntimeError("AI API недоступен")
+
+    async def probe(self) -> AiProbeResult:
+        started = time.perf_counter()
+        try:
+            _, _ = await self._chat_completion(
+                [
+                    {"role": "system", "content": "Ответь одним словом: ok"},
+                    {"role": "user", "content": "ping"},
+                ],
+                chat_id=settings.forum_chat_id,
+            )
+            latency = int((time.perf_counter() - started) * 1000)
+            return AiProbeResult(True, "AI API доступен.", latency)
+        except RuntimeError as exc:
+            latency = int((time.perf_counter() - started) * 1000)
+            return AiProbeResult(False, str(exc), latency)
+
+    def _record_runtime_error(self, error: Exception) -> None:
+        global _LAST_ERROR, _LAST_ERROR_AT
+        _LAST_ERROR = str(error)
+        _LAST_ERROR_AT = datetime.utcnow()
+
+    async def moderate(self, text: str, *, chat_id: int) -> ModerationDecision:
+        try:
+            content, _ = await self._chat_completion(
+                [
+                    {"role": "system", "content": _MODERATION_SYSTEM_PROMPT},
+                    {"role": "user", "content": text[:2000]},
+                ],
+                chat_id=chat_id,
+            )
+            data = json.loads(content)
+            violation_type = str(data.get("violation_type", "none"))
+            action = str(data.get("action", "none"))
+            severity = int(data.get("severity", 0))
+            confidence = float(data.get("confidence", 0.5))
+            if violation_type not in {"none", "profanity", "rude", "aggression"}:
+                violation_type = "none"
+            if action not in {"none", "warn", "delete_warn", "delete_strike"}:
+                action = "none"
+            severity = max(0, min(3, severity))
+            confidence = max(0.0, min(1.0, confidence))
+            return ModerationDecision(violation_type, severity, confidence, action, False)
+        except (RuntimeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            self._record_runtime_error(exc)
+            decision = local_moderation(text)
+            decision.used_fallback = True
+            return decision
+
+    async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int) -> str:
+        safe_prompt = mask_personal_data(prompt)[:1000]
+        if not is_assistant_topic_allowed(safe_prompt):
+            return "С этим лучше к профильному специалисту 🙌 Я тут больше про жизнь дома."
+        context_text = "\n".join(context[-20:])
+        try:
+            content, _ = await self._chat_completion(
+                [
+                    {"role": "system", "content": _ASSISTANT_SYSTEM_PROMPT},
+                    {"role": "user", "content": f"Контекст:\n{context_text}\n\nВопрос:\n{safe_prompt}"},
+                ],
+                chat_id=chat_id,
+            )
+            return content[:800]
+        except RuntimeError as exc:
+            self._record_runtime_error(exc)
+            return build_local_assistant_reply(safe_prompt)
+
+    async def evaluate_quiz_answer(
+        self,
+        question: str,
+        correct_answer: str,
+        user_answer: str,
+        *,
+        chat_id: int,
+    ) -> QuizAnswerDecision:
+        try:
+            content, _ = await self._chat_completion(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Оцени ответ на вопрос викторины и верни только JSON: "
+                            '{"is_correct":bool,"is_close":bool,"confidence":0..1,"reason":"..."}'
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Вопрос: {question}\n"
+                            f"Эталон: {correct_answer}\n"
+                            f"Ответ пользователя: {user_answer}"
+                        )[:2500],
+                    },
+                ],
+                chat_id=chat_id,
+            )
+            data = json.loads(content)
+            return parse_quiz_answer_response(data)
+        except (RuntimeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            self._record_runtime_error(exc)
+            decision = local_quiz_answer_decision(correct_answer, user_answer)
+            decision.used_fallback = True
+            return decision
+
+    async def generate_daily_summary(self, context: str, *, chat_id: int) -> str | None:
+        try:
+            content, _ = await self._chat_completion(
+                [
+                    {"role": "system", "content": _DAILY_SUMMARY_SYSTEM_PROMPT},
+                    {"role": "user", "content": context[:4000]},
+                ],
+                chat_id=chat_id,
+            )
+            return content[:800]
+        except RuntimeError as exc:
+            self._record_runtime_error(exc)
+            return None
+
+
 class AiModuleClient:
     """Почему: фасад для будущего ИИ, чтобы точки интеграции не трогать повторно."""
 
@@ -163,7 +364,9 @@ class AiModuleClient:
         self._provider = provider or StubAiProvider()
 
     async def aclose(self) -> None:
-        return
+        close_method = getattr(self._provider, "aclose", None)
+        if callable(close_method):
+            await close_method()
 
     async def probe(self) -> AiProbeResult:
         return await self._provider.probe()
@@ -285,11 +488,36 @@ _LAST_ERROR: str | None = "stub_mode"
 _LAST_ERROR_AT: datetime | None = datetime.utcnow()
 
 
+async def _can_use_remote_ai(chat_id: int) -> tuple[bool, str | None]:
+    date_key = now_tz().date().isoformat()
+    async for session in get_session():
+        allowed, reason = await can_consume_ai(
+            session,
+            date_key=date_key,
+            chat_id=chat_id,
+            request_limit=settings.ai_daily_request_limit,
+            token_limit=settings.ai_daily_token_limit,
+        )
+        return allowed, reason
+    return False, "не удалось получить сессию БД"
+
+
+async def _add_remote_usage(chat_id: int, tokens: int) -> None:
+    date_key = now_tz().date().isoformat()
+    async for session in get_session():
+        await add_usage(session, date_key=date_key, chat_id=chat_id, tokens_used=tokens)
+        return
+
+
 def get_ai_runtime_status() -> AiRuntimeStatus:
     return AiRuntimeStatus(last_error=_LAST_ERROR, last_error_at=_LAST_ERROR_AT)
 
 
 async def get_ai_usage_for_today(chat_id: int) -> tuple[int, int]:
+    date_key = now_tz().date().isoformat()
+    async for session in get_session():
+        usage = await get_usage_stats(session, date_key=date_key, chat_id=chat_id)
+        return usage.requests_used, usage.tokens_used
     return 0, 0
 
 
@@ -309,9 +537,17 @@ def set_ai_runtime_enabled(value: bool) -> None:
 
 
 def get_ai_client() -> AiModuleClient:
+    global _LAST_ERROR, _LAST_ERROR_AT
     global _AI_CLIENT
     if _AI_CLIENT is None:
-        _AI_CLIENT = AiModuleClient()
+        if settings.ai_enabled and settings.ai_key:
+            _AI_CLIENT = AiModuleClient(OpenRouterProvider())
+            _LAST_ERROR = None
+            _LAST_ERROR_AT = None
+        else:
+            _AI_CLIENT = AiModuleClient()
+            _LAST_ERROR = "stub_mode"
+            _LAST_ERROR_AT = datetime.utcnow()
     return _AI_CLIENT
 
 

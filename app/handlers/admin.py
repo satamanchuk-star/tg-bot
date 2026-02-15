@@ -224,7 +224,7 @@ async def ai_on(message: Message, bot: Bot) -> None:
     if not await _ensure_admin(message, bot):
         return
     set_ai_runtime_enabled(True)
-    await message.reply("Режим ИИ пока в заглушке. Архитектура подготовлена, но активен локальный режим.")
+    await message.reply("Флаг runtime включен. При наличии AI_KEY бот будет использовать внешний AI-провайдер.")
 
 
 @router.message(Command("ai_off"))
@@ -232,7 +232,7 @@ async def ai_off(message: Message, bot: Bot) -> None:
     if not await _ensure_admin(message, bot):
         return
     set_ai_runtime_enabled(False)
-    await message.reply("Локальный режим уже активен. Реальный ИИ-провайдер пока не подключен.")
+    await message.reply("Runtime-флаг выключен. AI-функции будут работать через локальный fallback.")
 
 
 @router.message(Command("ai_status"))
@@ -246,9 +246,10 @@ async def ai_status(message: Message, bot: Bot) -> None:
     if runtime.last_error_at:
         last_error = f"{last_error} ({runtime.last_error_at.isoformat(timespec='seconds')} UTC)"
 
+    provider = "Remote API" if settings.ai_enabled and bool(settings.ai_key) else "STUB"
     await message.reply(
         "Статус AI:\n"
-        "• Провайдер: STUB (без внешних запросов)\n"
+        f"• Провайдер: {provider}\n"
         f"• Runtime флаг: {status}\n"
         f"• Usage сегодня: запросы={req_used}, токены={tok_used}\n"
         f"• До сброса лимитов: {next_reset_delta()}\n"
