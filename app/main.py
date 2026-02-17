@@ -137,6 +137,31 @@ async def init_db(async_engine: AsyncEngine) -> None:
                         )
                     )
 
+            # Миграция moderation_events
+            if inspector.has_table("moderation_events"):
+                columns = {
+                    column["name"]
+                    for column in inspector.get_columns("moderation_events")
+                }
+                if "message_id" not in columns:
+                    sync_conn.execute(
+                        text(
+                            "ALTER TABLE moderation_events ADD COLUMN message_id INTEGER"
+                        )
+                    )
+                if "reason" not in columns:
+                    sync_conn.execute(
+                        text(
+                            "ALTER TABLE moderation_events ADD COLUMN reason TEXT"
+                        )
+                    )
+                if "confidence" not in columns:
+                    sync_conn.execute(
+                        text(
+                            "ALTER TABLE moderation_events ADD COLUMN confidence REAL"
+                        )
+                    )
+
         await conn.run_sync(_ensure_columns)
 
 
@@ -415,8 +440,10 @@ async def on_startup(bot: Bot) -> None:
     get_ai_client()
     if settings.ai_enabled and settings.ai_key:
         ai_mode = f"AI: OpenRouter ({settings.ai_model})"
+    elif not settings.ai_enabled:
+        ai_mode = "AI: отключен (AI_ENABLED=false)"
     else:
-        ai_mode = "AI: отключен (stub)"
+        ai_mode = "AI: отключен (AI_KEY не задан)"
     logger.info("AI модуль: %s", ai_mode)
     await bot.send_message(
         settings.admin_log_chat_id,

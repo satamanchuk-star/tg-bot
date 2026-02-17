@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -155,6 +155,9 @@ class ModerationEvent(Base):
     user_id: Mapped[int] = mapped_column(Integer, index=True)
     event_type: Mapped[str] = mapped_column(String(20), index=True)
     severity: Mapped[int] = mapped_column(Integer, default=0)
+    message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True
     )

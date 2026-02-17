@@ -51,7 +51,15 @@ async def _store_message_log(message: Message, severity: int) -> None:
         await session.commit()
 
 
-async def _store_mod_event(chat_id: int, user_id: int, event_type: str, severity: int) -> None:
+async def _store_mod_event(
+    chat_id: int,
+    user_id: int,
+    event_type: str,
+    severity: int,
+    message_id: int | None = None,
+    reason: str | None = None,
+    confidence: float | None = None,
+) -> None:
     async for session in get_session():
         session.add(
             ModerationEvent(
@@ -59,6 +67,9 @@ async def _store_mod_event(chat_id: int, user_id: int, event_type: str, severity
                 user_id=user_id,
                 event_type=event_type,
                 severity=severity,
+                message_id=message_id,
+                reason=reason,
+                confidence=confidence,
             )
         )
         await session.commit()
@@ -69,70 +80,136 @@ async def send_rules(message: Message) -> None:
     await message.reply("Пожалуйста, прочитай правила в закрепленном сообщении.")
 
 
-@router.message(StateFilter(None), flags={"block": False})
-async def moderate_message(message: Message, bot: Bot) -> None:
-    """Модерация сообщений. Пропускает пользователей в FSM-состоянии (заполняют форму)."""
+async def run_moderation(message: Message, bot: Bot) -> bool:
+    """Проверяет сообщение на нарушения и применяет модерацию по severity.
+
+    severity 0 (L0): ничего
+    severity 1 (L1): мягкое предупреждение, без счётчика
+    severity 2 (L2): жёсткое предупреждение + счётчик +1, БЕЗ удаления
+    severity 3 (L3): удаление + счётчик +1 + немедленный мут + уведомление админа
+
+    Пороги счётчика: 3 → мут 24ч, 5 → бан.
+
+    Возвращает True, если сообщение было модерировано (severity >= 1).
+    """
     if message.chat.id != settings.forum_chat_id:
-        return
+        return False
     if message.from_user is None or message.text is None:
-        return
+        return False
     if await is_admin(bot, settings.forum_chat_id, message.from_user.id):
-        return
+        return False
 
     text = message.text
-    ai_client = get_ai_client()
-    decision = await ai_client.moderate(text, chat_id=message.chat.id)
-    await _store_message_log(message, decision.severity)
+    user_id = message.from_user.id
+    chat_id = message.chat.id
 
-    if decision.severity >= 1:
-        await _store_mod_event(message.chat.id, message.from_user.id, "warn", decision.severity)
-
-    if decision.action in {"delete_warn", "delete_strike"}:
-        await message.delete()
-        await _store_mod_event(message.chat.id, message.from_user.id, "delete", decision.severity)
-
-    if decision.action == "warn":
-        await _warn_user(message, "давайте мягче 🙂", bot)
-        return
-
-    if decision.action == "delete_warn":
-        await _warn_user(message, "сообщение убрал, держим тон спокойным.", bot)
-        return
-
-    if decision.action == "delete_strike":
-        async for session in get_session():
-            strike_count = await add_strike(session, message.from_user.id, settings.forum_chat_id)
-            await session.commit()
-        await _store_mod_event(message.chat.id, message.from_user.id, "strike", decision.severity)
-        await _warn_user(
-            message,
-            f"сообщение убрал, это уже страйк {strike_count}/3. Давайте без перегиба.",
-            bot,
-        )
-        if strike_count >= 3:
-            until = datetime.utcnow() + timedelta(hours=24)
-            permissions = ChatPermissions(can_send_messages=False)
-            await bot.restrict_chat_member(
-                settings.forum_chat_id,
-                message.from_user.id,
-                permissions=permissions,
-                until_date=until,
-            )
-            async for session in get_session():
-                await clear_strikes(session, message.from_user.id, settings.forum_chat_id)
-                await session.commit()
-            await _warn_user(message, "тут уже перебор — пауза в чате на 24 часа.", bot)
-        return
-
+    # Проверка запрещённых ссылок (до AI)
     if contains_forbidden_link(text):
         await message.delete()
         await _warn_user(message, "ссылки разрешены только в формате Telegram.", bot)
-        await _store_mod_event(message.chat.id, message.from_user.id, "delete", 1)
-        return
+        await _store_mod_event(chat_id, user_id, "delete", 1, message_id=message.message_id)
+        return True
 
+    ai_client = get_ai_client()
+    decision = await ai_client.moderate(text, chat_id=chat_id)
+    severity = decision.severity
+    violation_type = getattr(decision, "violation_type", None)
+    confidence = getattr(decision, "confidence", None)
+
+    await _store_message_log(message, severity)
+
+    # L0: ничего
+    if severity == 0:
+        # Flood-проверка (не связана с AI severity)
+        return await _check_flood(message, bot)
+
+    # L1: мягкое предупреждение, без счётчика
+    if severity == 1:
+        await _warn_user(message, "давайте мягче 🙂", bot)
+        return True
+
+    # L2: жёсткое предупреждение + счётчик +1, без удаления
+    if severity == 2:
+        async for session in get_session():
+            strike_count = await add_strike(session, user_id, settings.forum_chat_id)
+            await session.commit()
+        await _store_mod_event(
+            chat_id, user_id, "warn", severity,
+            message_id=message.message_id, reason=violation_type, confidence=confidence,
+        )
+        await _warn_user(
+            message,
+            f"это предупреждение ({strike_count}/3). Пожалуйста, соблюдайте правила.",
+            bot,
+        )
+        await _apply_strike_threshold(bot, message, user_id, strike_count)
+        return True
+
+    # L3: удаление + счётчик +1 + немедленный мут + уведомление админа
+    if severity >= 3:
+        await message.delete()
+        async for session in get_session():
+            strike_count = await add_strike(session, user_id, settings.forum_chat_id)
+            await session.commit()
+        await _store_mod_event(
+            chat_id, user_id, "delete", severity,
+            message_id=message.message_id, reason=violation_type, confidence=confidence,
+        )
+        # Немедленный мут 24ч
+        until = datetime.utcnow() + timedelta(hours=24)
+        permissions = ChatPermissions(can_send_messages=False)
+        await bot.restrict_chat_member(
+            settings.forum_chat_id,
+            user_id,
+            permissions=permissions,
+            until_date=until,
+        )
+        await _warn_user(message, "сообщение удалено, мут на 24 часа за грубое нарушение.", bot)
+        # Уведомление админа
+        mention = message.from_user.mention_html()
+        admin_text = (
+            f"🔴 L3 модерация\n"
+            f"Пользователь: {mention} (id={user_id})\n"
+            f"Причина: {violation_type or 'н/д'}\n"
+            f"Уверенность: {confidence or 'н/д'}\n"
+            f"Текст: {text[:200]}"
+        )
+        await bot.send_message(settings.admin_log_chat_id, admin_text, parse_mode="HTML")
+        await _apply_strike_threshold(bot, message, user_id, strike_count)
+        return True
+
+    return False
+
+
+async def _apply_strike_threshold(bot: Bot, message: Message, user_id: int, strike_count: int) -> None:
+    """Применяет мут/бан по порогам счётчика предупреждений."""
+    if strike_count >= 5:
+        # Бан
+        await bot.ban_chat_member(settings.forum_chat_id, user_id)
+        async for session in get_session():
+            await clear_strikes(session, user_id, settings.forum_chat_id)
+            await session.commit()
+        await _warn_user(message, "слишком много нарушений — бан.", bot)
+    elif strike_count >= 3:
+        # Мут 24ч
+        until = datetime.utcnow() + timedelta(hours=24)
+        permissions = ChatPermissions(can_send_messages=False)
+        await bot.restrict_chat_member(
+            settings.forum_chat_id,
+            user_id,
+            permissions=permissions,
+            until_date=until,
+        )
+        await _warn_user(message, "3 предупреждения — пауза в чате на 24 часа.", bot)
+
+
+async def _check_flood(message: Message, bot: Bot) -> bool:
+    """Flood-проверка (не связана с AI severity)."""
+    if message.from_user is None:
+        return False
     count = FLOOD_TRACKER.register(message.from_user.id, settings.forum_chat_id, datetime.utcnow())
     if count <= 10:
-        return
+        return False
 
     async for session in get_session():
         record = await session.get(
@@ -158,3 +235,10 @@ async def moderate_message(message: Message, bot: Bot) -> None:
     )
     await _warn_user(message, f"слишком частые сообщения. Мут на {mute_minutes} минут.", bot)
     await _store_mod_event(message.chat.id, message.from_user.id, "mute", 2)
+    return True
+
+
+@router.message(StateFilter(None), flags={"block": False})
+async def moderate_message(message: Message, bot: Bot) -> None:
+    """Модерация сообщений. Пропускает пользователей в FSM-состоянии (заполняют форму)."""
+    await run_moderation(message, bot)

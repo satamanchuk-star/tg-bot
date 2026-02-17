@@ -726,12 +726,21 @@ async def mention_help(message: Message, bot: Bot) -> None:
         return
     if message.from_user is None:
         return
+
+    # Проверяем модерацию перед ответом ассистента
+    prompt = _extract_ai_prompt(message)
+    if prompt:
+        from app.handlers.moderation import run_moderation
+
+        moderated = await run_moderation(message, bot)
+        if moderated:
+            return  # сообщение нарушает правила, ассистент не отвечает
+
     if _is_ai_reply_rate_limited(message.chat.id, message.from_user.id):
         logger.info("OUT: MENTION_REPLY_SKIPPED_RATE_LIMIT")
         await message.reply(AI_RATE_LIMIT_TEXT)
         return
 
-    prompt = _extract_ai_prompt(message)
     context = _get_ai_context(message.chat.id, message.from_user.id)
     if prompt:
         reply = await get_ai_client().assistant_reply(prompt, context, chat_id=message.chat.id)
