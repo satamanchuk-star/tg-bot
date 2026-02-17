@@ -9,6 +9,7 @@ services:
       - .env
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
+      - AI_KEY=${AI_KEY}
 
   watchtower:
     image: containrrr/watchtower

@@ -39,7 +39,7 @@ from app.services.games import (
 )
 from app.services.health import get_health_state, update_heartbeat, update_notice
 from app.utils.time import now_tz
-from app.services.ai_module import close_ai_client, set_ai_admin_notifier
+from app.services.ai_module import close_ai_client, get_ai_client, set_ai_admin_notifier
 from app.services.daily_summary import build_daily_summary, render_daily_summary
 
 logging.basicConfig(
@@ -411,9 +411,16 @@ async def on_startup(bot: Bot) -> None:
         ],
         scope=BotCommandScopeChatAdministrators(chat_id=settings.forum_chat_id),
     )
+    # Инициализируем AI-клиент и логируем режим работы
+    get_ai_client()
+    if settings.ai_enabled and settings.ai_key:
+        ai_mode = f"AI: OpenRouter ({settings.ai_model})"
+    else:
+        ai_mode = "AI: отключен (stub)"
+    logger.info("AI модуль: %s", ai_mode)
     await bot.send_message(
         settings.admin_log_chat_id,
-        f"🟢 Бот запущен\nВерсия: {settings.build_version}",
+        f"🟢 Бот запущен\nВерсия: {settings.build_version}\n{ai_mode}",
     )
 
 
