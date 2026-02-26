@@ -392,13 +392,19 @@ async def on_startup(bot: Bot) -> None:
         await bot.send_message(settings.admin_log_chat_id, f"⚠️ {text}")
 
     set_ai_admin_notifier(_admin_notifier)
+    telegram_available = False
     for attempt in range(1, 4):
         try:
             await bot.get_me()  # заполняет bot.me с информацией о боте
+            telegram_available = True
             break
         except TelegramNetworkError:
             if attempt >= 3:
-                raise
+                logger.warning(
+                    "Нет соединения с Telegram API после 3 попыток. "
+                    "Продолжаем запуск и передаём переподключение polling-циклу."
+                )
+                break
             logger.warning(
                 "Нет соединения с Telegram API, попытка %s/3. Повтор через 5 секунд.",
                 attempt,
@@ -413,29 +419,34 @@ async def on_startup(bot: Bot) -> None:
         except Exception:  # noqa: BLE001 - не останавливаем запуск из-за проблем с XLSX
             logger.exception("Не удалось загрузить вопросы викторины при старте.")
     await heartbeat_job(bot)
-    await bot.set_my_commands(
-        [
-            BotCommand(command="admin", description="Справка по админ-командам"),
-            BotCommand(command="mute", description="Мут пользователя (реплай)"),
-            BotCommand(command="unmute", description="Снять мут (реплай)"),
-            BotCommand(command="ban", description="Бан пользователя (реплай)"),
-            BotCommand(command="unban", description="Снять бан (реплай)"),
-            BotCommand(command="strike", description="Добавить страйк (реплай)"),
-            BotCommand(command="addcoins", description="Выдать монеты (реплай)"),
-            BotCommand(command="bal", description="Добавить балл викторины (реплай)"),
-            BotCommand(
-                command="umnij_start", description="Запустить викторину вручную"
-            ),
-            BotCommand(command="reload_profanity", description="Обновить список матов"),
-            BotCommand(command="load_quiz", description="Загрузить вопросы викторины"),
-            BotCommand(command="restart_jobs", description="Сбросить зависшие задачи"),
-            BotCommand(
-                command="reset_routing_state", description="Сбросить ожидание /help"
-            ),
-            BotCommand(command="shutdown_bot", description="Остановить бота"),
-        ],
-        scope=BotCommandScopeChatAdministrators(chat_id=settings.forum_chat_id),
-    )
+    if telegram_available:
+        await bot.set_my_commands(
+            [
+                BotCommand(command="admin", description="Справка по админ-командам"),
+                BotCommand(command="mute", description="Мут пользователя (реплай)"),
+                BotCommand(command="unmute", description="Снять мут (реплай)"),
+                BotCommand(command="ban", description="Бан пользователя (реплай)"),
+                BotCommand(command="unban", description="Снять бан (реплай)"),
+                BotCommand(command="strike", description="Добавить страйк (реплай)"),
+                BotCommand(command="addcoins", description="Выдать монеты (реплай)"),
+                BotCommand(command="bal", description="Добавить балл викторины (реплай)"),
+                BotCommand(
+                    command="umnij_start", description="Запустить викторину вручную"
+                ),
+                BotCommand(
+                    command="reload_profanity", description="Обновить список матов"
+                ),
+                BotCommand(command="load_quiz", description="Загрузить вопросы викторины"),
+                BotCommand(
+                    command="restart_jobs", description="Сбросить зависшие задачи"
+                ),
+                BotCommand(
+                    command="reset_routing_state", description="Сбросить ожидание /help"
+                ),
+                BotCommand(command="shutdown_bot", description="Остановить бота"),
+            ],
+            scope=BotCommandScopeChatAdministrators(chat_id=settings.forum_chat_id),
+        )
     # Инициализируем AI-клиент и логируем режим работы
     get_ai_client()
     if settings.ai_enabled and settings.ai_key:
@@ -445,10 +456,11 @@ async def on_startup(bot: Bot) -> None:
     else:
         ai_mode = "AI: отключен (AI_KEY не задан)"
     logger.info("AI модуль: %s", ai_mode)
-    await bot.send_message(
-        settings.admin_log_chat_id,
-        f"🟢 Бот запущен\nВерсия: {settings.build_version}\n{ai_mode}",
-    )
+    if telegram_available:
+        await bot.send_message(
+            settings.admin_log_chat_id,
+            f"🟢 Бот запущен\nВерсия: {settings.build_version}\n{ai_mode}",
+        )
 
 
 async def error_handler(event: ErrorEvent) -> bool:

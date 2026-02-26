@@ -44,6 +44,7 @@ class _DummyIncomingMessage:
         self.caption = None
         self.entities = None
         self.caption_entities = None
+        self.message_thread_id = None
         self.replies: list[str] = []
 
     async def reply(self, text: str) -> None:
@@ -57,6 +58,12 @@ class _DummyBotIdentity:
 class _DummyBot:
     async def get_me(self) -> _DummyBotIdentity:
         return _DummyBotIdentity()
+
+    async def get_chat_member(self, _chat_id: int, _user_id: int):
+        class _Member:
+            status = "member"
+
+        return _Member()
 
 
 def setup_function() -> None:
@@ -140,13 +147,17 @@ def test_ai_command_works_in_admin_log_chat(monkeypatch) -> None:
 
     assert message.replies == ["ok"]
 
-def test_mention_help_returns_rate_limit_message() -> None:
+def test_mention_help_returns_rate_limit_message(monkeypatch) -> None:
     message = _DummyIncomingMessage(
         chat_id=settings.forum_chat_id,
         user_id=100,
         text="@bot помоги",
     )
     LAST_AI_REPLY_TIME[(settings.forum_chat_id, 100)] = datetime.now(timezone.utc)
+    async def _moderation_stub(_message, _bot) -> bool:
+        return False
+
+    monkeypatch.setattr("app.handlers.moderation.run_moderation", _moderation_stub)
 
     asyncio.run(mention_help(message, _DummyBot()))
 
