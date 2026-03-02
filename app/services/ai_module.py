@@ -61,7 +61,9 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "безопасную альтернативу по теме ЖК/быта.\n\n"
     "ВАЖНО: если в контексте есть раздел «База знаний ЖК», используй информацию "
     "из него как основной источник для ответов. Эти сообщения — проверенный контекст "
-    "от жителей и администраторов ЖК."
+    "от жителей и администраторов ЖК. Если ответа в базе знаний нет, честно скажи, "
+    "что точной информации нет, и предложи следующий шаг в дружелюбном и слегка "
+    "шутливом тоне без выдумывания фактов."
 )
 
 _DAILY_SUMMARY_SYSTEM_PROMPT = (
@@ -628,8 +630,9 @@ def build_local_assistant_reply(prompt: str) -> str:
         return rule_reply
 
     return (
-        "Могу подсказать по жизни ЖК: правила, шлагбаум, шум, жалобы, парковка, сервис УК. "
-        "Напишите контекст (где/когда/что уже пробовали) — помогу составить точное сообщение без лишних эмоций."
+        "Пока не вижу точного ответа в базе знаний ЖК, но не бросаю вас наедине с квестом 🙂 "
+        "Опишите контекст (где/когда/что уже пробовали), и помогу собрать понятный вопрос "
+        "в нужную тему — так решение найдётся быстрее."
     )
 
 
@@ -678,12 +681,14 @@ def local_quiz_answer_decision(correct_answer: str, user_answer: str) -> QuizAns
 
 
 async def _get_rag_context(chat_id: int, query: str) -> str:
-    """Подгружает RAG-контекст из базы знаний."""
+    """Подгружает весь RAG-контекст, ранжируя его по релевантности запроса."""
     try:
-        from app.services.rag import search_rag, format_rag_context
+        from app.services.rag import format_rag_context, get_all_rag_messages, rank_rag_messages
+
         async for session in get_session():
-            results = await search_rag(session, chat_id, query, top_k=5)
-            return format_rag_context(results)
+            all_messages = await get_all_rag_messages(session, chat_id)
+            ranked = rank_rag_messages(all_messages, query=query)
+            return format_rag_context(ranked)
     except Exception as exc:
         logger.warning("RAG search failed: %s", exc)
     return ""

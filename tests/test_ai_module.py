@@ -87,15 +87,24 @@ def test_local_assistant_reply_handles_rules_and_mentions() -> None:
     assert "фактов" in reply.lower()
 
 
+
+
+def test_local_assistant_reply_unknown_question_is_friendly() -> None:
+    reply = build_local_assistant_reply("Где телепорт на Марс в нашем ЖК?")
+    assert "базе знаний" in reply.lower()
+    assert "🙂" in reply
+
+
 def test_assistant_prompt_has_human_style_and_limits() -> None:
     assert "как живой человек" in _ASSISTANT_SYSTEM_PROMPT
     assert "без упоминания, что ты ИИ" in _ASSISTANT_SYSTEM_PROMPT
     assert "до 800 символов" in _ASSISTANT_SYSTEM_PROMPT
+    assert "точной информации нет" in _ASSISTANT_SYSTEM_PROMPT
 
 
 def test_moderation_prompt_has_basic_safety_limits() -> None:
     assert "Верни только JSON" in _MODERATION_SYSTEM_PROMPT
-    assert "при сомнении выбирай более мягкое действие" in _MODERATION_SYSTEM_PROMPT
+    assert "При ЛЮБОМ сомнении" in _MODERATION_SYSTEM_PROMPT
 
 
 def test_openrouter_assistant_fallback_on_runtime_error(monkeypatch) -> None:
