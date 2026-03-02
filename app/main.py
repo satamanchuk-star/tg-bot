@@ -444,6 +444,9 @@ async def on_startup(bot: Bot) -> None:
                     command="reset_routing_state", description="Сбросить ожидание /help"
                 ),
                 BotCommand(command="shutdown_bot", description="Остановить бота"),
+                BotCommand(
+                    command="rag_bot", description="Добавить сообщение в базу знаний (реплай)"
+                ),
             ],
             scope=BotCommandScopeChatAdministrators(chat_id=settings.forum_chat_id),
         )

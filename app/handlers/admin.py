@@ -32,6 +32,7 @@ from app.services.ai_module import get_ai_client, is_ai_runtime_enabled, set_ai_
 from app.services.ai_module import get_ai_runtime_status, get_ai_usage_for_today
 from app.services.ai_module import get_ai_diagnostics
 from app.services.ai_usage import next_reset_delta, reset_ai_usage
+from app.services.rag import add_rag_message, get_rag_count
 from app.utils.profanity import load_profanity, load_profanity_exceptions
 
 router = Router()
@@ -479,6 +480,51 @@ async def restart_jobs(message: Message, bot: Bot, state: FSMContext) -> None:
         await message.reply(f"Очищено: {', '.join(cleared)}")
     else:
         await message.reply("Нет зависших задач.")
+
+
+@router.message(Command("rag_bot"))
+async def rag_bot_command(message: Message, bot: Bot) -> None:
+    """Добавляет сообщение (реплай) в RAG-базу знаний бота."""
+    if not await _ensure_admin(message, bot):
+        return
+
+    if message.reply_to_message is None:
+        await message.reply(
+            "Используйте /rag_bot как реплай на сообщение, "
+            "которое хотите добавить в базу знаний бота."
+        )
+        return
+
+    target_msg = message.reply_to_message
+    text = target_msg.text or target_msg.caption
+    if not text or len(text.strip()) < 10:
+        await message.reply("Сообщение слишком короткое или пустое для базы знаний.")
+        return
+
+    admin_id = int(_admin_id(message))
+    source_user_id = target_msg.from_user.id if target_msg.from_user else None
+
+    async for session in get_session():
+        await add_rag_message(
+            session,
+            chat_id=settings.forum_chat_id,
+            message_text=text.strip(),
+            added_by_user_id=admin_id,
+            source_user_id=source_user_id,
+            source_message_id=target_msg.message_id,
+        )
+        await session.commit()
+        count = await get_rag_count(session, settings.forum_chat_id)
+
+    await message.reply(
+        f"Сообщение добавлено в базу знаний бота.\n"
+        f"Всего записей в базе: {count}"
+    )
+    logger.info(
+        "RAG: админ %s добавил сообщение %s в базу знаний",
+        _admin_id(message),
+        target_msg.message_id,
+    )
 
 
 @router.message(Command("shutdown_bot"))

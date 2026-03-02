@@ -26,11 +26,28 @@ _QUIZ_SOFT_TIMEOUT_SECONDS = 12
 _SUMMARY_SOFT_TIMEOUT_SECONDS = 12
 
 _MODERATION_SYSTEM_PROMPT = (
-    "Верни только JSON без дополнительного текста: "
+    "Ты — модератор чата жилого комплекса (ЖК). Участники — соседи, общение неформальное.\n"
+    "Верни только JSON без дополнительного текста:\n"
     '{"violation_type":"none|profanity|rude|aggression","severity":0-3,'
-    '"confidence":0..1,"action":"none|warn|delete_warn|delete_strike"}. '
-    "Правила: учитывай замаскированный мат, оскорбления и агрессию; "
-    "не выдумывай факты; при сомнении выбирай более мягкое действие."
+    '"confidence":0..1,"action":"none|warn|delete_warn|delete_strike"}.\n\n'
+    "ГЛАВНОЕ ПРАВИЛО: анализируй КОНТЕКСТ и НАМЕРЕНИЕ сообщения, а не отдельные слова.\n"
+    "Матерные и грубые слова в дружеском или нейтральном контексте — НЕ нарушение.\n"
+    "Например: «блин, опять лифт сломался» или «ну нифига себе цены» — это severity 0.\n"
+    "Лёгкая грубость в бытовом общении между соседями — НЕ повод для наказания.\n\n"
+    "Удаление и бан ТОЛЬКО за:\n"
+    "- Прямые оскорбления конкретного человека с агрессией (severity 3)\n"
+    "- Угрозы физической расправой (severity 3)\n"
+    "- Доксинг — публикация чужих персональных данных (severity 3)\n"
+    "- Целенаправленная травля или буллинг (severity 3)\n"
+    "- Спам и реклама (severity 2)\n\n"
+    "НЕ наказывай за:\n"
+    "- Мат без агрессии и без адресата (бытовой мат): severity 0\n"
+    "- Эмоциональные высказывания без оскорблений конкретных людей: severity 0\n"
+    "- Жалобы на соседей, УК, сервисы (даже в грубой форме): severity 0\n"
+    "- Сарказм и ирония: severity 0\n"
+    "- Грубоватый юмор: severity 0\n\n"
+    "При ЛЮБОМ сомнении — severity 0 (не наказывать). "
+    "Лучше пропустить 10 грубых сообщений, чем наказать 1 невиновного."
 )
 
 _ASSISTANT_SYSTEM_PROMPT = (
@@ -41,7 +58,10 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "Базовые ограничения: не помогай с политикой, религией, нацконфликтами, "
     "медицинскими назначениями, юридическими консультациями, финансовыми советами, "
     "сбором персональных данных. Если запрос вне рамок — вежливо откажи и предложи "
-    "безопасную альтернативу по теме ЖК/быта."
+    "безопасную альтернативу по теме ЖК/быта.\n\n"
+    "ВАЖНО: если в контексте есть раздел «База знаний ЖК», используй информацию "
+    "из него как основной источник для ответов. Эти сообщения — проверенный контекст "
+    "от жителей и администраторов ЖК."
 )
 
 _DAILY_SUMMARY_SYSTEM_PROMPT = (
@@ -92,14 +112,20 @@ _FORBIDDEN_ASSISTANT_TOPICS = (
     "email",
 )
 _RUDE_PATTERNS = (
-    "заткни",
+    "убью",
+    "убить",
+    "сдохни",
+    "уничтож",
+    "калечить",
+)
+_AGGRESSIVE_INSULT_PATTERNS = (
     "идиот",
-    "туп",
     "дебил",
-    "ненавиж",
-    "пошел",
-    "отвали",
-    "замолчи",
+    "даун",
+    "уродин",
+    "мразь",
+    "тварь",
+    "ублюд",
 )
 _LATIN_TO_CYR = str.maketrans({
     "a": "а",
@@ -323,10 +349,17 @@ class OpenRouterProvider:
         if not is_assistant_topic_allowed(safe_prompt):
             return "С этим лучше к профильному специалисту 🙌 Я тут больше про жизнь дома."
         context_text = "\n".join(context[-20:])
+
+        # Подгружаем RAG-контекст из базы знаний
+        rag_text = await _get_rag_context(chat_id, safe_prompt)
+        system_prompt = _ASSISTANT_SYSTEM_PROMPT
+        if rag_text:
+            system_prompt += f"\n\nБаза знаний ЖК:\n{rag_text}"
+
         try:
             content, _ = await self._chat_completion(
                 [
-                    {"role": "system", "content": _ASSISTANT_SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Контекст:\n{context_text}\n\nВопрос:\n{safe_prompt}"},
                 ],
                 chat_id=chat_id,
@@ -471,13 +504,40 @@ class AiModuleClient:
             return None
 
 
+def _has_aggressive_target(text: str) -> bool:
+    """Проверяет, направлена ли грубость на конкретного человека."""
+    lowered = text.lower()
+    target_markers = ("ты ", "тебя ", "тебе ", "вы ", "вас ", "вам ", "@")
+    return any(marker in lowered for marker in target_markers)
+
+
 def local_moderation(text: str) -> ModerationDecision:
     normalized = normalize_for_profanity(text)
-    if detect_profanity(normalized):
-        return ModerationDecision("profanity", 3, 0.95, "delete_strike", False)
     lowered = text.lower()
+
+    # Угрозы физической расправой — всегда severity 3
     if any(pattern in lowered for pattern in _RUDE_PATTERNS):
-        return ModerationDecision("rude", 1, 0.8, "warn", False)
+        return ModerationDecision("aggression", 3, 0.9, "delete_strike", False)
+
+    has_profanity = detect_profanity(normalized)
+    has_insult = any(pattern in lowered for pattern in _AGGRESSIVE_INSULT_PATTERNS)
+
+    # Прямое оскорбление конкретного человека с матом — severity 3
+    if has_profanity and has_insult and _has_aggressive_target(text):
+        return ModerationDecision("aggression", 3, 0.85, "delete_strike", False)
+
+    # Прямое оскорбление с матом, направленное на человека — severity 2
+    if has_profanity and _has_aggressive_target(text):
+        return ModerationDecision("profanity", 2, 0.7, "delete_warn", False)
+
+    # Мат без агрессии и адресата (бытовой мат) — severity 0, не наказываем
+    if has_profanity:
+        return ModerationDecision("none", 0, 0.6, "none", False)
+
+    # Оскорбление без мата, направленное на человека — severity 1
+    if has_insult and _has_aggressive_target(text):
+        return ModerationDecision("rude", 1, 0.7, "warn", False)
+
     return ModerationDecision("none", 0, 0.99, "none", False)
 
 
@@ -615,6 +675,18 @@ def local_quiz_answer_decision(correct_answer: str, user_answer: str) -> QuizAns
     if ratio >= 0.3:
         return QuizAnswerDecision(False, True, 0.6, "частично близкий ответ", False)
     return QuizAnswerDecision(False, False, 0.2, "не совпадает", False)
+
+
+async def _get_rag_context(chat_id: int, query: str) -> str:
+    """Подгружает RAG-контекст из базы знаний."""
+    try:
+        from app.services.rag import search_rag, format_rag_context
+        async for session in get_session():
+            results = await search_rag(session, chat_id, query, top_k=5)
+            return format_rag_context(results)
+    except Exception as exc:
+        logger.warning("RAG search failed: %s", exc)
+    return ""
 
 
 _AI_CLIENT: AiModuleClient | None = None
