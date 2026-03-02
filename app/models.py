@@ -163,6 +163,20 @@ class ModerationEvent(Base):
     )
 
 
+class RagMessage(Base):
+    __tablename__ = "rag_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    message_text: Mapped[str] = mapped_column(Text)
+    added_by_user_id: Mapped[int] = mapped_column(Integer)
+    source_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
 class AiUsage(Base):
     __tablename__ = "ai_usage"
 
