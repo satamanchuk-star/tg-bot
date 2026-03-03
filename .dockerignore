@@ -2,6 +2,14 @@
 .gitignore
 *.pyc
 __pycache__
+.env
 .env.example
 *.md
 .claude
+tests/
+docs/
+scripts/
+*.sh
+*.bat
+docker-compose.yml
+.github/
