@@ -22,6 +22,23 @@ class Settings(BaseSettings):
     forum_chat_id: int
     admin_log_chat_id: int
     database_url: str = "sqlite+aiosqlite:///app/data/bot.db"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _fix_sqlite_relative_path(cls, value: object) -> object:
+        """В Docker WORKDIR=/app относительный путь app/data/ резолвится
+        в /app/app/data/, минуя том /app/data/. Конвертируем в абсолютный."""
+        if not isinstance(value, str):
+            return value
+        old = "sqlite+aiosqlite:///app/data/"
+        if not value.startswith(old):
+            return value
+        # Конвертируем только в Docker (WORKDIR=/app)
+        if Path.cwd() == Path("/app"):
+            new = "sqlite+aiosqlite:////app/data/"
+            return new + value[len(old):]
+        return value
+
     timezone: str = "Europe/Moscow"
     build_version: str = "dev"
     ai_enabled: bool = True
