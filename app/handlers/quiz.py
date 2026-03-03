@@ -97,6 +97,8 @@ async def announce_questions_left(bot: Bot) -> None:
     async for session in get_session():
         left = await get_questions_left(session)
         break
+    else:
+        return
     await bot.send_message(
         settings.forum_chat_id,
         f"До старта викторины 1 минута. В базе осталось вопросов: {left}.",
@@ -348,7 +350,12 @@ async def show_quiz_leaderboard(message: Message) -> None:
     await message.reply("\n".join(lines))
 
 
-@router.message(F.chat.id == settings.forum_chat_id, F.message_thread_id == settings.topic_games, (F.text | F.caption))
+@router.message(
+    F.chat.id == settings.forum_chat_id,
+    F.message_thread_id == settings.topic_games,
+    F.message_thread_id.is_not(None),
+    (F.text | F.caption),
+)
 async def check_quiz_answer(message: Message, bot: Bot) -> None:
     message_text = message.text or message.caption
     if not message_text or message_text.startswith("/") or message.from_user is None:
