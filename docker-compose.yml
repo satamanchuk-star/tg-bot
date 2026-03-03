@@ -7,11 +7,6 @@ services:
       - ./data:/app/data
     env_file:
       - .env
-    environment:
-      - BOT_TOKEN=${BOT_TOKEN}
-      - FORUM_CHAT_ID=${FORUM_CHAT_ID}
-      - ADMIN_LOG_CHAT_ID=${ADMIN_LOG_CHAT_ID}
-      - AI_KEY=${AI_KEY}
 
   watchtower:
     image: containrrr/watchtower
