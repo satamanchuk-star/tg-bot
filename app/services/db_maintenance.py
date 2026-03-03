@@ -21,7 +21,6 @@ async def cleanup_old_data(session: AsyncSession, *, now_utc: datetime | None = 
     now = now_utc or datetime.utcnow()
     logs_cutoff = now - timedelta(days=max(1, settings.db_logs_retention_days))
     stats_cutoff = now - timedelta(days=max(1, settings.db_stats_retention_days))
-    logs_cutoff_key = logs_cutoff.date().isoformat()
     stats_cutoff_key = stats_cutoff.date().isoformat()
 
     removed_message_logs = await _delete_and_count(
