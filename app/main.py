@@ -235,6 +235,10 @@ async def send_daily_summary(bot: Bot) -> None:
         target_chat_id = settings.admin_log_chat_id
     async for session in get_session():
         summary = await build_daily_summary(session, settings.forum_chat_id)
+        break
+    else:
+        logger.error("Не удалось получить сессию БД для ежедневной сводки.")
+        return
     stats_text = render_daily_summary(summary)
 
     for attempt in range(1, 4):
@@ -264,6 +268,10 @@ async def send_weekly_leaderboard(bot: Bot) -> None:
         top_coins, top_games = await get_weekly_leaderboard(
             session, settings.forum_chat_id
         )
+        break
+    else:
+        logger.error("Не удалось получить сессию БД для еженедельного рейтинга.")
+        return
     if not top_coins and not top_games:
         return
     lines = ["Еженедельный рейтинг игр:"]

@@ -594,7 +594,7 @@ def _is_bot_name_called(text: str | None, bot_user: object) -> bool:
     full_name = getattr(bot_user, "full_name", None)
     candidates = [name for name in (first_name, full_name) if name]
     for name in candidates:
-        pattern = rf"(?<!\\w){re.escape(str(name).casefold())}(?!\\w)"
+        pattern = rf"(?<!\w){re.escape(str(name).casefold())}(?!\w)"
         if re.search(pattern, lowered):
             return True
     return False
