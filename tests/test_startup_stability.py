@@ -7,7 +7,7 @@ import importlib
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db import Base
@@ -112,6 +112,68 @@ def test_main_does_not_raise_when_polling_network_error(monkeypatch) -> None:
 
             async def start_polling(self, _bot) -> None:
                 raise TelegramNetworkError(method="getMe", message="offline")
+
+        monkeypatch.setattr(main_module, "STOP_FLAG", Path("/tmp/nonexistent-flag"))
+        monkeypatch.setattr(main_module, "Bot", lambda *_a, **_k: bot)
+        monkeypatch.setattr(main_module, "Dispatcher", DummyDispatcher)
+        monkeypatch.setattr(main_module, "on_startup", AsyncMock())
+        monkeypatch.setattr(main_module, "schedule_jobs", AsyncMock(return_value=None))
+        monkeypatch.setattr(main_module, "close_ai_client", AsyncMock())
+
+        await main_module.main()
+
+        bot.session.close.assert_awaited_once()
+
+    asyncio.run(_run())
+
+
+def test_on_startup_does_not_crash_when_token_invalid(monkeypatch) -> None:
+    async def _run() -> None:
+        bot = AsyncMock()
+        bot.get_me.side_effect = TelegramUnauthorizedError(
+            method="getMe",
+            message="invalid token",
+        )
+
+        async def _empty_async_gen():
+            if False:
+                yield
+
+        monkeypatch.setattr("app.main.init_db", AsyncMock())
+        monkeypatch.setattr("app.main.get_session", _empty_async_gen)
+        monkeypatch.setattr("app.main.heartbeat_job", AsyncMock())
+        monkeypatch.setattr("app.main.get_ai_client", lambda: object())
+        monkeypatch.setattr("app.main.set_ai_admin_notifier", lambda _fn: None)
+
+        await on_startup(bot)
+
+        bot.set_my_commands.assert_not_called()
+        bot.send_message.assert_not_called()
+
+    asyncio.run(_run())
+
+
+def test_main_does_not_raise_when_polling_api_error(monkeypatch) -> None:
+    async def _run() -> None:
+        from app import main as main_module
+
+        bot = AsyncMock()
+        bot.session.close = AsyncMock()
+
+        class DummyDispatcher:
+            def __init__(self, *_args, **_kwargs) -> None:
+                update_obj = type("UpdateObj", (), {})()
+                update_obj.outer_middleware = lambda *_a, **_k: None
+                error_obj = type("ErrorObj", (), {})()
+                error_obj.register = lambda *_a, **_k: None
+                self.update = update_obj
+                self.error = error_obj
+
+            def include_router(self, *_args, **_kwargs) -> None:
+                return None
+
+            async def start_polling(self, _bot) -> None:
+                raise TelegramUnauthorizedError(method="getMe", message="invalid token")
 
         monkeypatch.setattr(main_module, "STOP_FLAG", Path("/tmp/nonexistent-flag"))
         monkeypatch.setattr(main_module, "Bot", lambda *_a, **_k: bot)
