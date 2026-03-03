@@ -24,17 +24,36 @@ jobs:
         id: sha
         run: echo "short=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: satamanchuk/alexbot:latest
-          platforms: linux/amd64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            BUILD_VERSION=#${{ github.run_number }} (${{ steps.sha.outputs.short }})
+      - name: Build and push with retry
+        env:
+          BUILD_VERSION: "#${{ github.run_number }} (${{ steps.sha.outputs.short }})"
+        run: |
+          set -euo pipefail
+
+          for attempt in 1 2; do
+            echo "Build attempt ${attempt}/2"
+
+            if docker buildx build \
+              --file Dockerfile \
+              --platform linux/amd64 \
+              --tag satamanchuk/alexbot:latest \
+              --push \
+              --cache-from type=gha \
+              --cache-to type=gha,mode=max \
+              --build-arg "BUILD_VERSION=${BUILD_VERSION}" \
+              .; then
+              echo "Build and push succeeded on attempt ${attempt}."
+              exit 0
+            fi
+
+            if [ "${attempt}" -eq 1 ]; then
+              echo "First attempt failed due to a transient error, retrying in 15 seconds..."
+              sleep 15
+            fi
+          done
+
+          echo "Build and push failed after 2 attempts."
+          exit 1
 
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.2.0
