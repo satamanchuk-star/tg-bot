@@ -21,6 +21,7 @@ from aiogram.types import (
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import Integer, inspect, text, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.config import settings
@@ -38,6 +39,7 @@ from app.services.games import (
     is_game_timed_out,
 )
 from app.services.health import get_health_state, update_heartbeat, update_notice
+from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
 from app.services.ai_module import close_ai_client, get_ai_client, set_ai_admin_notifier
 from app.services.daily_summary import build_daily_summary, render_daily_summary
@@ -77,14 +79,18 @@ class LoggingMiddleware(BaseMiddleware):
             ):
                 date_key = now_tz().date().isoformat()
                 async for session in get_session():
-                    await bump_topic_stat(
-                        session,
-                        settings.forum_chat_id,
-                        msg.message_thread_id,
-                        date_key,
-                        msg.text,
-                    )
-                    await session.commit()
+                    try:
+                        await bump_topic_stat(
+                            session,
+                            settings.forum_chat_id,
+                            msg.message_thread_id,
+                            date_key,
+                            msg.text,
+                        )
+                        await session.commit()
+                    except OperationalError as exc:
+                        logger.warning("Не удалось обновить статистику тем: %s", exc)
+                        await session.rollback()
         return await handler(event, data)
 
 
@@ -324,6 +330,23 @@ async def cleanup_blackjack_commands(bot: Bot) -> None:
             pass
 
 
+async def cleanup_database() -> None:
+    """Удаляет старые техданные и уменьшает размер SQLite-файла."""
+    stats: dict[str, int] | None = None
+    async for session in get_session():
+        stats = await cleanup_old_data(session)
+        await optimize_sqlite(session)
+    if stats is None:
+        return
+    logger.info(
+        "Очистка БД завершена: message_logs=%s moderation_events=%s topic_stats=%s ai_usage=%s",
+        stats["message_logs"],
+        stats["moderation_events"],
+        stats["topic_stats"],
+        stats["ai_usage"],
+    )
+
+
 async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
     scheduler.add_job(
@@ -402,6 +425,12 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         minute=0,
         args=[bot],
     )
+    scheduler.add_job(
+        cleanup_database,
+        "cron",
+        hour=4,
+        minute=20,
+    )
     scheduler.start()
     return scheduler
 
@@ -430,6 +459,10 @@ async def on_startup(bot: Bot) -> None:
             )
             await asyncio.sleep(5)
     await init_db(engine)
+    try:
+        await cleanup_database()
+    except Exception:
+        logger.exception("Очистка БД на старте завершилась с ошибкой. Продолжаем запуск.")
     # Применяем миграции
     async for session in get_session():
         await apply_v11_stats_reset(session)

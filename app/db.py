@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+import logging
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -14,12 +16,36 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 class Base(DeclarativeBase):
     """Базовый класс моделей."""
 
 
 engine: AsyncEngine = create_async_engine(settings.database_url, echo=False)
+
+
+@event.listens_for(engine.sync_engine, "connect")
+def _configure_sqlite_pragmas(dbapi_connection: object, _connection_record: object) -> None:
+    """Почему: уменьшаем риск деградации SQLite при долгой работе и росте данных."""
+    if not settings.database_url.startswith("sqlite+"):
+        return
+    if not hasattr(dbapi_connection, "cursor"):
+        return
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
+        cursor.execute("PRAGMA busy_timeout=5000;")
+        cursor.execute("PRAGMA temp_store=MEMORY;")
+        cursor.execute("PRAGMA auto_vacuum=INCREMENTAL;")
+    except Exception as exc:
+        logger.warning("Не удалось применить SQLite PRAGMA: %s", exc)
+    finally:
+        cursor.close()
+
+
 SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
 
 
