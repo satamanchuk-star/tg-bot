@@ -162,6 +162,25 @@ async def init_db(async_engine: AsyncEngine) -> None:
                         )
                     )
 
+            # Миграция rag_messages
+            if inspector.has_table("rag_messages"):
+                columns = {
+                    column["name"] for column in inspector.get_columns("rag_messages")
+                }
+                if "rag_category" not in columns:
+                    sync_conn.execute(
+                        text("ALTER TABLE rag_messages ADD COLUMN rag_category VARCHAR(50)")
+                    )
+                if "rag_semantic_key" not in columns:
+                    sync_conn.execute(
+                        text("ALTER TABLE rag_messages ADD COLUMN rag_semantic_key VARCHAR(120)")
+                    )
+                if "rag_canonical_text" not in columns:
+                    sync_conn.execute(
+                        text("ALTER TABLE rag_messages ADD COLUMN rag_canonical_text TEXT")
+                    )
+
+
         await conn.run_sync(_ensure_columns)
 
 

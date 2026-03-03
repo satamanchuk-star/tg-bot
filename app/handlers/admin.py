@@ -25,7 +25,7 @@ from app.services.ai_module import get_ai_client, is_ai_runtime_enabled, set_ai_
 from app.services.ai_module import get_ai_runtime_status, get_ai_usage_for_today
 from app.services.ai_module import get_ai_diagnostics
 from app.services.ai_usage import next_reset_delta, reset_ai_usage
-from app.services.rag import add_rag_message, get_rag_count
+from app.services.rag import add_rag_message, get_rag_count, systematize_rag
 from app.services.admin_stats_reset import reset_runtime_statistics
 from app.utils.profanity import load_profanity, load_profanity_exceptions
 
@@ -491,6 +491,7 @@ async def rag_bot_command(message: Message, bot: Bot) -> None:
             source_user_id=source_user_id,
             source_message_id=target_msg.message_id,
         )
+        await systematize_rag(session, settings.forum_chat_id)
         await session.commit()
         count = await get_rag_count(session, settings.forum_chat_id)
 
@@ -503,6 +504,25 @@ async def rag_bot_command(message: Message, bot: Bot) -> None:
         _admin_id(message),
         target_msg.message_id,
     )
+
+
+@router.message(Command("rag_sync"))
+async def rag_sync_command(message: Message, bot: Bot) -> None:
+    """Пересобирает и сохраняет систематизированную RAG-базу."""
+    if not await _ensure_admin(message, bot):
+        return
+
+    async for session in get_session():
+        changed = await systematize_rag(session, settings.forum_chat_id)
+        await session.commit()
+        count = await get_rag_count(session, settings.forum_chat_id)
+
+    await message.reply(
+        "База знаний пересобрана.\n"
+        f"Обновлено записей: {changed}\n"
+        f"Всего записей: {count}"
+    )
+
 
 
 @router.message(Command("shutdown_bot"))
