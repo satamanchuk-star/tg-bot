@@ -303,8 +303,11 @@ async def heartbeat_job(bot: Bot) -> None:
         if last_heartbeat and now - last_heartbeat > timedelta(
             minutes=OFFLINE_THRESHOLD_MIN
         ):
-            should_notify = state.last_notice_at is None or (
-                now - state.last_notice_at > timedelta(days=1)
+            last_notice = state.last_notice_at
+            if last_notice and last_notice.tzinfo is None:
+                last_notice = last_notice.replace(tzinfo=timezone.utc)
+            should_notify = last_notice is None or (
+                now - last_notice > timedelta(days=1)
             )
             if should_notify:
                 await bot.send_message(
