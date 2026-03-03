@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from datetime import datetime, timedelta
 
 from sqlalchemy import delete
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AiUsage
 from app.utils.time import now_tz
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -65,12 +69,20 @@ async def add_usage(
     chat_id: int,
     tokens_used: int,
 ) -> AiUsageStats:
-    usage = await get_or_create_usage(session, date_key=date_key, chat_id=chat_id)
-    usage.request_count += 1
-    usage.tokens_used += max(0, tokens_used)
-    usage.updated_at = datetime.utcnow()
-    await session.commit()
-    return AiUsageStats(requests_used=usage.request_count, tokens_used=usage.tokens_used)
+    try:
+        usage = await get_or_create_usage(session, date_key=date_key, chat_id=chat_id)
+        usage.request_count += 1
+        usage.tokens_used += max(0, tokens_used)
+        usage.updated_at = datetime.utcnow()
+        await session.commit()
+        return AiUsageStats(requests_used=usage.request_count, tokens_used=usage.tokens_used)
+    except OperationalError as exc:
+        logger.warning("Не удалось записать usage ИИ: %s", exc)
+        await session.rollback()
+        usage = await session.get(AiUsage, {"date_key": date_key, "chat_id": chat_id})
+        if usage is None:
+            return AiUsageStats(requests_used=0, tokens_used=0)
+        return AiUsageStats(requests_used=usage.request_count, tokens_used=usage.tokens_used)
 
 
 async def reset_ai_usage(session: AsyncSession, *, chat_id: int | None = None) -> int:

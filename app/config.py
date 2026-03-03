@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     ai_summary_hour: int = 21
     ai_summary_minute: int = 0
     ai_summary_topic_id: int | None = None
+    db_logs_retention_days: int = 14
+    db_stats_retention_days: int = 45
 
     topic_rules: int | None = None
     topic_important: int | None = None
