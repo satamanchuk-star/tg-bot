@@ -21,9 +21,15 @@ from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import extract_target_user, is_admin
 from app.utils.admin_help import ADMIN_HELP
 from app.handlers.help import clear_routing_state
-from app.services.ai_module import get_ai_client, is_ai_runtime_enabled, set_ai_runtime_enabled
-from app.services.ai_module import get_ai_runtime_status, get_ai_usage_for_today
-from app.services.ai_module import get_ai_diagnostics
+from app.services.ai_module import (
+    clear_assistant_cache,
+    get_ai_client,
+    get_ai_diagnostics,
+    get_ai_runtime_status,
+    get_ai_usage_for_today,
+    is_ai_runtime_enabled,
+    set_ai_runtime_enabled,
+)
 from app.services.ai_usage import next_reset_delta, reset_ai_usage
 from app.services.rag import add_rag_message, get_rag_count, systematize_rag
 from app.services.admin_stats_reset import reset_runtime_statistics
@@ -482,8 +488,14 @@ async def rag_bot_command(message: Message, bot: Bot) -> None:
     admin_id = int(_admin_id(message))
     source_user_id = target_msg.from_user.id if target_msg.from_user else None
 
+    # LLM-категоризация перед добавлением
+    ai_client = get_ai_client()
+    cat_result = await ai_client.categorize_rag_entry(
+        text.strip(), chat_id=settings.forum_chat_id,
+    )
+
     async for session in get_session():
-        await add_rag_message(
+        record = await add_rag_message(
             session,
             chat_id=settings.forum_chat_id,
             message_text=text.strip(),
@@ -491,18 +503,28 @@ async def rag_bot_command(message: Message, bot: Bot) -> None:
             source_user_id=source_user_id,
             source_message_id=target_msg.message_id,
         )
+        # Перезаписываем категорию и canonical из LLM, если получили
+        if not cat_result.used_fallback:
+            record.rag_category = cat_result.category
+            record.rag_canonical_text = cat_result.summary
         await systematize_rag(session, settings.forum_chat_id)
         await session.commit()
         count = await get_rag_count(session, settings.forum_chat_id)
 
+    cat_label = f"{cat_result.category}"
+    if not cat_result.used_fallback:
+        cat_label += " (AI)"
     await message.reply(
         f"Сообщение добавлено в базу знаний бота.\n"
+        f"Категория: {cat_label}\n"
         f"Всего записей в базе: {count}"
     )
     logger.info(
-        "RAG: админ %s добавил сообщение %s в базу знаний",
+        "RAG: админ %s добавил сообщение %s в базу знаний (категория=%s, llm=%s)",
         _admin_id(message),
         target_msg.message_id,
+        cat_result.category,
+        not cat_result.used_fallback,
     )
 
 

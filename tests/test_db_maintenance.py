@@ -81,4 +81,5 @@ def test_cleanup_old_data_removes_outdated_rows() -> None:
         "moderation_events": 1,
         "topic_stats": 1,
         "ai_usage": 1,
+        "rag_expired": 0,
     }

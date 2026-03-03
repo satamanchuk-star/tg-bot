@@ -2,15 +2,19 @@
 
 Почему: админы добавляют сырые сообщения, а бот хранит и объединяет их
 в компактные смысловые блоки для более точных ответов.
+
+TF-IDF ранжирование обеспечивает семантически точный поиск без внешних зависимостей.
 """
 
 from __future__ import annotations
 
+import math
 import re
-from collections import defaultdict
-from datetime import datetime
+import time as _time
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import RagMessage
@@ -39,6 +43,17 @@ _STOP_WORDS = {
     "под",
     "над",
     "без",
+    "еще",
+    "уже",
+    "тоже",
+    "потом",
+    "сейчас",
+    "будет",
+    "была",
+    "было",
+    "были",
+    "есть",
+    "нет",
 }
 
 _CATEGORY_RULES: list[tuple[str, tuple[str, ...]]] = [
@@ -49,9 +64,19 @@ _CATEGORY_RULES: list[tuple[str, tuple[str, ...]]] = [
     ("безопасность", ("охран", "камера", "пропуск", "консьерж")),
 ]
 
+# Дефолтный TTL для RAG-записей (90 дней)
+_DEFAULT_RAG_TTL_DAYS = 90
+# Коэффициент затухания по времени (чем старше запись, тем ниже score)
+_TIME_DECAY_HALF_LIFE_DAYS = 60
+
 
 def _tokenize(text: str) -> list[str]:
     return [w for w in re.findall(r"[а-яёa-z0-9]+", text.lower()) if len(w) >= 3]
+
+
+def _content_tokens(text: str) -> list[str]:
+    """Токены без стоп-слов — для TF-IDF."""
+    return [w for w in _tokenize(text) if w not in _STOP_WORDS]
 
 
 def _token_set(text: str) -> set[str]:
@@ -101,6 +126,46 @@ def build_canonical_text(texts: list[str]) -> str:
     return merged[:1500]
 
 
+# ---------------------------------------------------------------------------
+# TF-IDF ранжирование (без внешних зависимостей)
+# ---------------------------------------------------------------------------
+
+class _TfIdfRanker:
+    """Лёгкий TF-IDF ранкер: строится по корпусу RAG-документов."""
+
+    def __init__(self, documents: list[list[str]]) -> None:
+        self._n_docs = max(len(documents), 1)
+        self._df: Counter[str] = Counter()
+        for doc in documents:
+            for term in set(doc):
+                self._df[term] += 1
+
+    def _idf(self, term: str) -> float:
+        df = self._df.get(term, 0)
+        return math.log((self._n_docs + 1) / (df + 1)) + 1.0
+
+    def score(self, doc_tokens: list[str], query_tokens: list[str]) -> float:
+        if not doc_tokens or not query_tokens:
+            return 0.0
+        doc_tf = Counter(doc_tokens)
+        doc_len = len(doc_tokens)
+        total = 0.0
+        for term in set(query_tokens):
+            tf = doc_tf.get(term, 0) / doc_len
+            total += tf * self._idf(term)
+        return total
+
+
+def _time_decay_factor(created_at: datetime | None) -> float:
+    """Экспоненциальное затухание: 1.0 для свежих, ~0.5 через half_life дней."""
+    if created_at is None:
+        return 0.5
+    age_days = (datetime.utcnow() - created_at).total_seconds() / 86400
+    if age_days <= 0:
+        return 1.0
+    return math.exp(-0.693 * age_days / _TIME_DECAY_HALF_LIFE_DAYS)
+
+
 async def add_rag_message(
     session: AsyncSession,
     *,
@@ -109,11 +174,14 @@ async def add_rag_message(
     added_by_user_id: int,
     source_user_id: int | None = None,
     source_message_id: int | None = None,
+    ttl_days: int | None = None,
 ) -> RagMessage:
     """Добавляет сообщение в RAG-базу и сразу классифицирует его."""
     cleaned = _normalize_text(message_text)
     category = classify_rag_message(cleaned)
     semantic_key = build_semantic_key(cleaned, category)
+    now = datetime.utcnow()
+    expires_at = now + timedelta(days=ttl_days or _DEFAULT_RAG_TTL_DAYS)
     record = RagMessage(
         chat_id=chat_id,
         message_text=cleaned,
@@ -123,7 +191,8 @@ async def add_rag_message(
         rag_category=category,
         rag_semantic_key=semantic_key,
         rag_canonical_text=cleaned,
-        created_at=datetime.utcnow(),
+        expires_at=expires_at,
+        created_at=now,
     )
     session.add(record)
     await session.flush()
@@ -131,10 +200,17 @@ async def add_rag_message(
 
 
 async def get_all_rag_messages(session: AsyncSession, chat_id: int) -> list[RagMessage]:
-    """Возвращает все сообщения RAG для чата в хронологическом порядке."""
+    """Возвращает актуальные (не истёкшие) сообщения RAG для чата."""
+    now = datetime.utcnow()
     result = await session.execute(
         select(RagMessage)
-        .where(RagMessage.chat_id == chat_id)
+        .where(
+            and_(
+                RagMessage.chat_id == chat_id,
+                # Показываем записи без expires_at (старые) или ещё не истёкшие
+                (RagMessage.expires_at.is_(None)) | (RagMessage.expires_at > now),
+            )
+        )
         .order_by(RagMessage.created_at.asc())
     )
     return list(result.scalars().all())
@@ -146,29 +222,32 @@ def rank_rag_messages(
     query: str,
     top_k: int | None = None,
 ) -> list[RagMessage]:
-    """Сортирует RAG-сообщения: сначала релевантные запросу, затем остальные."""
-    query_tokens = _token_set(query)
+    """Ранжирует RAG-сообщения по TF-IDF релевантности с учётом time-decay."""
     if not messages:
         return []
+
+    query_tokens = _content_tokens(query)
     if not query_tokens:
         return messages[:top_k] if top_k is not None else messages
 
-    scored: list[tuple[RagMessage, float]] = []
-    untouched: list[RagMessage] = []
+    # Строим корпус для IDF
+    doc_tokens_list: list[list[str]] = []
     for msg in messages:
-        msg_tokens = _token_set(msg.rag_canonical_text or msg.message_text)
-        if not msg_tokens:
-            untouched.append(msg)
-            continue
-        overlap = len(query_tokens & msg_tokens)
-        if overlap > 0:
-            score = overlap / len(query_tokens)
-            scored.append((msg, score))
-            continue
-        untouched.append(msg)
+        text = msg.rag_canonical_text or msg.message_text
+        doc_tokens_list.append(_content_tokens(text))
+
+    ranker = _TfIdfRanker(doc_tokens_list)
+
+    scored: list[tuple[RagMessage, float]] = []
+    for msg, doc_tokens in zip(messages, doc_tokens_list):
+        tfidf_score = ranker.score(doc_tokens, query_tokens)
+        decay = _time_decay_factor(msg.created_at)
+        # Итоговый score: TF-IDF * time_decay (свежие записи приоритетнее)
+        final_score = tfidf_score * (0.7 + 0.3 * decay)
+        scored.append((msg, final_score))
 
     scored.sort(key=lambda item: item[1], reverse=True)
-    ranked = [msg for msg, _ in scored] + untouched
+    ranked = [msg for msg, _ in scored]
     return ranked[:top_k] if top_k is not None else ranked
 
 
@@ -203,6 +282,9 @@ async def systematize_rag(session: AsyncSession, chat_id: int) -> int:
         msg.message_text = normalized
         msg.rag_category = category
         msg.rag_semantic_key = semantic_key
+        # Проставляем TTL для старых записей без expires_at
+        if msg.expires_at is None and msg.created_at:
+            msg.expires_at = msg.created_at + timedelta(days=_DEFAULT_RAG_TTL_DAYS)
 
     grouped = _group_by_semantics(messages)
     for group_messages in grouped.values():
@@ -267,3 +349,34 @@ async def get_rag_count(session: AsyncSession, chat_id: int) -> int:
         select(func.count()).select_from(RagMessage).where(RagMessage.chat_id == chat_id)
     )
     return int(result or 0)
+
+
+async def cleanup_expired_rag(session: AsyncSession) -> int:
+    """Удаляет истёкшие RAG-записи."""
+    from sqlalchemy import delete
+
+    now = datetime.utcnow()
+    result = await session.execute(
+        delete(RagMessage).where(
+            and_(
+                RagMessage.expires_at.isnot(None),
+                RagMessage.expires_at < now,
+            )
+        )
+    )
+    await session.commit()
+    return int(result.rowcount or 0)
+
+
+async def extend_rag_ttl(
+    session: AsyncSession,
+    message_id: int,
+    extra_days: int = 90,
+) -> bool:
+    """Продлевает TTL конкретной RAG-записи."""
+    msg = await session.get(RagMessage, message_id)
+    if msg is None:
+        return False
+    msg.expires_at = datetime.utcnow() + timedelta(days=extra_days)
+    await session.flush()
+    return True

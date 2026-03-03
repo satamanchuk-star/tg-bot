@@ -9,7 +9,7 @@ from sqlalchemy.sql.dml import Delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import AiUsage, MessageLog, ModerationEvent, TopicStat
+from app.models import AiUsage, MessageLog, ModerationEvent, RagMessage, TopicStat
 
 
 
@@ -40,6 +40,14 @@ async def cleanup_old_data(session: AsyncSession, *, now_utc: datetime | None = 
         session,
         delete(AiUsage).where(AiUsage.date_key < stats_cutoff_key),
     )
+    # Очистка истёкших RAG-записей
+    removed_rag = await _delete_and_count(
+        session,
+        delete(RagMessage).where(
+            RagMessage.expires_at.isnot(None),
+            RagMessage.expires_at < now,
+        ),
+    )
 
     await session.commit()
 
@@ -48,6 +56,7 @@ async def cleanup_old_data(session: AsyncSession, *, now_utc: datetime | None = 
         "moderation_events": removed_moderation_events,
         "topic_stats": removed_topic_stats,
         "ai_usage": removed_ai_usage,
+        "rag_expired": removed_rag,
     }
 
 
