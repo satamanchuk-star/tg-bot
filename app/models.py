@@ -172,6 +172,13 @@ class RagMessage(Base):
     added_by_user_id: Mapped[int] = mapped_column(Integer)
     source_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rag_category: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    rag_semantic_key: Mapped[str | None] = mapped_column(
+        String(120),
+        nullable=True,
+        index=True,
+    )
+    rag_canonical_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True
     )

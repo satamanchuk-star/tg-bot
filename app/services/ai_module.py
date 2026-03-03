@@ -59,11 +59,12 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "медицинскими назначениями, юридическими консультациями, финансовыми советами, "
     "сбором персональных данных. Если запрос вне рамок — вежливо откажи и предложи "
     "безопасную альтернативу по теме ЖК/быта.\n\n"
-    "ВАЖНО: если в контексте есть раздел «База знаний ЖК», используй информацию "
-    "из него как основной источник для ответов. Эти сообщения — проверенный контекст "
-    "от жителей и администраторов ЖК. Если ответа в базе знаний нет, честно скажи, "
-    "что точной информации нет, и предложи следующий шаг в дружелюбном и слегка "
-    "шутливом тоне без выдумывания фактов."
+    "ВАЖНО: если в контексте есть раздел «База знаний ЖК», используй его как "
+    "главный источник. В базе могут быть дубли и фрагменты одной темы — "
+    "объединяй их по смыслу и отвечай только нужной пользователю выжимкой. "
+    "Не перечисляй лишние детали. Если точной информации нет, честно скажи об этом "
+    "и предложи следующий шаг в добродушном, лёгком и немного шутливом тоне "
+    "без выдумывания фактов."
 )
 
 _DAILY_SUMMARY_SYSTEM_PROMPT = (
@@ -683,12 +684,13 @@ def local_quiz_answer_decision(correct_answer: str, user_answer: str) -> QuizAns
 async def _get_rag_context(chat_id: int, query: str) -> str:
     """Подгружает весь RAG-контекст, ранжируя его по релевантности запроса."""
     try:
-        from app.services.rag import format_rag_context, get_all_rag_messages, rank_rag_messages
+        from app.services.rag import build_rag_context, systematize_rag
 
         async for session in get_session():
-            all_messages = await get_all_rag_messages(session, chat_id)
-            ranked = rank_rag_messages(all_messages, query=query)
-            return format_rag_context(ranked)
+            changed = await systematize_rag(session, chat_id)
+            if changed:
+                await session.commit()
+            return await build_rag_context(session, chat_id=chat_id, query=query, top_k=8)
     except Exception as exc:
         logger.warning("RAG search failed: %s", exc)
     return ""
