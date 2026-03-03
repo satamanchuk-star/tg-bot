@@ -9,6 +9,8 @@ from aiogram import Bot, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.types import ChatPermissions, Message
 
+from sqlalchemy import and_, select
+
 from app.config import settings
 from app.db import get_session
 from app.models import FloodRecord, MessageLog, ModerationEvent
@@ -35,7 +37,7 @@ async def _warn_user(message: Message, text: str, bot: Bot) -> None:
     )
 
 
-async def _store_message_log(message: Message, severity: int) -> None:
+async def _store_message_log(message: Message, severity: int, sentiment: str | None = None) -> None:
     if message.from_user is None:
         return
     async for session in get_session():
@@ -46,9 +48,35 @@ async def _store_message_log(message: Message, severity: int) -> None:
                 user_id=message.from_user.id,
                 text=message.text,
                 severity=severity,
+                sentiment=sentiment,
             )
         )
         await session.commit()
+
+
+async def _get_topic_context(chat_id: int, topic_id: int | None, limit: int = 5) -> list[str]:
+    """Возвращает последние сообщения из того же топика для контекстной модерации."""
+    if topic_id is None:
+        return []
+    try:
+        async for session in get_session():
+            result = await session.execute(
+                select(MessageLog.text)
+                .where(
+                    and_(
+                        MessageLog.chat_id == chat_id,
+                        MessageLog.topic_id == topic_id,
+                        MessageLog.text.isnot(None),
+                    )
+                )
+                .order_by(MessageLog.created_at.desc())
+                .limit(limit)
+            )
+            rows = result.scalars().all()
+            return list(reversed(rows))
+    except Exception:
+        logger.warning("Не удалось загрузить контекст топика для модерации")
+        return []
 
 
 async def _store_mod_event(
@@ -110,13 +138,17 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
         await _store_mod_event(chat_id, user_id, "delete", 1, message_id=message.message_id)
         return True
 
+    # Загружаем контекст разговора из того же топика
+    topic_context = await _get_topic_context(chat_id, message.message_thread_id)
+
     ai_client = get_ai_client()
-    decision = await ai_client.moderate(text, chat_id=chat_id)
+    decision = await ai_client.moderate(text, chat_id=chat_id, context=topic_context)
     severity = decision.severity
     violation_type = getattr(decision, "violation_type", None)
     confidence = getattr(decision, "confidence", None)
+    sentiment = getattr(decision, "sentiment", "neutral")
 
-    await _store_message_log(message, severity)
+    await _store_message_log(message, severity, sentiment=sentiment)
 
     # L0: ничего
     if severity == 0:

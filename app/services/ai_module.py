@@ -24,13 +24,64 @@ _MODERATION_SOFT_TIMEOUT_SECONDS = 8
 _ASSISTANT_SOFT_TIMEOUT_SECONDS = 12
 _QUIZ_SOFT_TIMEOUT_SECONDS = 12
 _SUMMARY_SOFT_TIMEOUT_SECONDS = 12
+_RAG_CATEGORIZE_SOFT_TIMEOUT_SECONDS = 10
+
+# ---------------------------------------------------------------------------
+# Кэш ответов ассистента (in-memory, TTL 24ч)
+# ---------------------------------------------------------------------------
+_ASSISTANT_CACHE: dict[str, tuple[str, float]] = {}
+_CACHE_TTL_SECONDS = 86400  # 24 часа
+_CACHE_MAX_SIZE = 200
+
+_CACHE_STOP_WORDS = {
+    "это", "как", "что", "когда", "где", "или", "для", "если", "чтобы",
+    "можно", "нужно", "через", "просто", "только", "очень", "всем",
+    "тут", "там", "про", "под", "над", "без", "еще", "уже", "тоже",
+}
+
+
+def _normalize_cache_key(text: str) -> str:
+    """Нормализует запрос для кэша: lowercase, без стоп-слов, сортировка."""
+    tokens = sorted(
+        set(w for w in re.findall(r"[а-яёa-z0-9]+", text.lower())
+            if len(w) >= 3 and w not in _CACHE_STOP_WORDS)
+    )
+    return "|".join(tokens)
+
+
+def _cache_get(key: str) -> str | None:
+    entry = _ASSISTANT_CACHE.get(key)
+    if entry is None:
+        return None
+    answer, timestamp = entry
+    if time.time() - timestamp > _CACHE_TTL_SECONDS:
+        _ASSISTANT_CACHE.pop(key, None)
+        return None
+    return answer
+
+
+def _cache_set(key: str, answer: str) -> None:
+    if len(_ASSISTANT_CACHE) >= _CACHE_MAX_SIZE:
+        oldest_key = min(_ASSISTANT_CACHE, key=lambda k: _ASSISTANT_CACHE[k][1])
+        _ASSISTANT_CACHE.pop(oldest_key, None)
+    _ASSISTANT_CACHE[key] = (answer, time.time())
+
+
+def clear_assistant_cache() -> int:
+    """Очищает кэш ответов ассистента. Возвращает количество удалённых записей."""
+    count = len(_ASSISTANT_CACHE)
+    _ASSISTANT_CACHE.clear()
+    return count
 
 _MODERATION_SYSTEM_PROMPT = (
     "Ты — модератор чата жилого комплекса (ЖК). Участники — соседи, общение неформальное.\n"
     "Верни только JSON без дополнительного текста:\n"
     '{"violation_type":"none|profanity|rude|aggression","severity":0-3,'
-    '"confidence":0..1,"action":"none|warn|delete_warn|delete_strike"}.\n\n'
+    '"confidence":0..1,"action":"none|warn|delete_warn|delete_strike",'
+    '"sentiment":"positive|neutral|negative"}.\n\n'
     "ГЛАВНОЕ ПРАВИЛО: анализируй КОНТЕКСТ и НАМЕРЕНИЕ сообщения, а не отдельные слова.\n"
+    "Если перед сообщением приведён контекст беседы — используй его для оценки тона.\n"
+    "Дружеская перепалка (взаимные ответы с шутками/смайлами) — НЕ нарушение.\n"
     "Матерные и грубые слова в дружеском или нейтральном контексте — НЕ нарушение.\n"
     "Например: «блин, опять лифт сломался» или «ну нифига себе цены» — это severity 0.\n"
     "Лёгкая грубость в бытовом общении между соседями — НЕ повод для наказания.\n\n"
@@ -46,6 +97,7 @@ _MODERATION_SYSTEM_PROMPT = (
     "- Жалобы на соседей, УК, сервисы (даже в грубой форме): severity 0\n"
     "- Сарказм и ирония: severity 0\n"
     "- Грубоватый юмор: severity 0\n\n"
+    "Поле sentiment: оцени общий тон сообщения (positive/neutral/negative).\n"
     "При ЛЮБОМ сомнении — severity 0 (не наказывать). "
     "Лучше пропустить 10 грубых сообщений, чем наказать 1 невиновного."
 )
@@ -158,6 +210,7 @@ class ModerationDecision:
     confidence: float
     action: Literal["none", "warn", "delete_warn", "delete_strike"]
     used_fallback: bool
+    sentiment: Literal["positive", "neutral", "negative"] = "neutral"
 
 
 @dataclass(slots=True)
@@ -195,10 +248,17 @@ class AiDiagnosticsReport:
     probe_latency_ms: int
 
 
+@dataclass(slots=True)
+class RagCategorizationResult:
+    category: str
+    summary: str
+    used_fallback: bool
+
+
 class AiProvider(Protocol):
     async def probe(self) -> AiProbeResult: ...
 
-    async def moderate(self, text: str, *, chat_id: int) -> ModerationDecision: ...
+    async def moderate(self, text: str, *, chat_id: int, context: list[str] | None = None) -> ModerationDecision: ...
 
     async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int) -> str: ...
 
@@ -213,6 +273,8 @@ class AiProvider(Protocol):
 
     async def generate_daily_summary(self, context: str, *, chat_id: int) -> str | None: ...
 
+    async def categorize_rag_entry(self, text: str, *, chat_id: int) -> RagCategorizationResult: ...
+
 
 class StubAiProvider:
     """Почему: стабильно возвращает локальное поведение до реального подключения ИИ."""
@@ -220,7 +282,7 @@ class StubAiProvider:
     async def probe(self) -> AiProbeResult:
         return AiProbeResult(False, "ИИ отключен: используется stub-провайдер.", 0)
 
-    async def moderate(self, text: str, *, chat_id: int) -> ModerationDecision:
+    async def moderate(self, text: str, *, chat_id: int, context: list[str] | None = None) -> ModerationDecision:
         decision = local_moderation(text)
         decision.used_fallback = True
         return decision
@@ -245,6 +307,12 @@ class StubAiProvider:
 
     async def generate_daily_summary(self, context: str, *, chat_id: int) -> str | None:
         return None
+
+    async def categorize_rag_entry(self, text: str, *, chat_id: int) -> RagCategorizationResult:
+        from app.services.rag import classify_rag_message
+        category = classify_rag_message(text)
+        summary = text[:200]
+        return RagCategorizationResult(category=category, summary=summary, used_fallback=True)
 
 
 class OpenRouterProvider:
@@ -320,12 +388,18 @@ class OpenRouterProvider:
         _LAST_ERROR = str(error)
         _LAST_ERROR_AT = datetime.utcnow()
 
-    async def moderate(self, text: str, *, chat_id: int) -> ModerationDecision:
+    async def moderate(self, text: str, *, chat_id: int, context: list[str] | None = None) -> ModerationDecision:
         try:
+            user_content = ""
+            if context:
+                user_content = "Контекст беседы (последние сообщения):\n"
+                user_content += "\n".join(context[-5:]) + "\n\n"
+            user_content += f"Сообщение для проверки:\n{text[:2000]}"
+
             content, _ = await self._chat_completion(
                 [
                     {"role": "system", "content": _MODERATION_SYSTEM_PROMPT},
-                    {"role": "user", "content": text[:2000]},
+                    {"role": "user", "content": user_content},
                 ],
                 chat_id=chat_id,
             )
@@ -334,13 +408,16 @@ class OpenRouterProvider:
             action = str(data.get("action", "none"))
             severity = int(data.get("severity", 0))
             confidence = float(data.get("confidence", 0.5))
+            sentiment = str(data.get("sentiment", "neutral"))
             if violation_type not in {"none", "profanity", "rude", "aggression"}:
                 violation_type = "none"
             if action not in {"none", "warn", "delete_warn", "delete_strike"}:
                 action = "none"
+            if sentiment not in {"positive", "neutral", "negative"}:
+                sentiment = "neutral"
             severity = max(0, min(3, severity))
             confidence = max(0.0, min(1.0, confidence))
-            return ModerationDecision(violation_type, severity, confidence, action, False)
+            return ModerationDecision(violation_type, severity, confidence, action, False, sentiment)
         except (RuntimeError, ValueError, TypeError, json.JSONDecodeError) as exc:
             self._record_runtime_error(exc)
             decision = local_moderation(text)
@@ -351,6 +428,15 @@ class OpenRouterProvider:
         safe_prompt = mask_personal_data(prompt)[:1000]
         if not is_assistant_topic_allowed(safe_prompt):
             return "С этим лучше к профильному специалисту 🙌 Я тут больше про жизнь дома."
+
+        # Проверяем кэш ответов
+        cache_key = _normalize_cache_key(safe_prompt)
+        if cache_key:
+            cached = _cache_get(cache_key)
+            if cached is not None:
+                logger.info("AI assistant cache hit for key=%s", cache_key[:40])
+                return cached
+
         context_text = "\n".join(context[-20:])
 
         # Подгружаем RAG-контекст из базы знаний
@@ -367,7 +453,11 @@ class OpenRouterProvider:
                 ],
                 chat_id=chat_id,
             )
-            return content[:800]
+            reply = content[:800]
+            # Кэшируем ответ
+            if cache_key:
+                _cache_set(cache_key, reply)
+            return reply
         except RuntimeError as exc:
             self._record_runtime_error(exc)
             return build_local_assistant_reply(safe_prompt)
@@ -423,6 +513,40 @@ class OpenRouterProvider:
             self._record_runtime_error(exc)
             return None
 
+    async def categorize_rag_entry(self, text: str, *, chat_id: int) -> RagCategorizationResult:
+        try:
+            content, _ = await self._chat_completion(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Категоризируй сообщение из чата ЖК. Верни только JSON:\n"
+                            '{"category":"парковка|лифт|ук|коммуналка|безопасность|ремонт|'
+                            'правила|общее","summary":"краткая выжимка до 200 символов"}\n'
+                            "Категория должна отражать основную тему сообщения.\n"
+                            "Summary — это сжатая версия ключевых фактов без лишних деталей."
+                        ),
+                    },
+                    {"role": "user", "content": text[:2000]},
+                ],
+                chat_id=chat_id,
+            )
+            data = json.loads(content)
+            category = str(data.get("category", "общее"))
+            summary = str(data.get("summary", text[:200]))[:200]
+            valid_categories = {
+                "парковка", "лифт", "ук", "коммуналка", "безопасность",
+                "ремонт", "правила", "общее",
+            }
+            if category not in valid_categories:
+                category = "общее"
+            return RagCategorizationResult(category=category, summary=summary, used_fallback=False)
+        except (RuntimeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            self._record_runtime_error(exc)
+            from app.services.rag import classify_rag_message
+            category = classify_rag_message(text)
+            return RagCategorizationResult(category=category, summary=text[:200], used_fallback=True)
+
 
 class AiModuleClient:
     """Почему: фасад для будущего ИИ, чтобы точки интеграции не трогать повторно."""
@@ -438,10 +562,10 @@ class AiModuleClient:
     async def probe(self) -> AiProbeResult:
         return await self._provider.probe()
 
-    async def moderate(self, text: str, *, chat_id: int) -> ModerationDecision:
+    async def moderate(self, text: str, *, chat_id: int, context: list[str] | None = None) -> ModerationDecision:
         try:
             return await asyncio.wait_for(
-                self._provider.moderate(text, chat_id=chat_id),
+                self._provider.moderate(text, chat_id=chat_id, context=context),
                 timeout=_MODERATION_SOFT_TIMEOUT_SECONDS,
             )
         except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
@@ -505,6 +629,18 @@ class AiModuleClient:
                 _SUMMARY_SOFT_TIMEOUT_SECONDS,
             )
             return None
+
+    async def categorize_rag_entry(self, text: str, *, chat_id: int) -> RagCategorizationResult:
+        try:
+            return await asyncio.wait_for(
+                self._provider.categorize_rag_entry(text, chat_id=chat_id),
+                timeout=_RAG_CATEGORIZE_SOFT_TIMEOUT_SECONDS,
+            )
+        except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
+            logger.warning("AI RAG categorization timeout; using local fallback.")
+            from app.services.rag import classify_rag_message
+            category = classify_rag_message(text)
+            return RagCategorizationResult(category=category, summary=text[:200], used_fallback=True)
 
 
 def _has_aggressive_target(text: str) -> bool:

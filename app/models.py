@@ -142,6 +142,7 @@ class MessageLog(Base):
     user_id: Mapped[int] = mapped_column(Integer, index=True)
     text: Mapped[str | None] = mapped_column(Text, nullable=True)
     severity: Mapped[int] = mapped_column(Integer, default=0)
+    sentiment: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True
     )
@@ -179,6 +180,7 @@ class RagMessage(Base):
         index=True,
     )
     rag_canonical_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True
     )

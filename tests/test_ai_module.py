@@ -20,7 +20,7 @@ class _SlowProvider:
     async def probe(self):  # type: ignore[no-untyped-def]
         await asyncio.sleep(0.1)
 
-    async def moderate(self, text: str, *, chat_id: int):  # type: ignore[no-untyped-def]
+    async def moderate(self, text: str, *, chat_id: int, context: list[str] | None = None):  # type: ignore[no-untyped-def]
         await asyncio.sleep(0.1)
 
     async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int) -> str:
@@ -40,6 +40,9 @@ class _SlowProvider:
     async def generate_daily_summary(self, context: str, *, chat_id: int) -> str:
         await asyncio.sleep(0.1)
         return "summary"
+
+    async def categorize_rag_entry(self, text: str, *, chat_id: int):  # type: ignore[no-untyped-def]
+        await asyncio.sleep(0.1)
 
 
 def test_detects_masked_profanity() -> None:

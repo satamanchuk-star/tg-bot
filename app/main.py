@@ -185,6 +185,20 @@ async def init_db(async_engine: AsyncEngine) -> None:
                     sync_conn.execute(
                         text("ALTER TABLE rag_messages ADD COLUMN rag_canonical_text TEXT")
                     )
+                if "expires_at" not in columns:
+                    sync_conn.execute(
+                        text("ALTER TABLE rag_messages ADD COLUMN expires_at DATETIME")
+                    )
+
+            # Миграция message_logs: sentiment
+            if inspector.has_table("message_logs"):
+                columns = {
+                    column["name"] for column in inspector.get_columns("message_logs")
+                }
+                if "sentiment" not in columns:
+                    sync_conn.execute(
+                        text("ALTER TABLE message_logs ADD COLUMN sentiment VARCHAR(20)")
+                    )
 
 
         await conn.run_sync(_ensure_columns)
@@ -339,11 +353,12 @@ async def cleanup_database() -> None:
     if stats is None:
         return
     logger.info(
-        "Очистка БД завершена: message_logs=%s moderation_events=%s topic_stats=%s ai_usage=%s",
+        "Очистка БД завершена: message_logs=%s moderation_events=%s topic_stats=%s ai_usage=%s rag_expired=%s",
         stats["message_logs"],
         stats["moderation_events"],
         stats["topic_stats"],
         stats["ai_usage"],
+        stats.get("rag_expired", 0),
     )
 
 
