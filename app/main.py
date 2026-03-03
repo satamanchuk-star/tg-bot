@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from aiogram import BaseMiddleware, Bot, Dispatcher
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
@@ -473,6 +473,13 @@ async def on_startup(bot: Bot) -> None:
                 attempt,
             )
             await asyncio.sleep(5)
+        except TelegramAPIError as exc:
+            logger.error(
+                "Не удалось получить данные бота из Telegram API: %s. "
+                "Проверьте BOT_TOKEN и права доступа.",
+                exc,
+            )
+            break
     await init_db(engine)
     try:
         await cleanup_database()
@@ -587,6 +594,12 @@ async def main() -> None:
         except TelegramNetworkError as exc:
             logger.error(
                 "Не удалось запустить polling: нет доступа к Telegram API (%s)",
+                exc,
+            )
+        except TelegramAPIError as exc:
+            logger.error(
+                "Не удалось запустить polling: ошибка Telegram API (%s). "
+                "Проверьте BOT_TOKEN и настройки бота.",
                 exc,
             )
     finally:
