@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timedelta
 
 from sqlalchemy import delete, text
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.sql.dml import Delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import AiUsage, MessageLog, ModerationEvent, TopicStat
-
-logger = logging.getLogger(__name__)
 
 
 
@@ -59,13 +55,9 @@ async def optimize_sqlite(session: AsyncSession) -> None:
     """Выполняет щадящую оптимизацию SQLite после очистки."""
     if not settings.database_url.startswith("sqlite+"):
         return
-    try:
-        await session.execute(text("PRAGMA wal_checkpoint(TRUNCATE);"))
-        await session.execute(text("PRAGMA incremental_vacuum(2000);"))
-        await session.commit()
-    except SQLAlchemyError:
-        await session.rollback()
-        logger.warning("Не удалось выполнить SQLite оптимизацию после очистки.")
+    await session.execute(text("PRAGMA wal_checkpoint(TRUNCATE);"))
+    await session.execute(text("PRAGMA incremental_vacuum(2000);"))
+    await session.commit()
 
 
 async def _delete_and_count(session: AsyncSession, query: Delete) -> int:

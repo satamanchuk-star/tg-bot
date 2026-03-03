@@ -459,10 +459,7 @@ async def on_startup(bot: Bot) -> None:
             )
             await asyncio.sleep(5)
     await init_db(engine)
-    try:
-        await cleanup_database()
-    except Exception:
-        logger.exception("Очистка БД на старте завершилась с ошибкой. Продолжаем запуск.")
+    await cleanup_database()
     # Применяем миграции
     async for session in get_session():
         await apply_v11_stats_reset(session)
