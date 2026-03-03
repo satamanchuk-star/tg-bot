@@ -22,7 +22,6 @@ from app.utils.admin import extract_target_user, is_admin
 from app.utils.admin_help import ADMIN_HELP
 from app.handlers.help import clear_routing_state
 from app.services.ai_module import (
-    clear_assistant_cache,
     get_ai_client,
     get_ai_diagnostics,
     get_ai_runtime_status,
