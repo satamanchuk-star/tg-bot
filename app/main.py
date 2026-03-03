@@ -582,7 +582,13 @@ async def main() -> None:
     try:
         await on_startup(bot)
         scheduler = await schedule_jobs(bot)
-        await dp.start_polling(bot)
+        try:
+            await dp.start_polling(bot)
+        except TelegramNetworkError as exc:
+            logger.error(
+                "Не удалось запустить polling: нет доступа к Telegram API (%s)",
+                exc,
+            )
     finally:
         if scheduler is not None:
             scheduler.shutdown()

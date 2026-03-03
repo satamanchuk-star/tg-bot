@@ -145,6 +145,7 @@ OPENROUTER_API_KEY=sk-or-... AI_MODEL=qwen/qwen3-14b python scripts/check_openro
 ## Почему бот может не запускаться
 
 1. Не заполнен `.env` (минимум `BOT_TOKEN`, `FORUM_CHAT_ID`, `ADMIN_LOG_CHAT_ID`).
+   Если используете Docker Compose без `.env`, эти переменные должны быть явно переданы в `docker-compose.yml` или `docker-compose.yaml` в секции `environment`.
 2. Бот был остановлен командой `/shutdown_bot` и остался файл-флаг `.stopped` в каталоге данных (`/app/data` или рядом с SQLite-файлом из `DATABASE_URL`).
 3. Неверный `BOT_TOKEN` или нет доступа к Telegram API (на старте есть 3 попытки `get_me`).
 

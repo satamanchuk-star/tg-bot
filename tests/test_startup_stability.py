@@ -89,3 +89,39 @@ def test_on_startup_does_not_crash_when_cleanup_fails(monkeypatch) -> None:
         bot.set_my_commands.assert_called_once()
 
     asyncio.run(_run())
+
+
+def test_main_does_not_raise_when_polling_network_error(monkeypatch) -> None:
+    async def _run() -> None:
+        from app import main as main_module
+
+        bot = AsyncMock()
+        bot.session.close = AsyncMock()
+
+        class DummyDispatcher:
+            def __init__(self, *_args, **_kwargs) -> None:
+                update_obj = type("UpdateObj", (), {})()
+                update_obj.outer_middleware = lambda *_a, **_k: None
+                error_obj = type("ErrorObj", (), {})()
+                error_obj.register = lambda *_a, **_k: None
+                self.update = update_obj
+                self.error = error_obj
+
+            def include_router(self, *_args, **_kwargs) -> None:
+                return None
+
+            async def start_polling(self, _bot) -> None:
+                raise TelegramNetworkError(method="getMe", message="offline")
+
+        monkeypatch.setattr(main_module, "STOP_FLAG", Path("/tmp/nonexistent-flag"))
+        monkeypatch.setattr(main_module, "Bot", lambda *_a, **_k: bot)
+        monkeypatch.setattr(main_module, "Dispatcher", DummyDispatcher)
+        monkeypatch.setattr(main_module, "on_startup", AsyncMock())
+        monkeypatch.setattr(main_module, "schedule_jobs", AsyncMock(return_value=None))
+        monkeypatch.setattr(main_module, "close_ai_client", AsyncMock())
+
+        await main_module.main()
+
+        bot.session.close.assert_awaited_once()
+
+    asyncio.run(_run())
