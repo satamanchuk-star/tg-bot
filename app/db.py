@@ -15,6 +15,8 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 class Base(DeclarativeBase):
     """Базовый класс моделей."""

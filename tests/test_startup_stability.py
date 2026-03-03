@@ -64,3 +64,28 @@ def test_on_startup_does_not_crash_when_telegram_unavailable(monkeypatch) -> Non
         bot.send_message.assert_not_called()
 
     asyncio.run(_run())
+
+
+def test_on_startup_does_not_crash_when_cleanup_fails(monkeypatch) -> None:
+    async def _run() -> None:
+        bot = AsyncMock()
+
+        async def _empty_async_gen():
+            if False:
+                yield
+
+        monkeypatch.setattr("app.main.init_db", AsyncMock())
+        monkeypatch.setattr(
+            "app.main.cleanup_database",
+            AsyncMock(side_effect=RuntimeError("cleanup failed")),
+        )
+        monkeypatch.setattr("app.main.get_session", _empty_async_gen)
+        monkeypatch.setattr("app.main.heartbeat_job", AsyncMock())
+        monkeypatch.setattr("app.main.get_ai_client", lambda: object())
+        monkeypatch.setattr("app.main.set_ai_admin_notifier", lambda _fn: None)
+
+        await on_startup(bot)
+
+        bot.set_my_commands.assert_called_once()
+
+    asyncio.run(_run())
