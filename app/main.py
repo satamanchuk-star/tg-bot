@@ -10,7 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from aiogram import BaseMiddleware, Bot, Dispatcher
-from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.exceptions import TelegramAPIError, TelegramNetworkError, TelegramRetryAfter
+from aiogram.methods import TelegramMethod
+from aiogram.methods.base import TelegramType
 from aiogram.utils.token import TokenValidationError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
@@ -93,6 +96,31 @@ class LoggingMiddleware(BaseMiddleware):
                         logger.warning("Не удалось обновить статистику тем: %s", exc)
                         await session.rollback()
         return await handler(event, data)
+
+
+MAX_RETRIES_ON_FLOOD = 3
+
+
+class RetryOnFloodSession(AiohttpSession):
+    """Автоматически повторяет запросы при TelegramRetryAfter (flood control)."""
+
+    async def make_request(
+        self,
+        bot: Bot,
+        method: TelegramMethod[TelegramType],
+        timeout: int | None = None,
+    ) -> TelegramType:
+        for attempt in range(1, MAX_RETRIES_ON_FLOOD + 1):
+            try:
+                return await super().make_request(bot, method, timeout=timeout)
+            except TelegramRetryAfter as e:
+                if attempt == MAX_RETRIES_ON_FLOOD:
+                    raise
+                logger.warning(
+                    "Flood control, жду %s сек (попытка %d/%d)",
+                    e.retry_after, attempt, MAX_RETRIES_ON_FLOOD,
+                )
+                await asyncio.sleep(e.retry_after)
 
 
 OFFLINE_THRESHOLD_MIN = 30
@@ -584,7 +612,7 @@ async def main() -> None:
         return
 
     try:
-        bot = Bot(token=settings.bot_token)
+        bot = Bot(token=settings.bot_token, session=RetryOnFloodSession())
     except TokenValidationError:
         logger.error(
             "BOT_TOKEN невалиден (%r). Проверьте формат: ЧИСЛА:БУКВЫ. "
