@@ -137,6 +137,9 @@ def _load_settings() -> Settings:
                 "Не заданы обязательные переменные окружения: %s",
                 ", ".join(missing),
             )
+            logger.error(
+                "Проверьте, что переменные переданы в контейнер через .env или docker-compose.yml/docker-compose.yaml (секция environment/env_file).",
+            )
         logger.error("Ошибка конфигурации: %s", exc)
         raise SystemExit(1) from exc
 
