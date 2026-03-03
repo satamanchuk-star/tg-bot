@@ -116,10 +116,19 @@ class Settings(BaseSettings):
     @classmethod
     def _validate_bot_token(cls, value: object) -> object:
         if isinstance(value, str):
-            cleaned = value.strip()
+            # Docker env_file не убирает кавычки — чистим вручную
+            cleaned = value.strip().strip("'\"")
             if cleaned:
                 return cleaned
         raise ValueError("BOT_TOKEN не задан или пуст")
+
+    @field_validator("ai_key", mode="before")
+    @classmethod
+    def _clean_ai_key(cls, value: object) -> object:
+        if isinstance(value, str):
+            cleaned = value.strip().strip("'\"")
+            return cleaned if cleaned else None
+        return value
 
 
     @property

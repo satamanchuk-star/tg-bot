@@ -11,6 +11,7 @@ from typing import Any
 
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
+from aiogram.utils.token import TokenValidationError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
@@ -579,7 +580,15 @@ async def main() -> None:
         logger.info("Бот остановлен. Удалите %s для запуска.", STOP_FLAG)
         return
 
-    bot = Bot(token=settings.bot_token)
+    try:
+        bot = Bot(token=settings.bot_token)
+    except TokenValidationError:
+        logger.error(
+            "BOT_TOKEN невалиден (%r). Проверьте формат: ЧИСЛА:БУКВЫ. "
+            "Если токен в кавычках в .env — уберите их.",
+            settings.bot_token[:10] + "..." if len(settings.bot_token) > 10 else settings.bot_token,
+        )
+        raise SystemExit(1)
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.outer_middleware(LoggingMiddleware())
     dp.error.register(error_handler)
