@@ -54,6 +54,7 @@ _STOP_WORDS = {
     "есть",
     "нет",
 }
+_NORMALIZED_STOP_WORDS = {word.replace("ё", "е") for word in _STOP_WORDS}
 
 _CATEGORY_RULES: list[tuple[str, tuple[str, ...]]] = [
     ("парковка", ("парков", "шлагбаум", "машин", "мест")),
@@ -73,9 +74,85 @@ def _tokenize(text: str) -> list[str]:
     return [w for w in re.findall(r"[а-яёa-z0-9]+", text.lower()) if len(w) >= 3]
 
 
+def _normalize_token(token: str) -> str:
+    return token.replace("ё", "е")
+
+
 def _content_tokens(text: str) -> list[str]:
     """Токены без стоп-слов — для TF-IDF."""
-    return [w for w in _tokenize(text) if w not in _STOP_WORDS]
+    normalized_tokens = [_normalize_token(word) for word in _tokenize(text)]
+    return [word for word in normalized_tokens if word not in _NORMALIZED_STOP_WORDS]
+
+
+def _bounded_levenshtein(first: str, second: str, max_distance: int = 1) -> int:
+    if first == second:
+        return 0
+    if abs(len(first) - len(second)) > max_distance:
+        return max_distance + 1
+
+    previous = list(range(len(second) + 1))
+    for i, char_first in enumerate(first, 1):
+        current = [i]
+        min_row = i
+        for j, char_second in enumerate(second, 1):
+            cost = 0 if char_first == char_second else 1
+            current.append(
+                min(
+                    previous[j] + 1,
+                    current[j - 1] + 1,
+                    previous[j - 1] + cost,
+                )
+            )
+            min_row = min(min_row, current[-1])
+        if min_row > max_distance:
+            return max_distance + 1
+        previous = current
+    return previous[-1]
+
+
+def _common_prefix_len(first: str, second: str) -> int:
+    max_len = min(len(first), len(second))
+    idx = 0
+    while idx < max_len and first[idx] == second[idx]:
+        idx += 1
+    return idx
+
+
+def _token_similarity(first: str, second: str) -> float:
+    """Оценивает близость токенов: exact > typo > common prefix."""
+    if first == second:
+        return 1.0
+
+    if len(first) >= 5 and len(second) >= 5:
+        if _bounded_levenshtein(first, second, max_distance=1) <= 1:
+            return 0.92
+
+        prefix_len = _common_prefix_len(first, second)
+        if prefix_len >= 5:
+            shorter = min(len(first), len(second))
+            return 0.65 + 0.3 * (prefix_len / shorter)
+
+    return 0.0
+
+
+def _semantic_overlap_score(query_tokens: list[str], doc_tokens: list[str]) -> float:
+    """Мягкий overlap: учитывает словоформы и мелкие опечатки между query/doc."""
+    if not query_tokens or not doc_tokens:
+        return 0.0
+
+    doc_terms = set(doc_tokens)
+    matched = 0.0
+    for query_token in set(query_tokens):
+        best = 0.0
+        for doc_term in doc_terms:
+            similarity = _token_similarity(query_token, doc_term)
+            if similarity > best:
+                best = similarity
+                if best == 1.0:
+                    break
+        matched += best
+
+    return matched / max(len(set(query_tokens)), 1)
 
 
 def _token_set(text: str) -> set[str]:
@@ -240,9 +317,11 @@ def rank_rag_messages(
     scored: list[tuple[RagMessage, float]] = []
     for msg, doc_tokens in zip(messages, doc_tokens_list):
         tfidf_score = ranker.score(doc_tokens, query_tokens)
+        overlap_score = _semantic_overlap_score(query_tokens, doc_tokens)
         decay = _time_decay_factor(msg.created_at)
-        # Итоговый score: TF-IDF * time_decay (свежие записи приоритетнее)
-        final_score = tfidf_score * (0.7 + 0.3 * decay)
+        # Итоговый score: tfidf + мягкое совпадение токенов, затем time_decay
+        lexical_score = 0.75 * tfidf_score + 0.25 * overlap_score
+        final_score = lexical_score * (0.7 + 0.3 * decay)
         scored.append((msg, final_score))
 
     scored.sort(key=lambda item: item[1], reverse=True)

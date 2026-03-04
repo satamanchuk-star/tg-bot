@@ -96,3 +96,69 @@ def test_rag_systematization_merges_similar_messages_in_context() -> None:
     assert "(парковка)" in context
     assert "Шлагбаум открывается через приложение УК." in context
     assert "Шлагбаум можно открыть через приложение УК и номер квартиры." in context
+
+
+async def _prepare_parking_messages() -> list[str]:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        await add_rag_message(
+            session,
+            chat_id=102,
+            message_text="Парковка оформляется через управляющую компанию по заявлению.",
+            added_by_user_id=1,
+        )
+        await add_rag_message(
+            session,
+            chat_id=102,
+            message_text="По вопросам лифта пишите в тему Жалобы.",
+            added_by_user_id=1,
+        )
+        await session.commit()
+
+        all_messages = await get_all_rag_messages(session, 102)
+        ranked = rank_rag_messages(all_messages, query="Как оформить паковку?")
+
+    await engine.dispose()
+    return [msg.message_text for msg in ranked]
+
+
+def test_rag_ranking_handles_word_forms_and_minor_typos() -> None:
+    messages = asyncio.run(_prepare_parking_messages())
+    assert messages[0] == "Парковка оформляется через управляющую компанию по заявлению."
+
+
+async def _prepare_mixed_domain_messages() -> list[str]:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        await add_rag_message(
+            session,
+            chat_id=103,
+            message_text="Для оформления пропуска в паркинг обратитесь в диспетчерскую УК.",
+            added_by_user_id=1,
+        )
+        await add_rag_message(
+            session,
+            chat_id=103,
+            message_text="По шуму после 23:00 пишите в тему Жалобы.",
+            added_by_user_id=1,
+        )
+        await session.commit()
+
+        all_messages = await get_all_rag_messages(session, 103)
+        ranked = rank_rag_messages(all_messages, query="Как оформить пропуск в паркинг через диспечерскую?")
+
+    await engine.dispose()
+    return [msg.message_text for msg in ranked]
+
+
+def test_rag_ranking_works_for_all_rag_topics_not_only_parking_examples() -> None:
+    messages = asyncio.run(_prepare_mixed_domain_messages())
+    assert messages[0] == "Для оформления пропуска в паркинг обратитесь в диспетчерскую УК."
