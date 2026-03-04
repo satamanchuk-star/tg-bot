@@ -21,7 +21,16 @@ from aiogram.types import (
 )
 
 from app.config import settings
-from app.services.ai_module import get_ai_client
+from app.db import get_session
+from app.services.ai_module import get_ai_client, _normalize_cache_key
+from app.services.chat_history import (
+    load_context,
+    save_exchange,
+    get_messages_for_compression,
+    replace_with_summary,
+)
+from app.services.faq import get_faq_answer, track_question, update_faq_rating
+from app.services.feedback import save_feedback
 from app.utils.admin import is_admin
 from app.utils.admin_help import ADMIN_HELP
 
@@ -129,6 +138,7 @@ CALLBACK_PREFIX = "help"
 CALLBACK_BACK = f"{CALLBACK_PREFIX}:back"
 CALLBACK_WHERE = f"{CALLBACK_PREFIX}:where"
 CALLBACK_TOPIC = f"{CALLBACK_PREFIX}:topic"
+FEEDBACK_PREFIX = "ai_fb"
 
 WAITING_TIMEOUT = timedelta(minutes=2)
 HINT_COOLDOWN = timedelta(seconds=30)
@@ -319,9 +329,12 @@ HELP_ROUTING_STATE: dict[tuple[int, int], HelpRoutingState] = {}
 HELP_TIMEOUT_TASKS: dict[tuple[int, int], asyncio.Task[None]] = {}
 LAST_HINT_TIME: dict[tuple[int, int], datetime] = {}
 HELP_DELETE_TASKS: dict[tuple[int, int], asyncio.Task[None]] = {}
+# In-memory кэш используется как быстрый fallback; основная история — в БД
 AI_CHAT_HISTORY: dict[tuple[int, int], deque[str]] = {}
 AI_CHAT_HISTORY_LIMIT = 20
 LAST_AI_REPLY_TIME: dict[tuple[int, int], datetime] = {}
+# Кэш промпт→ответ для feedback кнопок (message_id → данные)
+_PENDING_FEEDBACK: dict[int, tuple[int, int, str, str, str]] = {}  # msg_id → (chat_id, user_id, prompt, reply, question_key)
 
 
 async def _get_menu_text(bot: Bot, user_id: int | None) -> str:
@@ -456,19 +469,88 @@ def _ai_key(chat_id: int, user_id: int) -> tuple[int, int]:
 
 
 def _get_ai_context(chat_id: int, user_id: int) -> list[str]:
+    """Быстрый in-memory fallback — используется если БД-контекст не загружен."""
     history = AI_CHAT_HISTORY.get(_ai_key(chat_id, user_id))
     if history is None:
         return []
     return list(history)
 
 
-def _remember_ai_exchange(chat_id: int, user_id: int, prompt: str, reply: str) -> None:
+async def _get_ai_context_persistent(chat_id: int, user_id: int) -> list[str]:
+    """Загружает контекст из БД (персистентный) с fallback на in-memory."""
+    try:
+        async for session in get_session():
+            ctx = await load_context(session, chat_id, user_id)
+            if ctx:
+                return ctx
+    except Exception:
+        logger.warning("Не удалось загрузить историю из БД, используем in-memory.")
+    return _get_ai_context(chat_id, user_id)
+
+
+async def _remember_ai_exchange_persistent(
+    chat_id: int, user_id: int, prompt: str, reply: str
+) -> None:
+    """Сохраняет обмен в БД + in-memory кэш."""
+    # In-memory для быстрого доступа
     history = AI_CHAT_HISTORY.setdefault(
         _ai_key(chat_id, user_id),
         deque(maxlen=AI_CHAT_HISTORY_LIMIT),
     )
     history.append(f"user: {prompt[:1000]}")
     history.append(f"assistant: {reply[:800]}")
+
+    # Персистентное сохранение в БД
+    try:
+        async for session in get_session():
+            await save_exchange(session, chat_id, user_id, prompt, reply)
+    except Exception:
+        logger.warning("Не удалось сохранить историю диалога в БД.")
+
+    # Проверяем, нужно ли сжатие (conversation summary)
+    try:
+        await _try_compress_history(chat_id, user_id)
+    except Exception:
+        logger.warning("Не удалось выполнить сжатие истории диалога.")
+
+
+async def _try_compress_history(chat_id: int, user_id: int) -> None:
+    """Сжимает старые сообщения в саммари через LLM, если порог достигнут."""
+    async for session in get_session():
+        messages = await get_messages_for_compression(session, chat_id, user_id)
+        if messages is None:
+            return
+
+        # Формируем текст для сжатия
+        text_to_summarize = "\n".join(f"{m.role}: {m.text}" for m in messages)
+        old_ids = [m.id for m in messages]
+
+        # Вызываем LLM для генерации саммари
+        try:
+            summary = await get_ai_client().summarize_conversation(
+                text_to_summarize, chat_id=chat_id
+            )
+        except Exception:
+            # Если LLM недоступен — делаем простое обрезание
+            summary = "Ранее обсуждали: " + "; ".join(
+                m.text[:80] for m in messages if m.role == "user"
+            )[:500]
+
+        await replace_with_summary(session, chat_id, user_id, old_ids, summary)
+
+
+def _feedback_keyboard(bot_message_id: int) -> InlineKeyboardMarkup:
+    """Создаёт inline-кнопки для оценки ответа ИИ."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="\U0001f44d",
+            callback_data=f"{FEEDBACK_PREFIX}:up:{bot_message_id}",
+        ),
+        InlineKeyboardButton(
+            text="\U0001f44e",
+            callback_data=f"{FEEDBACK_PREFIX}:down:{bot_message_id}",
+        ),
+    ]])
 
 
 def _extract_ai_prompt(message: Message) -> str:
@@ -703,14 +785,36 @@ async def ai_command(message: Message) -> None:
     if not prompt:
         await message.reply("Напишите вопрос после команды: /ai <ваш вопрос>")
         return
-    context = _get_ai_context(message.chat.id, message.from_user.id)
-    reply = await get_ai_client().assistant_reply(
-        prompt,
-        context,
-        chat_id=message.chat.id,
+
+    question_key = _normalize_cache_key(prompt)
+
+    # Проверяем FAQ — если вопрос частый и хорошо оценённый, отдаём без LLM
+    faq_answer = await _check_faq(message.chat.id, question_key)
+    if faq_answer:
+        reply = faq_answer
+    else:
+        context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
+        reply = await get_ai_client().assistant_reply(
+            prompt, context, chat_id=message.chat.id,
+        )
+
+    await _remember_ai_exchange_persistent(
+        message.chat.id, message.from_user.id, prompt, reply,
     )
-    _remember_ai_exchange(message.chat.id, message.from_user.id, prompt, reply)
-    await message.reply(reply)
+
+    # Трекаем вопрос в FAQ
+    await _track_faq(message.chat.id, question_key, reply)
+
+    # Отправляем ответ с кнопками оценки
+    sent = await message.reply(reply, reply_markup=_feedback_keyboard(0))
+    # Обновляем кнопки с реальным message_id
+    _PENDING_FEEDBACK[sent.message_id] = (
+        message.chat.id, message.from_user.id, prompt[:1000], reply[:800], question_key,
+    )
+    try:
+        await sent.edit_reply_markup(reply_markup=_feedback_keyboard(sent.message_id))
+    except Exception:
+        pass  # Не критично если не удалось обновить кнопки
 
 
 @router.message(BotMentionFilter(), flags={"block": False})
@@ -741,14 +845,128 @@ async def mention_help(message: Message, bot: Bot) -> None:
         await message.reply(AI_RATE_LIMIT_TEXT)
         return
 
-    context = _get_ai_context(message.chat.id, message.from_user.id)
     if prompt:
-        reply = await get_ai_client().assistant_reply(prompt, context, chat_id=message.chat.id)
-        _remember_ai_exchange(message.chat.id, message.from_user.id, prompt, reply)
+        question_key = _normalize_cache_key(prompt)
+
+        # Проверяем FAQ
+        faq_answer = await _check_faq(message.chat.id, question_key)
+        if faq_answer:
+            reply = faq_answer
+        else:
+            context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
+            reply = await get_ai_client().assistant_reply(prompt, context, chat_id=message.chat.id)
+
+        await _remember_ai_exchange_persistent(
+            message.chat.id, message.from_user.id, prompt, reply,
+        )
+
+        # Трекаем вопрос в FAQ
+        await _track_faq(message.chat.id, question_key, reply)
+
+        # Отправляем с кнопками оценки
+        sent = await message.reply(reply, reply_markup=_feedback_keyboard(0))
+        _PENDING_FEEDBACK[sent.message_id] = (
+            message.chat.id, message.from_user.id, prompt[:1000], reply[:800], question_key,
+        )
+        try:
+            await sent.edit_reply_markup(reply_markup=_feedback_keyboard(sent.message_id))
+        except Exception:
+            pass
     else:
         reply = _next_mention_reply()
-    await message.reply(reply)
+        await message.reply(reply)
     logger.info("OUT: MENTION_REPLY")
+
+
+@router.callback_query(F.data.startswith(f"{FEEDBACK_PREFIX}:"))
+async def ai_feedback_callback(callback: CallbackQuery) -> None:
+    """Обработчик кнопок оценки ответа ИИ."""
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        await callback.answer()
+        return
+
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer()
+        return
+
+    direction = parts[1]  # up / down
+    try:
+        bot_msg_id = int(parts[2])
+    except ValueError:
+        await callback.answer()
+        return
+
+    rating = 1 if direction == "up" else -1
+
+    pending = _PENDING_FEEDBACK.get(bot_msg_id)
+    if pending is None:
+        await callback.answer("Оценка уже недоступна.")
+        return
+
+    chat_id, original_user_id, prompt_text, reply_text, question_key = pending
+
+    # Сохраняем feedback в БД
+    try:
+        async for session in get_session():
+            fb = await save_feedback(
+                session,
+                chat_id=chat_id,
+                user_id=callback.from_user.id,
+                bot_message_id=bot_msg_id,
+                prompt_text=prompt_text,
+                reply_text=reply_text,
+                rating=rating,
+            )
+            if fb is None:
+                await callback.answer("Вы уже оценивали этот ответ.")
+                return
+
+            # Обновляем рейтинг FAQ
+            await update_faq_rating(
+                session, chat_id=chat_id, question_key=question_key, delta=rating,
+            )
+            await session.commit()
+            break
+    except Exception:
+        logger.warning("Не удалось сохранить feedback.")
+        await callback.answer("Ошибка при сохранении оценки.")
+        return
+
+    # Убираем кнопки после оценки
+    emoji = "\U0001f44d" if rating > 0 else "\U0001f44e"
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await callback.answer(f"Спасибо за оценку {emoji}")
+
+    # Очищаем кэш, чтобы не копился бесконечно
+    if len(_PENDING_FEEDBACK) > 500:
+        oldest_keys = sorted(_PENDING_FEEDBACK.keys())[:250]
+        for k in oldest_keys:
+            _PENDING_FEEDBACK.pop(k, None)
+
+
+async def _check_faq(chat_id: int, question_key: str) -> str | None:
+    """Проверяет FAQ на закреплённый ответ."""
+    try:
+        async for session in get_session():
+            return await get_faq_answer(session, chat_id=chat_id, question_key=question_key)
+    except Exception:
+        logger.warning("Не удалось проверить FAQ.")
+    return None
+
+
+async def _track_faq(chat_id: int, question_key: str, answer: str) -> None:
+    """Трекает вопрос в FAQ."""
+    try:
+        async for session in get_session():
+            await track_question(session, chat_id=chat_id, question_key=question_key, answer=answer)
+            await session.commit()
+    except Exception:
+        logger.warning("Не удалось обновить FAQ-трекинг.")
 
 
 @router.message(HelpRoutingActiveFilter(), flags={"block": False})
