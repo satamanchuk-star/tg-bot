@@ -186,6 +186,54 @@ class RagMessage(Base):
     )
 
 
+class ChatHistory(Base):
+    """Почему: персистентная история диалогов с ИИ — бот помнит контекст после рестарта."""
+    __tablename__ = "chat_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    role: Mapped[str] = mapped_column(String(20))  # user / assistant / summary
+    text: Mapped[str] = mapped_column(Text)
+    is_summary: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
+class AiFeedback(Base):
+    """Почему: обратная связь от пользователей позволяет улучшать качество ответов."""
+    __tablename__ = "ai_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(Integer)
+    bot_message_id: Mapped[int] = mapped_column(Integer)
+    prompt_text: Mapped[str] = mapped_column(Text)
+    reply_text: Mapped[str] = mapped_column(Text)
+    rating: Mapped[int] = mapped_column(Integer)  # +1 / -1
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
+class FrequentQuestion(Base):
+    """Почему: трекинг частых вопросов ускоряет ответы и экономит токены."""
+    __tablename__ = "frequent_questions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    question_key: Mapped[str] = mapped_column(String(500), index=True)
+    best_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ask_count: Mapped[int] = mapped_column(Integer, default=1)
+    positive_ratings: Mapped[int] = mapped_column(Integer, default=0)
+    negative_ratings: Mapped[int] = mapped_column(Integer, default=0)
+    last_asked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
 class AiUsage(Base):
     __tablename__ = "ai_usage"
 

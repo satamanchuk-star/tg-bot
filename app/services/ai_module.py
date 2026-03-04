@@ -124,6 +124,12 @@ _DAILY_SUMMARY_SYSTEM_PROMPT = (
     "без таблиц, без персональных данных, нейтрально и по фактам."
 )
 
+_CONVERSATION_SUMMARY_PROMPT = (
+    "Сожми переписку в 2-3 предложения на русском. Сохрани ключевые темы, "
+    "вопросы и ответы. Не теряй факты, но убери повторы и несущественные детали. "
+    "Результат — краткое резюме разговора, до 500 символов."
+)
+
 _USER_FALLBACK = "Модуль ИИ в подготовке, работает локальный режим."
 
 _ALLOWED_ASSISTANT_TOPICS = (
@@ -275,6 +281,8 @@ class AiProvider(Protocol):
 
     async def categorize_rag_entry(self, text: str, *, chat_id: int) -> RagCategorizationResult: ...
 
+    async def summarize_conversation(self, conversation: str, *, chat_id: int) -> str: ...
+
 
 class StubAiProvider:
     """Почему: стабильно возвращает локальное поведение до реального подключения ИИ."""
@@ -313,6 +321,12 @@ class StubAiProvider:
         category = classify_rag_message(text)
         summary = text[:200]
         return RagCategorizationResult(category=category, summary=summary, used_fallback=True)
+
+    async def summarize_conversation(self, conversation: str, *, chat_id: int) -> str:
+        # Простое обрезание без LLM
+        lines = conversation.strip().split("\n")
+        user_lines = [l for l in lines if l.startswith("user:")]
+        return "Ранее обсуждали: " + "; ".join(l[6:].strip()[:80] for l in user_lines)[:500]
 
 
 class OpenRouterProvider:
@@ -547,6 +561,23 @@ class OpenRouterProvider:
             category = classify_rag_message(text)
             return RagCategorizationResult(category=category, summary=text[:200], used_fallback=True)
 
+    async def summarize_conversation(self, conversation: str, *, chat_id: int) -> str:
+        try:
+            content, _ = await self._chat_completion(
+                [
+                    {"role": "system", "content": _CONVERSATION_SUMMARY_PROMPT},
+                    {"role": "user", "content": conversation[:3000]},
+                ],
+                chat_id=chat_id,
+            )
+            return content[:500]
+        except RuntimeError as exc:
+            self._record_runtime_error(exc)
+            # Fallback — простое обрезание
+            lines = conversation.strip().split("\n")
+            user_lines = [l for l in lines if l.startswith("user:")]
+            return "Ранее обсуждали: " + "; ".join(l[6:].strip()[:80] for l in user_lines)[:500]
+
 
 class AiModuleClient:
     """Почему: фасад для будущего ИИ, чтобы точки интеграции не трогать повторно."""
@@ -641,6 +672,18 @@ class AiModuleClient:
             from app.services.rag import classify_rag_message
             category = classify_rag_message(text)
             return RagCategorizationResult(category=category, summary=text[:200], used_fallback=True)
+
+    async def summarize_conversation(self, conversation: str, *, chat_id: int) -> str:
+        try:
+            return await asyncio.wait_for(
+                self._provider.summarize_conversation(conversation, chat_id=chat_id),
+                timeout=_SUMMARY_SOFT_TIMEOUT_SECONDS,
+            )
+        except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
+            logger.warning("AI conversation summary timeout; using simple truncation.")
+            lines = conversation.strip().split("\n")
+            user_lines = [l for l in lines if l.startswith("user:")]
+            return "Ранее обсуждали: " + "; ".join(l[6:].strip()[:80] for l in user_lines)[:500]
 
 
 def _has_aggressive_target(text: str) -> bool:

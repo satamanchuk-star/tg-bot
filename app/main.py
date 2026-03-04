@@ -393,12 +393,15 @@ async def cleanup_database() -> None:
     if stats is None:
         return
     logger.info(
-        "Очистка БД завершена: message_logs=%s moderation_events=%s topic_stats=%s ai_usage=%s rag_expired=%s",
+        "Очистка БД завершена: message_logs=%s moderation_events=%s topic_stats=%s ai_usage=%s rag_expired=%s chat_history=%s ai_feedback=%s faq=%s",
         stats["message_logs"],
         stats["moderation_events"],
         stats["topic_stats"],
         stats["ai_usage"],
         stats.get("rag_expired", 0),
+        stats.get("chat_history", 0),
+        stats.get("ai_feedback", 0),
+        stats.get("frequent_questions", 0),
     )
 
 

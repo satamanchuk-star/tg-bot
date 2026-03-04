@@ -9,7 +9,7 @@ from sqlalchemy.sql.dml import Delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import AiUsage, MessageLog, ModerationEvent, RagMessage, TopicStat
+from app.models import AiFeedback, AiUsage, ChatHistory, FrequentQuestion, MessageLog, ModerationEvent, RagMessage, TopicStat
 
 
 
@@ -47,6 +47,23 @@ async def cleanup_old_data(session: AsyncSession, *, now_utc: datetime | None = 
             RagMessage.expires_at < now,
         ),
     )
+    # Очистка старой истории диалогов (>30 дней)
+    history_cutoff = now - timedelta(days=30)
+    removed_chat_history = await _delete_and_count(
+        session,
+        delete(ChatHistory).where(ChatHistory.created_at < history_cutoff),
+    )
+    # Очистка старого feedback (>90 дней)
+    feedback_cutoff = now - timedelta(days=90)
+    removed_feedback = await _delete_and_count(
+        session,
+        delete(AiFeedback).where(AiFeedback.created_at < feedback_cutoff),
+    )
+    # Очистка устаревших FAQ (не спрашивали >90 дней)
+    removed_faq = await _delete_and_count(
+        session,
+        delete(FrequentQuestion).where(FrequentQuestion.last_asked_at < feedback_cutoff),
+    )
 
     await session.commit()
 
@@ -56,6 +73,9 @@ async def cleanup_old_data(session: AsyncSession, *, now_utc: datetime | None = 
         "topic_stats": removed_topic_stats,
         "ai_usage": removed_ai_usage,
         "rag_expired": removed_rag,
+        "chat_history": removed_chat_history,
+        "ai_feedback": removed_feedback,
+        "frequent_questions": removed_faq,
     }
 
 
