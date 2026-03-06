@@ -3,10 +3,103 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
+from dotenv import dotenv_values
 from pydantic import AliasChoices, Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+REQUIRED_ENV_FIELDS: tuple[str, ...] = (
+    "BOT_TOKEN",
+    "FORUM_CHAT_ID",
+    "ADMIN_LOG_CHAT_ID",
+)
+
+
+def _extract_compose_bot_env(compose_path: Path) -> dict[str, str]:
+    """Извлекает environment/env_file для сервиса bot из docker-compose.yaml."""
+    if not compose_path.exists():
+        return {}
+
+    lines = compose_path.read_text(encoding="utf-8").splitlines()
+    result: dict[str, str] = {}
+
+    in_bot = False
+    in_environment = False
+    in_env_file = False
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip(" "))
+
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        if stripped == "bot:" and indent == 2:
+            in_bot = True
+            in_environment = False
+            in_env_file = False
+            continue
+
+        if in_bot and indent <= 2 and stripped.endswith(":") and stripped != "bot:":
+            in_bot = False
+            in_environment = False
+            in_env_file = False
+
+        if not in_bot:
+            continue
+
+        if stripped == "environment:" and indent == 4:
+            in_environment = True
+            in_env_file = False
+            continue
+
+        if stripped == "env_file:" and indent == 4:
+            in_env_file = True
+            in_environment = False
+            continue
+
+        if indent == 4 and stripped.endswith(":"):
+            in_environment = False
+            in_env_file = False
+
+        if in_environment:
+            if indent == 6 and "=" in stripped and stripped.startswith("-"):
+                item = stripped.removeprefix("-").strip()
+                key, value = item.split("=", 1)
+                result[key.strip()] = value.strip().strip("'\"")
+                continue
+            if indent == 6 and ":" in stripped and not stripped.startswith("-"):
+                key, value = stripped.split(":", 1)
+                result[key.strip()] = value.strip().strip("'\"")
+                continue
+
+        if in_env_file and indent == 6 and stripped.startswith("-"):
+            env_file_item = stripped.removeprefix("-").strip().strip("'\"")
+            env_file_path = (compose_path.parent / env_file_item).resolve()
+            if env_file_path.exists():
+                env_values = dotenv_values(env_file_path)
+                for key, value in env_values.items():
+                    if value is None:
+                        continue
+                    result[str(key)] = str(value)
+
+    return result
+
+
+def _inject_required_env_from_server_compose() -> None:
+    """Подхватывает обязательные env из /opt/alexbot/docker-compose.yaml, если их нет."""
+    compose_path = Path("/opt/alexbot/docker-compose.yaml")
+    compose_env = _extract_compose_bot_env(compose_path)
+    for key in REQUIRED_ENV_FIELDS:
+        if os.getenv(key):
+            continue
+        value = compose_env.get(key)
+        if value:
+            os.environ[key] = value
 
 
 class Settings(BaseSettings):
@@ -142,15 +235,23 @@ class Settings(BaseSettings):
 
 
 def _load_settings() -> Settings:
+    _inject_required_env_from_server_compose()
     try:
         return Settings()  # type: ignore[call-arg]
     except ValidationError as exc:
+        env_file_path = Path(".env").resolve()
         logging.basicConfig(
             level=logging.ERROR,
             format="%(asctime)s | %(levelname)s | %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
         logger = logging.getLogger(__name__)
+        logger.error(
+            "Проверка .env: path=%s exists=%s cwd=%s",
+            env_file_path,
+            env_file_path.exists(),
+            Path.cwd(),
+        )
         missing = []
         for err in exc.errors():
             if err.get("type") != "missing":
