@@ -6,7 +6,9 @@ from app.services.ai_module import (
     _MODERATION_SYSTEM_PROMPT,
     OpenRouterProvider,
     build_local_assistant_reply,
+    detect_aggression_level,
     detect_profanity,
+    local_moderation,
     get_ai_diagnostics,
     is_assistant_topic_allowed,
     local_quiz_answer_decision,
@@ -98,10 +100,33 @@ def test_local_assistant_reply_unknown_question_is_friendly() -> None:
     assert "🙂" in reply
 
 
+
+
+def test_detects_masked_profanity_with_latin_and_digits() -> None:
+    normalized = normalize_for_profanity("Ты п1зд@бол")
+    assert detect_profanity(normalized)
+
+
+def test_aggression_level_and_warning_action() -> None:
+    assert detect_aggression_level("Ты бля не прав") == "low"
+    decision = local_moderation("Ты бля не прав")
+    assert decision.action == "warn"
+    assert decision.severity == 1
+
+
+def test_high_aggression_keeps_strict_action() -> None:
+    decision = local_moderation("Я тебя убью")
+    assert decision.action == "delete_strike"
+    assert decision.severity == 3
+
 def test_assistant_prompt_has_human_style_and_limits() -> None:
+    assert "дружелюбный сосед-помощник" in _ASSISTANT_SYSTEM_PROMPT
     assert "как живой человек" in _ASSISTANT_SYSTEM_PROMPT
     assert "без упоминания, что ты ИИ" in _ASSISTANT_SYSTEM_PROMPT
     assert "до 800 символов" in _ASSISTANT_SYSTEM_PROMPT
+    assert "детскую площадку" in _ASSISTANT_SYSTEM_PROMPT
+    assert "платежи" in _ASSISTANT_SYSTEM_PROMPT
+    assert "дружелюбная атмосфера" in _ASSISTANT_SYSTEM_PROMPT
     assert "точной информации нет" in _ASSISTANT_SYSTEM_PROMPT
 
 

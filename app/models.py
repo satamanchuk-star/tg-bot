@@ -173,6 +173,7 @@ class RagMessage(Base):
     added_by_user_id: Mapped[int] = mapped_column(Integer)
     source_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     rag_category: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     rag_semantic_key: Mapped[str | None] = mapped_column(
         String(120),
@@ -195,6 +196,7 @@ class ChatHistory(Base):
     user_id: Mapped[int] = mapped_column(Integer, index=True)
     role: Mapped[str] = mapped_column(String(20))  # user / assistant / summary
     text: Mapped[str] = mapped_column(Text)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_summary: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True

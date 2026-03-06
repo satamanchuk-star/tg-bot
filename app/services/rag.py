@@ -57,11 +57,15 @@ _STOP_WORDS = {
 _NORMALIZED_STOP_WORDS = {word.replace("ё", "е") for word in _STOP_WORDS}
 
 _CATEGORY_RULES: list[tuple[str, tuple[str, ...]]] = [
-    ("парковка", ("парков", "шлагбаум", "машин", "мест")),
-    ("лифт", ("лифт", "подъезд", "этаж")),
+    ("парковка", ("парков", "шлагбаум", "машин", "мест", "паркинг")),
+    ("безопасность_и_доступ", ("домофон", "код", "доступ", "замок", "сигнализац", "подъезд")),
+    ("лифт", ("лифт", "этаж")),
     ("ук", ("ук", "управля", "диспетчер", "заявк")),
     ("коммуналка", ("вода", "свет", "отоплен", "счетчик")),
     ("безопасность", ("охран", "камера", "пропуск", "консьерж")),
+    ("детская_площадка", ("площадк", "качел", "горк", "песочниц", "дет")),
+    ("коммунальные_сервисы", ("электр", "сантех", "канализац", "мусор", "дворник")),
+    ("платежи", ("квитанц", "оплат", "тариф", "долг", "начислен")),
 ]
 
 # Дефолтный TTL для RAG-записей (90 дней)
@@ -251,6 +255,7 @@ async def add_rag_message(
     source_user_id: int | None = None,
     source_message_id: int | None = None,
     ttl_days: int | None = None,
+    is_admin: bool = False,
 ) -> RagMessage:
     """Добавляет сообщение в RAG-базу и сразу классифицирует его."""
     cleaned = _normalize_text(message_text)
@@ -264,6 +269,7 @@ async def add_rag_message(
         added_by_user_id=added_by_user_id,
         source_user_id=source_user_id,
         source_message_id=source_message_id,
+        is_admin=is_admin,
         rag_category=category,
         rag_semantic_key=semantic_key,
         rag_canonical_text=cleaned,
@@ -298,13 +304,18 @@ def rank_rag_messages(
     query: str,
     top_k: int | None = None,
 ) -> list[RagMessage]:
-    """Ранжирует RAG-сообщения по TF-IDF релевантности с учётом time-decay."""
+    """Ранжирует RAG-сообщения по TF-IDF релевантности и приоритету админских записей."""
     if not messages:
         return []
 
     query_tokens = _content_tokens(query)
     if not query_tokens:
-        return messages[:top_k] if top_k is not None else messages
+        ranked_no_query = sorted(
+            messages,
+            key=lambda msg: (not bool(msg.is_admin), msg.created_at or datetime.min),
+            reverse=False,
+        )
+        return ranked_no_query[:top_k] if top_k is not None else ranked_no_query
 
     # Строим корпус для IDF
     doc_tokens_list: list[list[str]] = []
@@ -324,7 +335,13 @@ def rank_rag_messages(
         final_score = lexical_score * (0.7 + 0.3 * decay)
         scored.append((msg, final_score))
 
-    scored.sort(key=lambda item: item[1], reverse=True)
+    scored.sort(
+        key=lambda item: (
+            not bool(item[0].is_admin),
+            -item[1],
+            -(item[0].created_at.timestamp() if item[0].created_at else 0),
+        )
+    )
     ranked = [msg for msg, _ in scored]
     return ranked[:top_k] if top_k is not None else ranked
 

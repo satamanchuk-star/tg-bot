@@ -51,11 +51,11 @@ async def save_exchange(
     """Сохраняет пару user/assistant в БД и удаляет самые старые, если превышен лимит."""
     session.add(ChatHistory(
         chat_id=chat_id, user_id=user_id,
-        role="user", text=prompt[:1000],
+        role="user", text=prompt[:1000], message=prompt[:1000],
     ))
     session.add(ChatHistory(
         chat_id=chat_id, user_id=user_id,
-        role="assistant", text=reply[:800],
+        role="assistant", text=reply[:800], message=reply[:800],
     ))
     await session.flush()
 
@@ -140,7 +140,7 @@ async def replace_with_summary(
         chat_id=chat_id,
         user_id=user_id,
         role="summary",
-        text=summary_text[:800],
+        text=summary_text[:800], message=summary_text[:800],
         is_summary=True,
     ))
     await session.commit()
