@@ -28,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
         or env_values.get("AI_KEY")
         or env_values.get("OPENROUTER_API_KEY")
     )
-    default_model = os.getenv("AI_MODEL") or env_values.get("AI_MODEL") or "qwen/qwen3-14b"
+    default_model = os.getenv("AI_MODEL") or env_values.get("AI_MODEL") or "qwen/qwen3-32b"
     default_api_url = os.getenv("AI_API_URL") or env_values.get("AI_API_URL") or "https://openrouter.ai/api/v1"
 
     parser = argparse.ArgumentParser(description="Проверка OpenRouter Chat Completions API")
