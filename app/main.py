@@ -570,7 +570,8 @@ async def on_startup(bot: Bot) -> None:
     # Инициализируем AI-клиент и логируем режим работы
     get_ai_client()
     if settings.ai_enabled and settings.ai_key:
-        ai_mode = f"AI: OpenRouter ({settings.ai_model})"
+        source_note = " (по умолчанию, AI_MODEL не задан)" if settings.ai_model_is_default else ""
+        ai_mode = f"AI: OpenRouter ({settings.ai_model}){source_note}"
     elif not settings.ai_enabled:
         ai_mode = "AI: отключен (AI_ENABLED=false)"
     else:

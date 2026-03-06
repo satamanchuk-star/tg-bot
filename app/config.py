@@ -233,6 +233,11 @@ class Settings(BaseSettings):
             return db_path.expanduser().resolve().parent
         return Path("/app/data")
 
+    @property
+    def ai_model_is_default(self) -> bool:
+        """Показывает, был ли AI_MODEL задан явно через окружение/.env."""
+        return "ai_model" not in self.model_fields_set
+
 
 def _load_settings() -> Settings:
     _inject_required_env_from_server_compose()
