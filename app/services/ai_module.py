@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Awaitable, Callable, Literal, Protocol
 
 import httpx
+from sqlalchemy import select
 
 from app.config import settings
 from app.db import get_session
@@ -103,7 +104,7 @@ _MODERATION_SYSTEM_PROMPT = (
 )
 
 _ASSISTANT_SYSTEM_PROMPT = (
-    "Ты виртуальный сосед-помощник в чате ЖК. Отвечай так, как живой человек: "
+    "Ты дружелюбный сосед-помощник в чате ЖК. Отвечай так, как живой человек: "
     "по-человечески, с эмпатией, без канцелярита и без упоминания, что ты ИИ. "
     "Пиши на русском, кратко (до 800 символов, обычно 2-5 предложений), "
     "можно 1 уместный эмодзи, без таблиц и длинных списков. "
@@ -112,12 +113,18 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "сбором персональных данных. Если запрос вне рамок — вежливо откажи и предложи "
     "безопасную альтернативу по теме ЖК/быта.\n\n"
     "ВАЖНО: если в контексте есть раздел «База знаний ЖК», используй его как "
-    "главный источник. В базе могут быть дубли и фрагменты одной темы — "
+    "главный источник. Категории базы знаний могут включать парковку, лифт, УК, "
+    "коммуналку, безопасность, детскую площадку, коммунальные сервисы, "
+    "безопасность и доступ, платежи, ремонт, правила и общее. "
+    "В базе могут быть дубли и фрагменты одной темы — "
     "объединяй их по смыслу и отвечай только нужной пользователю выжимкой. "
     "Не перечисляй лишние детали. Если точной информации нет, честно скажи об этом "
     "и предложи следующий шаг в добродушном, лёгком и немного шутливом тоне "
-    "без выдумывания фактов."
+    "без выдумывания фактов. Если пользователь выражается резко, вежливо напомни, "
+    "что в чате поддерживается дружелюбная атмосфера, и помоги перевести разговор "
+    "в конструктивный тон."
 )
+
 
 _DAILY_SUMMARY_SYSTEM_PROMPT = (
     "Сформируй краткую сводку для админов чата ЖК на русском: до 800 символов, "
@@ -202,7 +209,7 @@ _LATIN_TO_CYR = str.maketrans({
     "x": "х",
     "y": "у",
 })
-_DIGIT_TO_CYR = str.maketrans({"0": "о", "3": "з", "4": "ч", "6": "б"})
+_DIGIT_TO_CYR = str.maketrans({"0": "о", "1": "и", "3": "з", "4": "ч", "6": "б"})
 
 PHONE_RE = re.compile(r"(?:\+7|8)\d{10}")
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
@@ -535,8 +542,8 @@ class OpenRouterProvider:
                         "role": "system",
                         "content": (
                             "Категоризируй сообщение из чата ЖК. Верни только JSON:\n"
-                            '{"category":"парковка|лифт|ук|коммуналка|безопасность|ремонт|'
-                            'правила|общее","summary":"краткая выжимка до 200 символов"}\n'
+                            '{"category":"парковка|лифт|ук|коммуналка|безопасность|детская_площадка|'
+                            'коммунальные_сервисы|безопасность_и_доступ|платежи|ремонт|правила|общее","summary":"краткая выжимка до 200 символов"}\n'
                             "Категория должна отражать основную тему сообщения.\n"
                             "Summary — это сжатая версия ключевых фактов без лишних деталей."
                         ),
@@ -550,7 +557,8 @@ class OpenRouterProvider:
             summary = str(data.get("summary", text[:200]))[:200]
             valid_categories = {
                 "парковка", "лифт", "ук", "коммуналка", "безопасность",
-                "ремонт", "правила", "общее",
+                "детская_площадка", "коммунальные_сервисы", "безопасность_и_доступ",
+                "платежи", "ремонт", "правила", "общее",
             }
             if category not in valid_categories:
                 category = "общее"
@@ -620,6 +628,21 @@ class AiModuleClient:
                 _ASSISTANT_SOFT_TIMEOUT_SECONDS,
             )
             return f"{_USER_FALLBACK} {build_local_assistant_reply(prompt)}"
+
+    async def assistant_reply_with_history(
+        self,
+        prompt: str,
+        *,
+        chat_id: int,
+        user_id: int,
+        context: list[str] | None = None,
+    ) -> str:
+        """Формирует summary из ChatHistory и добавляет его в контекст ответа."""
+        history_summary = await build_dialog_summary_for_prompt(chat_id, user_id)
+        base_context = context or []
+        if history_summary:
+            base_context = [history_summary, *base_context]
+        return await self.assistant_reply(prompt, base_context, chat_id=chat_id)
 
     async def evaluate_quiz_answer(
         self,
@@ -696,6 +719,7 @@ def _has_aggressive_target(text: str) -> bool:
 def local_moderation(text: str) -> ModerationDecision:
     normalized = normalize_for_profanity(text)
     lowered = text.lower()
+    aggression_level = detect_aggression_level(text)
 
     # Угрозы физической расправой — всегда severity 3
     if any(pattern in lowered for pattern in _RUDE_PATTERNS):
@@ -708,9 +732,9 @@ def local_moderation(text: str) -> ModerationDecision:
     if has_profanity and has_insult and _has_aggressive_target(text):
         return ModerationDecision("aggression", 3, 0.85, "delete_strike", False)
 
-    # Прямое оскорбление с матом, направленное на человека — severity 2
-    if has_profanity and _has_aggressive_target(text):
-        return ModerationDecision("profanity", 2, 0.7, "delete_warn", False)
+    # Агрессия средней силы — предупреждение без удаления
+    if has_profanity and _has_aggressive_target(text) and aggression_level == "low":
+        return ModerationDecision("profanity", 1, 0.7, "warn", False)
 
     # Мат без агрессии и адресата (бытовой мат) — severity 0, не наказываем
     if has_profanity:
@@ -726,13 +750,29 @@ def local_moderation(text: str) -> ModerationDecision:
 def normalize_for_profanity(text: str) -> str:
     lowered = text.lower().replace("ё", "е")
     lowered = lowered.translate(_LATIN_TO_CYR).translate(_DIGIT_TO_CYR)
-    lowered = re.sub(r"[\s\-_.*/]+", "", lowered)
+    lowered = re.sub(r"[^а-яa-z0-9]+", "", lowered)
     return lowered
 
 
 def detect_profanity(normalized: str) -> bool:
-    roots = ("хуй", "пизд", "еб", "бля", "сук", "муд", "гандон")
+    roots = (
+        "хуй", "пизд", "еб", "бля", "бле", "сук", "муд", "гандон",
+        "нах", "пох", "хер", "хрен", "шалав", "манд", "говн",
+    )
     return any(root in normalized for root in roots)
+
+
+def detect_aggression_level(text: str) -> Literal["low", "high"]:
+    """Оценивает уровень агрессии для мягкой модерации."""
+    lowered = text.lower()
+    has_threat = any(pattern in lowered for pattern in _RUDE_PATTERNS)
+    has_insult = any(pattern in lowered for pattern in _AGGRESSIVE_INSULT_PATTERNS)
+    has_target = _has_aggressive_target(text)
+    has_profanity = detect_profanity(normalize_for_profanity(text))
+
+    if has_threat or (has_insult and has_target and has_profanity):
+        return "high"
+    return "low"
 
 
 def mask_personal_data(text: str) -> str:
@@ -873,6 +913,32 @@ async def _get_rag_context(chat_id: int, query: str) -> str:
     except Exception as exc:
         logger.warning("RAG search failed: %s", exc)
     return ""
+
+
+async def build_dialog_summary_for_prompt(chat_id: int, user_id: int, *, limit: int = 6) -> str:
+    """Готовит короткое summary из последних реплик для системного промпта."""
+    from app.models import ChatHistory
+
+    try:
+        async for session in get_session():
+            rows = (
+                await session.execute(
+                    select(ChatHistory)
+                    .where(ChatHistory.chat_id == chat_id, ChatHistory.user_id == user_id)
+                    .order_by(ChatHistory.created_at.desc())
+                    .limit(limit)
+                )
+            ).scalars().all()
+            if not rows:
+                return ""
+            ordered = list(reversed(rows))
+            parts = [f"{row.role}: {(row.message or row.text)[:120]}" for row in ordered]
+            return "Краткий контекст диалога:\n" + "\n".join(parts)[:700]
+    except Exception as exc:
+        logger.warning("Failed to build dialogue summary: %s", exc)
+    return ""
+
+
 
 
 _AI_CLIENT: AiModuleClient | None = None

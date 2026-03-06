@@ -6,6 +6,7 @@ from app.db import Base
 from app.services.rag import (
     add_rag_message,
     build_rag_context,
+    classify_rag_message,
     get_all_rag_messages,
     rank_rag_messages,
     systematize_rag,
@@ -162,3 +163,43 @@ async def _prepare_mixed_domain_messages() -> list[str]:
 def test_rag_ranking_works_for_all_rag_topics_not_only_parking_examples() -> None:
     messages = asyncio.run(_prepare_mixed_domain_messages())
     assert messages[0] == "Для оформления пропуска в паркинг обратитесь в диспетчерскую УК."
+
+
+async def _prepare_admin_priority_messages() -> list[str]:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        await add_rag_message(
+            session,
+            chat_id=104,
+            message_text="Лифт временно отключат сегодня с 14 до 16.",
+            added_by_user_id=1,
+            is_admin=True,
+        )
+        await add_rag_message(
+            session,
+            chat_id=104,
+            message_text="Шлагбаум снова завис, как открыть?",
+            added_by_user_id=2,
+        )
+        await session.commit()
+
+        all_messages = await get_all_rag_messages(session, 104)
+        ranked = rank_rag_messages(all_messages, query="Как открыть шлагбаум?")
+
+    await engine.dispose()
+    return [msg.message_text for msg in ranked]
+
+
+def test_rag_admin_messages_have_max_priority() -> None:
+    messages = asyncio.run(_prepare_admin_priority_messages())
+    assert messages[0] == "Лифт временно отключат сегодня с 14 до 16."
+
+
+def test_rag_classification_supports_new_categories() -> None:
+    assert classify_rag_message("На детской площадке сломалась качеля") == "детская_площадка"
+    assert classify_rag_message("Квитанция за ЖКУ пришла с неверным тарифом") == "платежи"
+    assert classify_rag_message("Домофон не пускает курьера в подъезд") == "безопасность_и_доступ"
