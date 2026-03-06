@@ -169,9 +169,9 @@ python scripts/check_openrouter.py --api-key sk-or-...
 Или через переменные окружения:
 
 ```bash
-AI_KEY=sk-or-... AI_MODEL=qwen/qwen3-14b python scripts/check_openrouter.py
+AI_KEY=sk-or-... AI_MODEL=qwen/qwen3-32b python scripts/check_openrouter.py
 # или
-OPENROUTER_API_KEY=sk-or-... AI_MODEL=qwen/qwen3-14b python scripts/check_openrouter.py
+OPENROUTER_API_KEY=sk-or-... AI_MODEL=qwen/qwen3-32b python scripts/check_openrouter.py
 ```
 
 Скрипт вернет `ok/status_code/latency_ms/details` и завершится кодом:
