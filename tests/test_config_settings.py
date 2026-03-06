@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import ValidationError
 
-from app.config import Settings
+from app.config import Settings, _extract_compose_bot_env
 
 
 BASE_ENV: dict[str, str] = {
@@ -52,3 +52,48 @@ def test_settings_reads_openrouter_api_key_alias() -> None:
     )
 
     assert settings.ai_key == "or-test-key"
+
+
+def test_extract_compose_bot_env_from_environment_block(tmp_path) -> None:
+    compose = tmp_path / "docker-compose.yaml"
+    compose.write_text(
+        """services:
+  bot:
+    image: test
+    environment:
+      - BOT_TOKEN=from-compose
+      - FORUM_CHAT_ID=-100123
+      - ADMIN_LOG_CHAT_ID=-100456
+""",
+        encoding="utf-8",
+    )
+
+    env = _extract_compose_bot_env(compose)
+
+    assert env["BOT_TOKEN"] == "from-compose"
+    assert env["FORUM_CHAT_ID"] == "-100123"
+    assert env["ADMIN_LOG_CHAT_ID"] == "-100456"
+
+
+def test_extract_compose_bot_env_from_env_file(tmp_path) -> None:
+    compose = tmp_path / "docker-compose.yaml"
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "BOT_TOKEN=from-env-file\nFORUM_CHAT_ID=-100111\nADMIN_LOG_CHAT_ID=-100222\n",
+        encoding="utf-8",
+    )
+    compose.write_text(
+        """services:
+  bot:
+    image: test
+    env_file:
+      - .env
+""",
+        encoding="utf-8",
+    )
+
+    env = _extract_compose_bot_env(compose)
+
+    assert env["BOT_TOKEN"] == "from-env-file"
+    assert env["FORUM_CHAT_ID"] == "-100111"
+    assert env["ADMIN_LOG_CHAT_ID"] == "-100222"
