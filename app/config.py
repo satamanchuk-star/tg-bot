@@ -92,11 +92,9 @@ def _extract_compose_bot_env(compose_path: Path) -> dict[str, str]:
 
 
 def _inject_env_from_server_compose() -> None:
-    """Подхватывает env из /opt/alexbot/docker-compose.yaml, не перезаписывая текущие."""
+    """Подхватывает env из /opt/alexbot/docker-compose.yaml как источник истины."""
     compose_env = _extract_compose_bot_env(SERVER_COMPOSE_PATH)
     for key, value in compose_env.items():
-        if os.getenv(key):
-            continue
         os.environ[key] = value
 
 

@@ -82,4 +82,7 @@ def test_cleanup_old_data_removes_outdated_rows() -> None:
         "topic_stats": 1,
         "ai_usage": 1,
         "rag_expired": 0,
+        "chat_history": 0,
+        "ai_feedback": 0,
+        "frequent_questions": 0,
     }
