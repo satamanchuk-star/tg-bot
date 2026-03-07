@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import os
+
 from pydantic import ValidationError
 
-from app.config import Settings, _extract_compose_bot_env
+from app.config import (
+    Settings,
+    _extract_compose_bot_env,
+    _inject_env_from_server_compose,
+)
 
 
 BASE_ENV: dict[str, str] = {
@@ -97,3 +103,32 @@ def test_extract_compose_bot_env_from_env_file(tmp_path) -> None:
     assert env["BOT_TOKEN"] == "from-env-file"
     assert env["FORUM_CHAT_ID"] == "-100111"
     assert env["ADMIN_LOG_CHAT_ID"] == "-100222"
+
+
+def test_inject_env_from_server_compose_does_not_override_existing(monkeypatch, tmp_path) -> None:
+    compose = tmp_path / "docker-compose.yaml"
+    compose.write_text(
+        """services:
+  bot:
+    image: test
+    environment:
+      - BOT_TOKEN=from-compose
+      - FORUM_CHAT_ID=-100123
+      - ADMIN_LOG_CHAT_ID=-100456
+      - AI_MODEL=qwen/qwen3-32b
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("app.config.SERVER_COMPOSE_PATH", compose)
+    monkeypatch.setenv("BOT_TOKEN", "from-env")
+    monkeypatch.delenv("FORUM_CHAT_ID", raising=False)
+    monkeypatch.delenv("ADMIN_LOG_CHAT_ID", raising=False)
+    monkeypatch.delenv("AI_MODEL", raising=False)
+
+    _inject_env_from_server_compose()
+
+    assert os.environ["BOT_TOKEN"] == "from-env"
+    assert os.environ["FORUM_CHAT_ID"] == "-100123"
+    assert os.environ["ADMIN_LOG_CHAT_ID"] == "-100456"
+    assert os.environ["AI_MODEL"] == "qwen/qwen3-32b"
