@@ -130,7 +130,14 @@ def _is_exact_match(normalized_query: str, entry: ResidentKbEntry) -> bool:
 
 @lru_cache(maxsize=1)
 def load_resident_kb() -> tuple[ResidentKbEntry, ...]:
-    kb_path = Path(__file__).resolve().parents[2] / "data" / "resident_kb.json"
+    project_root = Path(__file__).resolve().parents[2]
+    kb_path = project_root / "data" / "resident_kb.json"
+    if not kb_path.exists():
+        # Fallback: файл может лежать в неперекрытом каталоге kb/ внутри образа
+        kb_path = project_root / "kb" / "resident_kb.json"
+    if not kb_path.exists():
+        logger.warning("Файл базы знаний не найден: %s", kb_path)
+        return ()
     raw = json.loads(kb_path.read_text(encoding="utf-8"))
     entries: list[ResidentKbEntry] = []
     for item in raw:
