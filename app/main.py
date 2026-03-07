@@ -326,11 +326,18 @@ async def heartbeat_job(bot: Bot) -> None:
                 now - last_notice > timedelta(days=1)
             )
             if should_notify:
-                await bot.send_message(
-                    settings.admin_log_chat_id,
-                    "Бот был недоступен. Сейчас снова онлайн.",
-                )
-                await update_notice(session, now)
+                try:
+                    await bot.send_message(
+                        settings.admin_log_chat_id,
+                        "Бот был недоступен. Сейчас снова онлайн.",
+                    )
+                except TelegramNetworkError as exc:
+                    logger.warning(
+                        "Не удалось отправить heartbeat-уведомление в Telegram: %s",
+                        exc,
+                    )
+                else:
+                    await update_notice(session, now)
         await update_heartbeat(session, now)
         await session.commit()
 

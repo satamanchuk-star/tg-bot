@@ -11,7 +11,7 @@ from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db import Base
-from app.main import on_startup
+from app.main import heartbeat_job, on_startup
 from app.services import quiz_loader
 
 
@@ -185,5 +185,44 @@ def test_main_does_not_raise_when_polling_api_error(monkeypatch) -> None:
         await main_module.main()
 
         bot.session.close.assert_awaited_once()
+
+    asyncio.run(_run())
+
+
+def test_heartbeat_job_does_not_crash_when_telegram_unavailable(monkeypatch) -> None:
+    async def _run() -> None:
+        bot = AsyncMock()
+        bot.send_message.side_effect = TelegramNetworkError(
+            method="sendMessage",
+            message="offline",
+        )
+
+        class DummyState:
+            def __init__(self) -> None:
+                from datetime import datetime, timedelta, timezone
+
+                self.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(hours=1)
+                self.last_notice_at = None
+
+        class DummySession:
+            async def commit(self) -> None:
+                return None
+
+        session = DummySession()
+
+        async def _session_gen():
+            yield session
+
+        monkeypatch.setattr("app.main.get_session", _session_gen)
+        monkeypatch.setattr("app.main.get_health_state", AsyncMock(return_value=DummyState()))
+        update_notice_mock = AsyncMock()
+        monkeypatch.setattr("app.main.update_notice", update_notice_mock)
+        monkeypatch.setattr("app.main.update_heartbeat", AsyncMock())
+
+        await heartbeat_job(bot)
+
+        bot.send_message.assert_awaited_once()
+        update_notice_mock.assert_not_awaited()
+
 
     asyncio.run(_run())
