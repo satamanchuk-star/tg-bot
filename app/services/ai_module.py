@@ -209,6 +209,14 @@ _RUDE_PATTERNS = (
     "уничтож",
     "калечить",
 )
+_FORBIDDEN_TOPIC_REPLIES = (
+    "С этим лучше к профильному специалисту 🙌 Я тут больше про жизнь дома.",
+    "Это не совсем мой профиль — я больше по домашним вопросам. Лучше спросить у специалиста.",
+    "Тут я пас, не хочу давать непрофессиональный совет. Обратитесь к профильному эксперту!",
+    "По такому вопросу лучше к специалисту. Я больше по вопросам нашего ЖК 🏠",
+    "Здесь я не помощник — это вне моей зоны. Но по дому спрашивайте смело!",
+)
+
 _AGGRESSIVE_INSULT_PATTERNS = (
     "идиот",
     "дебил",
@@ -328,7 +336,7 @@ class StubAiProvider:
     async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int) -> str:
         safe_prompt = mask_personal_data(prompt)[:1000]
         if not is_assistant_topic_allowed(safe_prompt):
-            return "С этим лучше к профильному специалисту 🙌 Я тут больше про жизнь дома."
+            return random.choice(_FORBIDDEN_TOPIC_REPLIES)
         return f"{_USER_FALLBACK} {build_local_assistant_reply(safe_prompt, context=context)}"
 
     async def evaluate_quiz_answer(
@@ -383,7 +391,7 @@ class OpenRouterProvider:
 
         payload = {
             "model": self._model,
-            "temperature": 0.2,
+            "temperature": 0.7,
             "messages": messages,
         }
         headers = {
@@ -471,9 +479,8 @@ class OpenRouterProvider:
     async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int) -> str:
         safe_prompt = mask_personal_data(prompt)[:1000]
         if not is_assistant_topic_allowed(safe_prompt):
-            return "С этим лучше к профильному специалисту 🙌 Я тут больше про жизнь дома."
+            return random.choice(_FORBIDDEN_TOPIC_REPLIES)
 
-        context_text = "\n".join(context[-20:])
         rag_text = await _get_rag_context(chat_id, safe_prompt)
         faq_answer = await _get_faq_answer(chat_id, safe_prompt)
 
@@ -486,14 +493,17 @@ class OpenRouterProvider:
         if faq_answer:
             system_prompt += f"\n\nРекомендуемый ответ из FAQ (перефразируй, не копируй дословно):\n{faq_answer}"
 
+        # Формируем историю как отдельные user/assistant сообщения
+        messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+        for line in context[-20:]:
+            if line.startswith("user:"):
+                messages.append({"role": "user", "content": line[5:].strip()[:500]})
+            elif line.startswith("assistant:"):
+                messages.append({"role": "assistant", "content": line[10:].strip()[:500]})
+        messages.append({"role": "user", "content": safe_prompt})
+
         try:
-            content, _ = await self._chat_completion(
-                [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Контекст:\n{context_text}\n\nВопрос:\n{safe_prompt}"},
-                ],
-                chat_id=chat_id,
-            )
+            content, _ = await self._chat_completion(messages, chat_id=chat_id)
             reply = content[:800]
             return reply
         except RuntimeError as exc:
@@ -802,7 +812,9 @@ def is_assistant_topic_allowed(text: str) -> bool:
     lowered = text.lower()
     if any(token in lowered for token in _FORBIDDEN_ASSISTANT_TOPICS):
         return False
-    return any(token in lowered for token in _ALLOWED_ASSISTANT_TOPICS)
+    # Разрешаем любые запросы, которые не попадают в запрещённые темы.
+    # Раньше фильтр отклонял всё без ключевых слов ЖК — это вызывало однотипные отказы.
+    return True
 
 
 def _normalize_assistant_prompt(prompt: str) -> str:
@@ -811,6 +823,52 @@ def _normalize_assistant_prompt(prompt: str) -> str:
     cleaned = re.sub(r"^/ai(?:@\w+)?\s*", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"@\w+", "", cleaned)
     return " ".join(cleaned.split())
+
+
+_GATE_REPLIES = (
+    "По шлагбауму лучше сразу писать фактами: номер авто, подъезд, время и что именно не сработало. "
+    "Если нужна разовая заявка на въезд гостя, укажите ФИО гостя и интервал времени.",
+    "Со шлагбаумом проще всего решать конкретикой — номер машины, время, что случилось. "
+    "Для гостевого пропуска нужны имя гостя и когда приедет.",
+    "Шлагбаум? Напишите: какое авто, какой подъезд, что именно не сработало и когда. "
+    "Гостям нужен пропуск — укажите ФИО и время визита.",
+)
+
+_NOISE_REPLIES = (
+    "По шуму лучше действовать по шагам: зафиксируйте время и источник, "
+    "напишите в чат/тему, при повторе обращайтесь в УК или охрану.",
+    "С шумом советую так: запишите когда и откуда шумят, напишите в профильную тему. "
+    "Если повторяется — смело в УК или к охране.",
+    "Шумят? Фиксируйте факты: время, источник, длительность. Напишите в тему без эмоций — "
+    "так вопрос решается быстрее. При повторах — в УК.",
+)
+
+_COMPLAINT_REPLIES = (
+    "Для жалобы лучше короткий формат: где проблема (подъезд/этаж/двор), "
+    "что случилось, когда заметили. Фото ускоряет обработку заявки УК.",
+    "Жалоба быстрее обрабатывается с конкретикой: что сломалось, где, когда обнаружили. "
+    "Если есть фото — приложите, УК реагирует оперативнее.",
+    "По жалобе напишите кратко: место, проблема, когда заметили, что проверяли сами. "
+    "Фото в помощь — с ним всё быстрее движется.",
+)
+
+_PARKING_REPLIES = (
+    "По парковке помогает нейтральный запрос по фактам: место, время, "
+    "в чём нарушение и как мешает. Без персональных данных — это снижает конфликты.",
+    "С парковкой лучше по фактам: какое место, когда заметили, в чём проблема. "
+    "Без имён и номеров — так вопрос решится без лишних конфликтов.",
+    "Парковочный вопрос? Опишите конкретно: где, когда, что мешает. "
+    "Обвинения не помогают — факты работают лучше.",
+)
+
+_RULES_REPLIES = (
+    "По правилам чата ЖК: взаимоуважение, без оскорблений и спама, "
+    "обсуждения по профильным темам, без чужих персональных данных.",
+    "Основа правил — уважение к соседям, никакого спама и оскорблений. "
+    "Если есть сомнения, спросите в теме «Правила» с конкретной ситуацией.",
+    "Коротко о правилах: общаемся по-соседски, без грубости и спама. "
+    "Персональные данные других — табу. Подробности в теме «Правила».",
+)
 
 
 def _assistant_rule_reply(prompt: str) -> str | None:
@@ -822,35 +880,15 @@ def _assistant_rule_reply(prompt: str) -> str | None:
     parking_keywords = ("парков", "машин", "авто", "место")
 
     if any(keyword in lowered for keyword in gate_keywords):
-        return (
-            "По шлагбауму лучше сразу писать фактами: номер авто, подъезд, время и что именно не сработало. "
-            "Если нужна разовая заявка на въезд гостя, укажите ФИО гостя и интервал времени. "
-            "Так админам проще быстро проверить и помочь."
-        )
+        return random.choice(_GATE_REPLIES)
     if any(keyword in lowered for keyword in noise_keywords):
-        return (
-            "По шуму лучше действовать по шагам: зафиксируйте время и источник шума, "
-            "корректно напишите в чат/тему, затем при повторе обращайтесь в УК или охрану. "
-            "В сообщении держитесь фактов без личных конфликтов — так вопрос решается быстрее."
-        )
+        return random.choice(_NOISE_REPLIES)
     if any(keyword in lowered for keyword in complaint_keywords):
-        return (
-            "Для жалобы лучше короткий формат: где проблема (подъезд/этаж/двор), "
-            "что случилось, когда заметили, что уже проверили сами. "
-            "Если можете, приложите фото — это ускоряет обработку заявки УК."
-        )
+        return random.choice(_COMPLAINT_REPLIES)
     if any(keyword in lowered for keyword in parking_keywords):
-        return (
-            "По парковке обычно помогает нейтральный запрос по фактам: место, время, "
-            "в чём именно нарушение и как это мешает. "
-            "Без персональных данных и публичных обвинений — это снижает конфликты и ускоряет реакцию."
-        )
+        return random.choice(_PARKING_REPLIES)
     if any(keyword in lowered for keyword in rules_keywords):
-        return (
-            "По правилам чата ЖК ориентируйтесь на базу: взаимоуважение, без оскорблений и спама, "
-            "обсуждения по профильным темам, без публикации чужих персональных данных. "
-            "Если сомневаетесь, лучше задать вопрос в теме «Правила» с конкретной ситуацией."
-        )
+        return random.choice(_RULES_REPLIES)
     return None
 
 
@@ -858,13 +896,19 @@ def _pick_fallback_variant(seed_text: str) -> str:
     return random.choice(_FALLBACK_VARIANTS)
 
 
+_EMPTY_PROMPT_REPLIES = (
+    "Опишите вопрос одной-двумя фразами: что случилось, где (подъезд/двор) и какой нужен результат.",
+    "Расскажите, что именно интересует — подскажу, куда лучше написать или как решить.",
+    "О чём хотите спросить? Напишите пару слов — разберёмся вместе!",
+    "Слушаю! Опишите коротко ситуацию, и я постараюсь помочь.",
+    "Что случилось? Напишите кратко — подскажу, как лучше действовать.",
+)
+
+
 def build_local_assistant_reply(prompt: str, *, context: list[str] | None = None) -> str:
     normalized_prompt = _normalize_assistant_prompt(prompt)
     if not normalized_prompt:
-        return (
-            "Опишите вопрос одной-двумя фразами: что случилось, где (подъезд/двор) и какой нужен результат. "
-            "Подскажу, как лучше сформулировать для чата ЖК."
-        )
+        return random.choice(_EMPTY_PROMPT_REPLIES)
 
     resident_answer = build_resident_answer(normalized_prompt, context=context)
     if resident_answer:
