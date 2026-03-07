@@ -19,6 +19,34 @@ REQUIRED_ENV_FIELDS: tuple[str, ...] = (
 )
 
 
+def _resolve_compose_value(raw_value: str) -> str:
+    """Упрощённо резолвит ${VAR} и ${VAR:-default} из docker-compose."""
+    value = raw_value.strip().strip("'\"")
+    if not (value.startswith("${") and value.endswith("}")):
+        return value
+
+    inner = value[2:-1]
+    if ":-" in inner:
+        env_name, default = inner.split(":-", 1)
+        return os.getenv(env_name, default)
+    return os.getenv(inner, "")
+
+
+def _read_env_file_values(compose_path: Path, env_file_item: str) -> dict[str, str]:
+    """Читает переменные из env_file, если файл существует."""
+    env_file_path = (compose_path.parent / env_file_item).resolve()
+    if not env_file_path.exists():
+        return {}
+
+    env_values = dotenv_values(env_file_path)
+    result: dict[str, str] = {}
+    for key, value in env_values.items():
+        if value is None:
+            continue
+        result[str(key)] = str(value)
+    return result
+
+
 def _extract_compose_bot_env(compose_path: Path) -> dict[str, str]:
     """Извлекает environment/env_file для сервиса bot из docker-compose.yaml."""
     if not compose_path.exists():
@@ -63,6 +91,14 @@ def _extract_compose_bot_env(compose_path: Path) -> dict[str, str]:
             in_environment = False
             continue
 
+        if stripped.startswith("env_file:") and indent == 4:
+            env_file_item = stripped.partition(":")[2].strip().strip("'\"")
+            if env_file_item:
+                result.update(_read_env_file_values(compose_path, env_file_item))
+            in_env_file = False
+            in_environment = False
+            continue
+
         if indent == 4 and stripped.endswith(":"):
             in_environment = False
             in_env_file = False
@@ -71,22 +107,27 @@ def _extract_compose_bot_env(compose_path: Path) -> dict[str, str]:
             if indent == 6 and "=" in stripped and stripped.startswith("-"):
                 item = stripped.removeprefix("-").strip()
                 key, value = item.split("=", 1)
-                result[key.strip()] = value.strip().strip("'\"")
+                result[key.strip()] = _resolve_compose_value(value)
+                continue
+            if indent == 6 and stripped.startswith("-") and "=" not in stripped:
+                key = stripped.removeprefix("-").strip()
+                env_value = os.getenv(key)
+                if env_value is not None:
+                    result[key] = env_value
                 continue
             if indent == 6 and ":" in stripped and not stripped.startswith("-"):
                 key, value = stripped.split(":", 1)
-                result[key.strip()] = value.strip().strip("'\"")
+                key = key.strip()
+                resolved = _resolve_compose_value(value)
+                if resolved:
+                    result[key] = resolved
+                elif key in os.environ:
+                    result[key] = os.environ[key]
                 continue
 
         if in_env_file and indent == 6 and stripped.startswith("-"):
             env_file_item = stripped.removeprefix("-").strip().strip("'\"")
-            env_file_path = (compose_path.parent / env_file_item).resolve()
-            if env_file_path.exists():
-                env_values = dotenv_values(env_file_path)
-                for key, value in env_values.items():
-                    if value is None:
-                        continue
-                    result[str(key)] = str(value)
+            result.update(_read_env_file_values(compose_path, env_file_item))
 
     return result
 

@@ -105,6 +105,54 @@ def test_extract_compose_bot_env_from_env_file(tmp_path) -> None:
     assert env["ADMIN_LOG_CHAT_ID"] == "-100222"
 
 
+def test_extract_compose_bot_env_from_inline_env_file(tmp_path) -> None:
+    compose = tmp_path / "docker-compose.yaml"
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "BOT_TOKEN=inline-env-file\nFORUM_CHAT_ID=-100010\nADMIN_LOG_CHAT_ID=-100020\n",
+        encoding="utf-8",
+    )
+    compose.write_text(
+        """services:
+  bot:
+    image: test
+    env_file: .env
+""",
+        encoding="utf-8",
+    )
+
+    env = _extract_compose_bot_env(compose)
+
+    assert env["BOT_TOKEN"] == "inline-env-file"
+    assert env["FORUM_CHAT_ID"] == "-100010"
+    assert env["ADMIN_LOG_CHAT_ID"] == "-100020"
+
+
+def test_extract_compose_bot_env_resolves_compose_placeholders(monkeypatch, tmp_path) -> None:
+    compose = tmp_path / "docker-compose.yaml"
+    compose.write_text(
+        """services:
+  bot:
+    image: test
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      FORUM_CHAT_ID: ${FORUM_CHAT_ID:-1}
+      ADMIN_LOG_CHAT_ID: ${ADMIN_LOG_CHAT_ID}
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("BOT_TOKEN", "from-process-env")
+    monkeypatch.setenv("ADMIN_LOG_CHAT_ID", "-100777")
+    monkeypatch.delenv("FORUM_CHAT_ID", raising=False)
+
+    env = _extract_compose_bot_env(compose)
+
+    assert env["BOT_TOKEN"] == "from-process-env"
+    assert env["FORUM_CHAT_ID"] == "1"
+    assert env["ADMIN_LOG_CHAT_ID"] == "-100777"
+
+
 def test_inject_env_from_server_compose_overrides_existing(monkeypatch, tmp_path) -> None:
     compose = tmp_path / "docker-compose.yaml"
     compose.write_text(
