@@ -17,6 +17,8 @@ from sqlalchemy import select
 from app.config import settings
 from app.db import get_session
 from app.services.ai_usage import add_usage, can_consume_ai, get_usage_stats
+from app.services.faq import get_faq_answer
+from app.services.resident_kb import build_resident_answer, build_resident_context
 from app.utils.time import now_tz
 
 logger = logging.getLogger(__name__)
@@ -112,8 +114,9 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "медицинскими назначениями, юридическими консультациями, финансовыми советами, "
     "сбором персональных данных. Если запрос вне рамок — вежливо откажи и предложи "
     "безопасную альтернативу по теме ЖК/быта.\n\n"
-    "ВАЖНО: если в контексте есть раздел «База знаний ЖК», используй его как "
-    "главный источник. Категории базы знаний могут включать парковку, лифт, УК, "
+    "ВАЖНО: если в контексте есть раздел «Каноническая база знаний ЖК», используй его "
+    "в первую очередь. Только потом учитывай раздел «База знаний ЖК» из RAG. "
+    "Категории базы знаний могут включать парковку, лифт, УК, "
     "коммуналку, безопасность, детскую площадку, коммунальные сервисы, "
     "безопасность и доступ, платежи, ремонт, правила и общее. "
     "В базе могут быть дубли и фрагменты одной темы — "
@@ -123,6 +126,13 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "без выдумывания фактов. Если пользователь выражается резко, вежливо напомни, "
     "что в чате поддерживается дружелюбная атмосфера, и помоги перевести разговор "
     "в конструктивный тон."
+)
+
+_FALLBACK_VARIANTS = (
+    "Точного ответа у меня сейчас нет, чтобы не наврать. Лучше уточнить в главном чате или у УК.",
+    "Не хочу придумывать лишнего. По такому вопросу лучше написать в профильную ветку или в УК.",
+    "По базе знаний у меня тут пусто. Попробуйте главный чат или подчат дома — там обычно быстро подсказывают.",
+    "Здесь лучше перепроверить у УК или соседей в нужной ветке, чтобы не дать неточную информацию.",
 )
 
 
@@ -306,7 +316,7 @@ class StubAiProvider:
         safe_prompt = mask_personal_data(prompt)[:1000]
         if not is_assistant_topic_allowed(safe_prompt):
             return "С этим лучше к профильному специалисту 🙌 Я тут больше про жизнь дома."
-        return f"{_USER_FALLBACK} {build_local_assistant_reply(safe_prompt)}"
+        return f"{_USER_FALLBACK} {build_local_assistant_reply(safe_prompt, context=context)}"
 
     async def evaluate_quiz_answer(
         self,
@@ -450,7 +460,10 @@ class OpenRouterProvider:
         if not is_assistant_topic_allowed(safe_prompt):
             return "С этим лучше к профильному специалисту 🙌 Я тут больше про жизнь дома."
 
-        # Проверяем кэш ответов
+        resident_answer = build_resident_answer(safe_prompt, context=context)
+        if resident_answer:
+            return resident_answer
+
         cache_key = _normalize_cache_key(safe_prompt)
         if cache_key:
             cached = _cache_get(cache_key)
@@ -459,10 +472,15 @@ class OpenRouterProvider:
                 return cached
 
         context_text = "\n".join(context[-20:])
-
-        # Подгружаем RAG-контекст из базы знаний
         rag_text = await _get_rag_context(chat_id, safe_prompt)
+        faq_answer = await _get_faq_answer(chat_id, safe_prompt)
+        if faq_answer:
+            return faq_answer
+
         system_prompt = _ASSISTANT_SYSTEM_PROMPT
+        resident_context = build_resident_context(safe_prompt, context=context)
+        if resident_context:
+            system_prompt += f"\n\nКаноническая база знаний ЖК:\n{resident_context}"
         if rag_text:
             system_prompt += f"\n\nБаза знаний ЖК:\n{rag_text}"
 
@@ -475,13 +493,12 @@ class OpenRouterProvider:
                 chat_id=chat_id,
             )
             reply = content[:800]
-            # Кэшируем ответ
             if cache_key:
                 _cache_set(cache_key, reply)
             return reply
         except RuntimeError as exc:
             self._record_runtime_error(exc)
-            return build_local_assistant_reply(safe_prompt)
+            return build_local_assistant_reply(safe_prompt, context=context)
 
     async def evaluate_quiz_answer(
         self,
@@ -627,7 +644,7 @@ class AiModuleClient:
                 "AI assistant timeout after %s seconds; using local fallback.",
                 _ASSISTANT_SOFT_TIMEOUT_SECONDS,
             )
-            return f"{_USER_FALLBACK} {build_local_assistant_reply(prompt)}"
+            return f"{_USER_FALLBACK} {build_local_assistant_reply(prompt, context=context)}"
 
     async def assistant_reply_with_history(
         self,
@@ -837,7 +854,14 @@ def _assistant_rule_reply(prompt: str) -> str | None:
     return None
 
 
-def build_local_assistant_reply(prompt: str) -> str:
+def _pick_fallback_variant(seed_text: str) -> str:
+    if not seed_text:
+        return _FALLBACK_VARIANTS[0]
+    idx = sum(ord(ch) for ch in seed_text) % len(_FALLBACK_VARIANTS)
+    return _FALLBACK_VARIANTS[idx]
+
+
+def build_local_assistant_reply(prompt: str, *, context: list[str] | None = None) -> str:
     normalized_prompt = _normalize_assistant_prompt(prompt)
     if not normalized_prompt:
         return (
@@ -845,15 +869,15 @@ def build_local_assistant_reply(prompt: str) -> str:
             "Подскажу, как лучше сформулировать для чата ЖК."
         )
 
+    resident_answer = build_resident_answer(normalized_prompt, context=context)
+    if resident_answer:
+        return resident_answer
+
     rule_reply = _assistant_rule_reply(normalized_prompt)
     if rule_reply:
         return rule_reply
 
-    return (
-        "Пока не вижу точного ответа в базе знаний ЖК, но не бросаю вас наедине с квестом 🙂 "
-        "Опишите контекст (где/когда/что уже пробовали), и помогу собрать понятный вопрос "
-        "в нужную тему — так решение найдётся быстрее."
-    )
+    return _pick_fallback_variant(normalized_prompt)
 
 
 
@@ -898,6 +922,19 @@ def local_quiz_answer_decision(correct_answer: str, user_answer: str) -> QuizAns
     if ratio >= 0.3:
         return QuizAnswerDecision(False, True, 0.6, "частично близкий ответ", False)
     return QuizAnswerDecision(False, False, 0.2, "не совпадает", False)
+
+
+async def _get_faq_answer(chat_id: int, query: str) -> str | None:
+    question_key = _normalize_cache_key(query)
+    if not question_key:
+        return None
+    try:
+        async for session in get_session():
+            return await get_faq_answer(session, chat_id=chat_id, question_key=question_key)
+    except Exception as exc:
+        logger.warning("FAQ search failed: %s", exc)
+    return None
+
 
 
 async def _get_rag_context(chat_id: int, query: str) -> str:

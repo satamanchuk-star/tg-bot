@@ -1,5 +1,4 @@
 import asyncio
-
 from app.services.ai_module import (
     AiModuleClient,
     _ASSISTANT_SYSTEM_PROMPT,
@@ -88,16 +87,14 @@ def test_assistant_reply_uses_local_fallback() -> None:
 
 def test_local_assistant_reply_handles_rules_and_mentions() -> None:
     reply = build_local_assistant_reply("@jabchat_bot какие правила по шуму ночью?")
-    assert "шум" in reply.lower()
-    assert "фактов" in reply.lower()
+    assert "правил" in reply.lower() or "уваж" in reply.lower()
 
 
 
 
 def test_local_assistant_reply_unknown_question_is_friendly() -> None:
     reply = build_local_assistant_reply("Где телепорт на Марс в нашем ЖК?")
-    assert "базе знаний" in reply.lower()
-    assert "🙂" in reply
+    assert "уточнить" in reply.lower() or "перепроверить" in reply.lower() or "пусто" in reply.lower()
 
 
 
@@ -186,3 +183,5 @@ def test_ai_module_client_assistant_timeout_fallback(monkeypatch) -> None:
     reply = asyncio.run(client.assistant_reply("шлагбаум не работает", [], chat_id=1))
 
     assert "Модуль ИИ" in reply
+
+
