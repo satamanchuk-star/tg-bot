@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.config import settings
 from app.db import Base, engine, get_session
-from app.handlers import admin, forms, games, help as help_handler, moderation
+from app.handlers import admin, forms, games, help as help_handler, moderation, quiz
 from app.models import MigrationFlag, UserStat
 from app.services.topic_stats import bump_topic_stat
 from app.services.games import (
@@ -504,7 +504,10 @@ async def on_startup(bot: Bot) -> None:
             scope=BotCommandScopeChatAdministrators(chat_id=settings.forum_chat_id),
         )
     # Проверяем и прогреваем каноническую базу знаний жителей
-    load_resident_kb()
+    try:
+        load_resident_kb()
+    except Exception:
+        logger.exception("Не удалось загрузить базу знаний жителей (resident_kb.json).")
 
     # Инициализируем AI-клиент и логируем режим работы
     get_ai_client()
@@ -572,6 +575,7 @@ async def main() -> None:
     dp.include_router(admin.router)  # админ-команды
     dp.include_router(games.router)  # игры (команды /21, /score)
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
+    dp.include_router(quiz.router)  # викторина (команды /umnij_start, /bal, /topumnij)
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     # stats.router убран — статистика через middleware
 
