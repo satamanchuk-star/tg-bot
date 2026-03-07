@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import re
 from collections import deque
 from dataclasses import dataclass
@@ -145,13 +146,8 @@ WAITING_TIMEOUT = timedelta(minutes=2)
 HINT_COOLDOWN = timedelta(seconds=30)
 HELP_DELETE_TIMEOUT = timedelta(minutes=2)
 AI_MENTION_COOLDOWN = timedelta(seconds=20)
-MENTION_QUEUE: deque[str] = deque(MENTION_REPLIES)
-
-
 def _next_mention_reply() -> str:
-    value = MENTION_QUEUE[0]
-    MENTION_QUEUE.rotate(-1)
-    return value
+    return random.choice(MENTION_REPLIES)
 
 
 @dataclass
