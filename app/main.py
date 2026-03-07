@@ -30,10 +30,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.config import settings
 from app.db import Base, engine, get_session
-from app.handlers import admin, forms, games, help as help_handler, moderation, quiz
+from app.handlers import admin, forms, games, help as help_handler, moderation
 from app.models import MigrationFlag, UserStat
 from app.services.topic_stats import bump_topic_stat
-from app.services.quiz_loader import auto_load_quiz_questions
 from app.services.games import (
     clear_game_command_messages,
     end_game,
@@ -246,18 +245,6 @@ async def apply_v11_stats_reset(session: AsyncSession) -> None:
     logger.info("v1.1: статистика сброшена")
 
 
-async def load_initial_quiz_questions(session: AsyncSession) -> None:
-    """При каждом старте пересобирает банк вопросов из XLSX-файла."""
-    from app.services.quiz_loader import sync_questions_from_xlsx
-
-    total, unique = await sync_questions_from_xlsx(session)
-    logger.info(
-        "Загрузка вопросов из xlsx завершена: прочитано=%s, уникальных=%s",
-        total,
-        unique,
-    )
-
-
 async def send_daily_summary(bot: Bot) -> None:
     target_chat_id = settings.forum_chat_id
     target_thread_id = settings.ai_summary_topic_id
@@ -435,56 +422,6 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         args=[bot],
     )
     scheduler.add_job(
-        quiz.announce_quiz_soon,
-        "cron",
-        hour=19,
-        minute=55,
-        args=[bot],
-    )
-    scheduler.add_job(
-        quiz.announce_questions_left,
-        "cron",
-        hour=19,
-        minute=59,
-        args=[bot],
-    )
-    scheduler.add_job(
-        quiz.start_quiz_auto,
-        "cron",
-        hour=20,
-        minute=0,
-        args=[bot],
-    )
-    scheduler.add_job(
-        quiz.announce_quiz_soon,
-        "cron",
-        hour=20,
-        minute=55,
-        args=[bot],
-    )
-    scheduler.add_job(
-        quiz.announce_questions_left,
-        "cron",
-        hour=20,
-        minute=59,
-        args=[bot],
-    )
-    scheduler.add_job(
-        quiz.start_quiz_auto,
-        "cron",
-        hour=21,
-        minute=0,
-        args=[bot],
-    )
-    scheduler.add_job(
-        auto_load_quiz_questions,
-        "cron",
-        day="*/3",
-        hour=4,
-        minute=0,
-        args=[bot],
-    )
-    scheduler.add_job(
         cleanup_database,
         "cron",
         hour=4,
@@ -532,10 +469,6 @@ async def on_startup(bot: Bot) -> None:
     # Применяем миграции
     async for session in get_session():
         await apply_v11_stats_reset(session)
-        try:
-            await load_initial_quiz_questions(session)
-        except Exception:  # noqa: BLE001 - не останавливаем запуск из-за проблем с XLSX
-            logger.exception("Не удалось загрузить вопросы викторины при старте.")
     await heartbeat_job(bot)
     if telegram_available:
         await bot.set_my_commands(
@@ -547,14 +480,9 @@ async def on_startup(bot: Bot) -> None:
                 BotCommand(command="unban", description="Снять бан (реплай)"),
                 BotCommand(command="strike", description="Добавить страйк (реплай)"),
                 BotCommand(command="addcoins", description="Выдать монеты (реплай)"),
-                BotCommand(command="bal", description="Добавить балл викторины (реплай)"),
-                BotCommand(
-                    command="umnij_start", description="Запустить викторину вручную"
-                ),
                 BotCommand(
                     command="reload_profanity", description="Обновить список матов"
                 ),
-                BotCommand(command="load_quiz", description="Загрузить вопросы викторины"),
                 BotCommand(
                     command="restart_jobs", description="Сбросить зависшие задачи"
                 ),
@@ -636,7 +564,6 @@ async def main() -> None:
     dp.include_router(help_handler.router)  # mention-help (catch-all, не блокирует)
     dp.include_router(admin.router)  # админ-команды
     dp.include_router(games.router)  # игры (команды /21, /score)
-    dp.include_router(quiz.router)  # викторина (перед forms, т.к. есть catch-all)
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     # stats.router убран — статистика через middleware

@@ -11,11 +11,11 @@ from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import ChatPermissions, Message
-from sqlalchemy import delete, update
+from sqlalchemy import delete
 
 from app.config import settings
 from app.db import get_session
-from app.models import GameState, QuizSession
+from app.models import GameState
 from app.services.games import can_grant_coins, get_or_create_stats, register_coin_grant
 from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import extract_target_user, is_admin
@@ -350,47 +350,13 @@ async def reset_routing_state(message: Message, bot: Bot) -> None:
         )
 
 
-@router.message(Command("load_quiz"))
-async def load_quiz_questions(message: Message, bot: Bot) -> None:
-    """Загружает вопросы для викторины из XLSX-файла проекта."""
-    if not await _ensure_admin(message, bot):
-        return
-
-    status_msg = await message.reply("Пересобираю банк вопросов из viktorinavopros_QA.xlsx...")
-    from app.services.quiz_loader import sync_questions_from_xlsx
-
-    async for session in get_session():
-        total, unique = await sync_questions_from_xlsx(session)
-        break
-
-    if total == 0:
-        await status_msg.edit_text("Файл с вопросами не найден или пуст.")
-        return
-
-    await status_msg.edit_text(
-        "Загрузка завершена!\n"
-        f"Источник: viktorinavopros_QA.xlsx\n"
-        f"Прочитано вопросов: {total}\n"
-        f"Уникальных в БД: {unique}"
-    )
-
-
 @router.message(Command("reset_stats"))
 async def reset_stats(message: Message, bot: Bot) -> None:
-    """Обнуляет статистику игр/викторины, не затрагивая базу знаний RAG."""
+    """Обнуляет статистику игр, не затрагивая базу знаний RAG."""
     if not await _ensure_admin(message, bot):
         return
 
-    from app.handlers.quiz import _question_started_at, _session_results, _timeout_tasks
-
     cleared: list[str] = []
-
-    if _timeout_tasks:
-        for task in _timeout_tasks.values():
-            task.cancel()
-        _timeout_tasks.clear()
-        _question_started_at.clear()
-        cleared.append("таймауты викторины")
 
     async for session in get_session():
         deleted_rows = await reset_runtime_statistics(session)
@@ -398,18 +364,9 @@ async def reset_stats(message: Message, bot: Bot) -> None:
             cleared.append(f"статистика игры 21 ({deleted_rows['user_stats']})")
         if deleted_rows["game_states"] > 0:
             cleared.append(f"активные игры 21 ({deleted_rows['game_states']})")
-        if deleted_rows["quiz_user_stats"] > 0:
-            cleared.append(f"статистика викторины ({deleted_rows['quiz_user_stats']})")
-        if deleted_rows["quiz_daily_limits"] > 0:
-            cleared.append(f"лимиты запусков викторины ({deleted_rows['quiz_daily_limits']})")
-        if deleted_rows["quiz_used_questions"] > 0:
-            cleared.append(f"глобальная история вопросов ({deleted_rows['quiz_used_questions']})")
-        if deleted_rows["quiz_sessions"] > 0:
-            cleared.append(f"сессии викторины ({deleted_rows['quiz_sessions']})")
 
         await session.commit()
 
-    _session_results.clear()
 
     if cleared:
         await message.reply("Статистика и сессии сброшены: " + ", ".join(cleared) + "\nRAG-база не изменялась.")
@@ -419,40 +376,22 @@ async def reset_stats(message: Message, bot: Bot) -> None:
 
 @router.message(Command("restart_jobs"))
 async def restart_jobs(message: Message, bot: Bot, state: FSMContext) -> None:
-    """Останавливает все зависшие задачи (формы, квизы, игры)."""
+    """Останавливает зависшие задачи (формы и игры)."""
     if not await _ensure_admin(message, bot):
         return
 
     cleared = []
 
-    # 1. Отменяем таймауты квиза
-    from app.handlers.quiz import _timeout_tasks
-
-    if _timeout_tasks:
-        for task in _timeout_tasks.values():
-            task.cancel()
-        _timeout_tasks.clear()
-        cleared.append("таймауты квиза")
-
-    # 2. Очищаем БД
+    # 1. Очищаем БД
     async for session in get_session():
         # Игры
         result = await session.execute(delete(GameState))
         if result.rowcount > 0:
             cleared.append(f"игры ({result.rowcount})")
 
-        # Квизы
-        result = await session.execute(
-            update(QuizSession)
-            .where(QuizSession.is_active.is_(True))
-            .values(is_active=False)
-        )
-        if result.rowcount > 0:
-            cleared.append(f"квизы ({result.rowcount})")
-
         await session.commit()
 
-    # 3. Очищаем FSM (через storage)
+    # 2. Очищаем FSM (через storage)
     storage = state.storage
     # MemoryStorage хранит данные в _data dict
     if hasattr(storage, "_data"):

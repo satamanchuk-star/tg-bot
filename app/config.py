@@ -11,6 +11,7 @@ from pydantic import AliasChoices, Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+SERVER_COMPOSE_PATH = Path("/opt/alexbot/docker-compose.yaml")
 REQUIRED_ENV_FIELDS: tuple[str, ...] = (
     "BOT_TOKEN",
     "FORUM_CHAT_ID",
@@ -90,16 +91,13 @@ def _extract_compose_bot_env(compose_path: Path) -> dict[str, str]:
     return result
 
 
-def _inject_required_env_from_server_compose() -> None:
-    """Подхватывает обязательные env из /opt/alexbot/docker-compose.yaml, если их нет."""
-    compose_path = Path("/opt/alexbot/docker-compose.yaml")
-    compose_env = _extract_compose_bot_env(compose_path)
-    for key in REQUIRED_ENV_FIELDS:
+def _inject_env_from_server_compose() -> None:
+    """Подхватывает env из /opt/alexbot/docker-compose.yaml, не перезаписывая текущие."""
+    compose_env = _extract_compose_bot_env(SERVER_COMPOSE_PATH)
+    for key, value in compose_env.items():
         if os.getenv(key):
             continue
-        value = compose_env.get(key)
-        if value:
-            os.environ[key] = value
+        os.environ[key] = value
 
 
 class Settings(BaseSettings):
@@ -240,7 +238,7 @@ class Settings(BaseSettings):
 
 
 def _load_settings() -> Settings:
-    _inject_required_env_from_server_compose()
+    _inject_env_from_server_compose()
     try:
         return Settings()  # type: ignore[call-arg]
     except ValidationError as exc:
@@ -270,7 +268,7 @@ def _load_settings() -> Settings:
                 ", ".join(missing),
             )
             logger.error(
-                "Проверьте, что переменные переданы в контейнер через .env или docker-compose.yml/docker-compose.yaml (секция environment/env_file).",
+                "На сервере источник переменных: /opt/alexbot/docker-compose.yaml (bot.environment/env_file).",
             )
         logger.error("Ошибка конфигурации: %s", exc)
         raise SystemExit(1) from exc
