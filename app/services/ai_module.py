@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 import time
 from dataclasses import dataclass
@@ -33,7 +34,7 @@ _RAG_CATEGORIZE_SOFT_TIMEOUT_SECONDS = 10
 # Кэш ответов ассистента (in-memory, TTL 24ч)
 # ---------------------------------------------------------------------------
 _ASSISTANT_CACHE: dict[str, tuple[str, float]] = {}
-_CACHE_TTL_SECONDS = 86400  # 24 часа
+_CACHE_TTL_SECONDS = 3600  # 1 час — короткий TTL для разнообразия ответов
 _CACHE_MAX_SIZE = 200
 
 _CACHE_STOP_WORDS = {
@@ -114,8 +115,14 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "медицинскими назначениями, юридическими консультациями, финансовыми советами, "
     "сбором персональных данных. Если запрос вне рамок — вежливо откажи и предложи "
     "безопасную альтернативу по теме ЖК/быта.\n\n"
+    "СТИЛЬ ОБЩЕНИЯ: каждый раз формулируй ответ по-новому, даже если вопрос повторяется. "
+    "Варьируй порядок подачи информации, меняй вступление и заключение. "
+    "Чередуй тон: иногда дружеский, иногда деловой, иногда с лёгким юмором. "
+    "Можешь добавить уместную бытовую деталь из жизни дома. "
+    "Никогда не начинай ответ одинаково — избегай шаблонных фраз-открытий.\n\n"
     "ВАЖНО: если в контексте есть раздел «Каноническая база знаний ЖК», используй его "
     "в первую очередь. Только потом учитывай раздел «База знаний ЖК» из RAG. "
+    "Если есть «Рекомендуемый ответ из FAQ», передай ту же суть, но своими словами. "
     "Категории базы знаний могут включать парковку, лифт, УК, "
     "коммуналку, безопасность, детскую площадку, коммунальные сервисы, "
     "безопасность и доступ, платежи, ремонт, правила и общее. "
@@ -133,6 +140,12 @@ _FALLBACK_VARIANTS = (
     "Не хочу придумывать лишнего. По такому вопросу лучше написать в профильную ветку или в УК.",
     "По базе знаний у меня тут пусто. Попробуйте главный чат или подчат дома — там обычно быстро подсказывают.",
     "Здесь лучше перепроверить у УК или соседей в нужной ветке, чтобы не дать неточную информацию.",
+    "Хм, такого в моих записях нет. Спросите в чате — соседи обычно в курсе.",
+    "Тут я пас, не хочу вводить в заблуждение. Попробуйте уточнить у УК или в профильной теме.",
+    "Увы, на этот вопрос у меня ничего конкретного. Зато соседи в чате точно подскажут!",
+    "Не буду гадать — лучше спросить тех, кто точно знает. Напишите в подходящую тему форума.",
+    "Этот вопрос за пределами моей базы. Но УК или соседи наверняка помогут — попробуйте в чат.",
+    "Честно — не знаю. Лучше кинуть вопрос в общий чат, там всегда кто-то отзовётся.",
 )
 
 
@@ -460,22 +473,9 @@ class OpenRouterProvider:
         if not is_assistant_topic_allowed(safe_prompt):
             return "С этим лучше к профильному специалисту 🙌 Я тут больше про жизнь дома."
 
-        resident_answer = build_resident_answer(safe_prompt, context=context)
-        if resident_answer:
-            return resident_answer
-
-        cache_key = _normalize_cache_key(safe_prompt)
-        if cache_key:
-            cached = _cache_get(cache_key)
-            if cached is not None:
-                logger.info("AI assistant cache hit for key=%s", cache_key[:40])
-                return cached
-
         context_text = "\n".join(context[-20:])
         rag_text = await _get_rag_context(chat_id, safe_prompt)
         faq_answer = await _get_faq_answer(chat_id, safe_prompt)
-        if faq_answer:
-            return faq_answer
 
         system_prompt = _ASSISTANT_SYSTEM_PROMPT
         resident_context = build_resident_context(safe_prompt, context=context)
@@ -483,6 +483,8 @@ class OpenRouterProvider:
             system_prompt += f"\n\nКаноническая база знаний ЖК:\n{resident_context}"
         if rag_text:
             system_prompt += f"\n\nБаза знаний ЖК:\n{rag_text}"
+        if faq_answer:
+            system_prompt += f"\n\nРекомендуемый ответ из FAQ (перефразируй, не копируй дословно):\n{faq_answer}"
 
         try:
             content, _ = await self._chat_completion(
@@ -493,8 +495,6 @@ class OpenRouterProvider:
                 chat_id=chat_id,
             )
             reply = content[:800]
-            if cache_key:
-                _cache_set(cache_key, reply)
             return reply
         except RuntimeError as exc:
             self._record_runtime_error(exc)
@@ -855,10 +855,7 @@ def _assistant_rule_reply(prompt: str) -> str | None:
 
 
 def _pick_fallback_variant(seed_text: str) -> str:
-    if not seed_text:
-        return _FALLBACK_VARIANTS[0]
-    idx = sum(ord(ch) for ch in seed_text) % len(_FALLBACK_VARIANTS)
-    return _FALLBACK_VARIANTS[idx]
+    return random.choice(_FALLBACK_VARIANTS)
 
 
 def build_local_assistant_reply(prompt: str, *, context: list[str] | None = None) -> str:
