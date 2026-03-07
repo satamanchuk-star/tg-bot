@@ -47,6 +47,7 @@ from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
 from app.services.ai_module import close_ai_client, get_ai_client, set_ai_admin_notifier
 from app.services.daily_summary import build_daily_summary, render_daily_summary
+from app.services.resident_kb import load_resident_kb
 
 logging.basicConfig(
     level=logging.INFO,
@@ -567,6 +568,9 @@ async def on_startup(bot: Bot) -> None:
             ],
             scope=BotCommandScopeChatAdministrators(chat_id=settings.forum_chat_id),
         )
+    # Проверяем и прогреваем каноническую базу знаний жителей
+    load_resident_kb()
+
     # Инициализируем AI-клиент и логируем режим работы
     get_ai_client()
     if settings.ai_enabled and settings.ai_key:

@@ -36,6 +36,14 @@ class _DummyUser:
         self.is_bot = is_bot
 
 
+class _DummySentMessage:
+    def __init__(self, message_id: int) -> None:
+        self.message_id = message_id
+
+    async def edit_reply_markup(self, **kwargs) -> None:
+        return None
+
+
 class _DummyIncomingMessage:
     def __init__(self, chat_id: int, user_id: int, text: str) -> None:
         self.chat = _DummyChat(chat_id)
@@ -46,9 +54,12 @@ class _DummyIncomingMessage:
         self.caption_entities = None
         self.message_thread_id = None
         self.replies: list[str] = []
+        self._next_message_id = 1000
 
-    async def reply(self, text: str) -> None:
+    async def reply(self, text: str, **kwargs) -> _DummySentMessage:
         self.replies.append(text)
+        self._next_message_id += 1
+        return _DummySentMessage(self._next_message_id)
 
 
 class _DummyBotIdentity:
@@ -103,7 +114,7 @@ def test_extract_ai_prompt_from_command() -> None:
 
 def test_extract_ai_prompt_from_plain_text() -> None:
     message = _DummyMessage(text="@alexbot помоги с подъездом")
-    assert _extract_ai_prompt(message) == "@alexbot помоги с подъездом"
+    assert _extract_ai_prompt(message) == "помоги с подъездом"
 
 
 def test_ai_reply_rate_limit_blocks_fast_repeat() -> None:

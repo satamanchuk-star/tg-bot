@@ -72,7 +72,12 @@ class BotMentionFilter(BaseFilter):
         if not text and not entities:
             return False
         me = await _get_bot_profile(bot)
-        return _is_bot_mentioned(message, me) or _is_bot_name_called(text, me)
+        is_reply_to_bot = bool(
+            message.reply_to_message
+            and message.reply_to_message.from_user
+            and message.reply_to_message.from_user.id == me.id
+        )
+        return _is_bot_mentioned(message, me) or _is_bot_name_called(text, me) or is_reply_to_bot
 
 
 HELP_MENU_TEXT = (
@@ -476,6 +481,18 @@ def _get_ai_context(chat_id: int, user_id: int) -> list[str]:
     return list(history)
 
 
+
+
+def _remember_ai_exchange(chat_id: int, user_id: int, prompt: str, reply: str) -> None:
+    """Сохраняет обмен в in-memory историю (обратная совместимость для тестов)."""
+    history = AI_CHAT_HISTORY.setdefault(
+        _ai_key(chat_id, user_id),
+        deque(maxlen=AI_CHAT_HISTORY_LIMIT),
+    )
+    history.append(f"user: {prompt[:1000]}")
+    history.append(f"assistant: {reply[:800]}")
+
+
 async def _get_ai_context_persistent(chat_id: int, user_id: int) -> list[str]:
     """Загружает контекст из БД (персистентный) с fallback на in-memory."""
     try:
@@ -492,13 +509,7 @@ async def _remember_ai_exchange_persistent(
     chat_id: int, user_id: int, prompt: str, reply: str
 ) -> None:
     """Сохраняет обмен в БД + in-memory кэш."""
-    # In-memory для быстрого доступа
-    history = AI_CHAT_HISTORY.setdefault(
-        _ai_key(chat_id, user_id),
-        deque(maxlen=AI_CHAT_HISTORY_LIMIT),
-    )
-    history.append(f"user: {prompt[:1000]}")
-    history.append(f"assistant: {reply[:800]}")
+    _remember_ai_exchange(chat_id, user_id, prompt, reply)
 
     # Персистентное сохранение в БД
     try:
@@ -557,12 +568,14 @@ def _extract_ai_prompt(message: Message) -> str:
     text = (_get_message_text(message) or "").strip()
     if not text:
         return ""
-    if not text.startswith("/"):
-        return text[:1000]
-    parts = text.split(maxsplit=1)
-    if len(parts) < 2:
-        return ""
-    return parts[1].strip()[:1000]
+    if text.startswith("/"):
+        parts = text.split(maxsplit=1)
+        text = parts[1] if len(parts) > 1 else ""
+
+    text = re.sub(r"@\w+", " ", text)
+    text = re.sub(r"^(бот|bot|помощник|ассистент)[,:\s-]*", "", text, flags=re.IGNORECASE)
+    text = " ".join(text.split())
+    return text[:1000]
 
 
 def _is_ai_reply_rate_limited(chat_id: int, user_id: int) -> bool:
@@ -788,15 +801,10 @@ async def ai_command(message: Message) -> None:
 
     question_key = _normalize_cache_key(prompt)
 
-    # Проверяем FAQ — если вопрос частый и хорошо оценённый, отдаём без LLM
-    faq_answer = await _check_faq(message.chat.id, question_key)
-    if faq_answer:
-        reply = faq_answer
-    else:
-        context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
-        reply = await get_ai_client().assistant_reply(
-            prompt, context, chat_id=message.chat.id,
-        )
+    context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
+    reply = await get_ai_client().assistant_reply(
+        prompt, context, chat_id=message.chat.id,
+    )
 
     await _remember_ai_exchange_persistent(
         message.chat.id, message.from_user.id, prompt, reply,
@@ -848,13 +856,8 @@ async def mention_help(message: Message, bot: Bot) -> None:
     if prompt:
         question_key = _normalize_cache_key(prompt)
 
-        # Проверяем FAQ
-        faq_answer = await _check_faq(message.chat.id, question_key)
-        if faq_answer:
-            reply = faq_answer
-        else:
-            context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
-            reply = await get_ai_client().assistant_reply(prompt, context, chat_id=message.chat.id)
+        context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
+        reply = await get_ai_client().assistant_reply(prompt, context, chat_id=message.chat.id)
 
         await _remember_ai_exchange_persistent(
             message.chat.id, message.from_user.id, prompt, reply,

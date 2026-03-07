@@ -30,7 +30,7 @@ from app.services.ai_module import (
     set_ai_runtime_enabled,
 )
 from app.services.ai_usage import next_reset_delta, reset_ai_usage
-from app.services.rag import add_rag_message, get_rag_count, systematize_rag
+from app.services.rag import add_rag_message, build_canonical_text, get_rag_count, systematize_rag
 from app.services.admin_stats_reset import reset_runtime_statistics
 from app.utils.profanity import load_profanity, load_profanity_exceptions
 
@@ -502,10 +502,9 @@ async def rag_bot_command(message: Message, bot: Bot) -> None:
             source_user_id=source_user_id,
             source_message_id=target_msg.message_id,
         )
-        # Перезаписываем категорию и canonical из LLM, если получили
-        if not cat_result.used_fallback:
-            record.rag_category = cat_result.category
-            record.rag_canonical_text = cat_result.summary
+        # Преобразуем запись в канонический вид без отдельной приоритизации.
+        record.rag_category = cat_result.category
+        record.rag_canonical_text = build_canonical_text([cat_result.summary or text.strip()])
         await systematize_rag(session, settings.forum_chat_id)
         await session.commit()
         count = await get_rag_count(session, settings.forum_chat_id)
