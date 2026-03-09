@@ -413,6 +413,22 @@ async def cleanup_database() -> None:
     )
 
 
+async def _sync_places_from_sheets() -> None:
+    """Загружает справочник инфраструктуры из Google Sheets в БД (не блокирует старт)."""
+    if not settings.google_service_account_file:
+        logger.info("Импорт инфраструктуры пропущен: GOOGLE_SERVICE_ACCOUNT_FILE не задан.")
+        return
+    try:
+        from scripts.import_places_from_google_sheets import run_import
+        stats = await run_import(dry_run=False)
+        logger.info(
+            "Импорт инфраструктуры: created=%s updated=%s skipped=%s errors=%s",
+            stats.created, stats.updated, stats.skipped, stats.errors,
+        )
+    except Exception:
+        logger.exception("Ошибка импорта инфраструктуры из Google Sheets.")
+
+
 async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
     scheduler.add_job(
@@ -446,6 +462,12 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         "cron",
         hour=4,
         minute=20,
+    )
+    scheduler.add_job(
+        _sync_places_from_sheets,
+        "cron",
+        hour="0,6,12,18",
+        minute=30,
     )
     scheduler.start()
     return scheduler
@@ -521,6 +543,9 @@ async def on_startup(bot: Bot) -> None:
         load_resident_kb()
     except Exception:
         logger.exception("Не удалось загрузить базу знаний жителей (resident_kb.json).")
+
+    # Импорт инфраструктуры из Google Sheets (если настроен сервисный аккаунт)
+    await _sync_places_from_sheets()
 
     # Инициализируем AI-клиент и логируем режим работы
     get_ai_client()

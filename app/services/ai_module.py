@@ -1008,27 +1008,55 @@ async def _get_rag_context(chat_id: int, query: str) -> str:
     return ""
 
 
+_PLACES_STOP_WORDS = {
+    "где", "как", "что", "какой", "какая", "какие", "какое", "есть", "ли",
+    "рядом", "ближайший", "ближайшая", "ближайшие", "около", "возле", "вблизи",
+    "нужен", "нужна", "нужно", "нужны", "можно", "хочу", "подскажите",
+    "посоветуйте", "скажите", "покажите", "найти", "найди", "ищу",
+    "в", "на", "от", "до", "по", "из", "за", "к", "с", "у", "о",
+    "и", "или", "а", "но", "не", "тут", "там", "мне", "нам",
+    "этот", "эта", "это", "эти", "тот", "та", "те", "то",
+    "очень", "самый", "самая", "самое", "самые", "всё", "все",
+}
+
+_MIN_WORD_LENGTH = 3
+
+
+def _extract_search_words(query: str) -> list[str]:
+    """Извлекает значимые слова из запроса для поиска по инфраструктуре."""
+    words = re.findall(r"[а-яёa-z0-9]+", query.strip().lower())
+    return [
+        w for w in words
+        if len(w) >= _MIN_WORD_LENGTH and w not in _PLACES_STOP_WORDS
+    ]
+
+
 async def _get_places_context(query: str, *, top_k: int = 5) -> str:
     """Подбирает релевантные объекты инфраструктуры для AI-ответа."""
-    normalized = query.strip().lower()
-    if not normalized:
+    search_words = _extract_search_words(query)
+    if not search_words:
         return ""
 
     try:
         async for session in get_session():
-            like = f"%{normalized}%"
+            # Каждое слово должно встречаться хотя бы в одном из полей
+            from sqlalchemy import and_, or_
+            word_conditions = []
+            for word in search_words[:5]:  # Ограничиваем количество слов
+                like = f"%{word}%"
+                word_conditions.append(
+                    or_(
+                        Place.name.ilike(like),
+                        Place.address.ilike(like),
+                        Place.category.ilike(like),
+                        Place.subcategory.ilike(like),
+                        Place.description.ilike(like),
+                    )
+                )
             rows = (
                 await session.execute(
                     select(Place)
-                    .where(
-                        Place.is_active.is_(True),
-                        (
-                            Place.name.ilike(like)
-                            | Place.address.ilike(like)
-                            | Place.category.ilike(like)
-                            | Place.subcategory.ilike(like)
-                        ),
-                    )
+                    .where(Place.is_active.is_(True), or_(*word_conditions))
                     .order_by(Place.distance_km.asc().nulls_last(), Place.name.asc())
                     .limit(top_k)
                 )
@@ -1046,8 +1074,12 @@ async def _get_places_context(query: str, *, top_k: int = 5) -> str:
                     snippet += f", тел: {item.phone}"
                 if item.website:
                     snippet += f", сайт: {item.website}"
+                if item.work_time:
+                    snippet += f", режим: {item.work_time}"
                 if item.distance_km is not None:
                     snippet += f", расстояние: {item.distance_km:.1f} км"
+                if item.description:
+                    snippet += f" — {item.description[:100]}"
                 parts.append(snippet)
             return "\n".join(parts)
     except Exception as exc:
