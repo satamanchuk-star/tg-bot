@@ -1,4 +1,5 @@
-"""Почему: логика взаимодействия с пользователем в рулетке изолирована в отдельном роутере."""
+"""Хендлеры рулетки. Каждый пользователь получает персональное сообщение со ставкой,
+чтобы несколько игроков могли ставить одновременно."""
 
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from app.config import settings
 from app.db import get_session
 from app.services.roulette import (
     BETTING_DURATION_SEC,
-    MAX_BETS_PER_ROUND,
+    SPIN_DURATION_SEC,
     calculate_winnings,
     close_round,
     color_emoji,
@@ -28,7 +29,6 @@ from app.services.roulette import (
     get_number_parity,
     get_or_create_user_stats,
     get_round_bets,
-    get_user_bets_count,
     parity_name_ru,
     parse_bet,
     place_bet,
@@ -43,28 +43,26 @@ router = Router()
 # Лок для защиты от гонок при размещении ставок
 _bet_lock = asyncio.Lock()
 
-# Префикс для callback-данных рулетки
-_CB = "rlt"
 # Быстрые суммы ставок
-_QUICK_AMOUNTS = [10, 25, 50, 100]
+_QUICK_AMOUNTS = [10, 25, 50, 100, 250, 500]
 
 _ROULETTE_MAIN_CHAT_INVITES = cycle(
     [
-        "Через 5 минут в «Блэкджек и боулинг» открывается рулетка! Крутите колесо фортуны 🎰",
-        "Соседи, рулетка стартует через 5 минут! Заходите в игровой топик испытать удачу 🍀",
-        "Кто сегодня сорвёт куш? Рулетка через 5 минут в «Блэкджек и боулинг»! 💰",
-        "Внимание! Через 5 минут начинается рулетка. Готовьте ставки и нервы 😎",
-        "Колесо фортуны ждёт! Рулетка через 5 минут в игровом топике 🎡",
+        "Через 5 минут в «Блэкджек и боулинг» открывается рулетка! Крутите колесо фортуны",
+        "Соседи, рулетка стартует через 5 минут! Заходите в игровой топик испытать удачу",
+        "Кто сегодня сорвёт куш? Рулетка через 5 минут в «Блэкджек и боулинг»!",
+        "Внимание! Через 5 минут начинается рулетка. Готовьте ставки и нервы",
+        "Колесо фортуны ждёт! Рулетка через 5 минут в игровом топике",
     ]
 )
 
 _ROULETTE_TOPIC_INVITES = cycle(
     [
-        "Через 5 минут рулетка! Красное или чёрное — делайте ваши ставки 🔴⚫",
-        "Рулетка через 5 минут! Кто поставит на зеро и станет легендой? 🟢",
-        "5 минут до рулетки! Подготовьте монеты и интуицию 🎲",
-        "Скоро крутим колесо! Рулетка стартует через 5 минут — не пропустите 🎰",
-        "Через 5 минут начинаем! Чёт или нечёт? Решать вам 🤔",
+        "Через 5 минут рулетка! Красное или чёрное — делайте ваши ставки",
+        "Рулетка через 5 минут! Кто поставит на зеро и станет легендой?",
+        "5 минут до рулетки! Подготовьте монеты и интуицию",
+        "Скоро крутим колесо! Рулетка стартует через 5 минут — не пропустите",
+        "Через 5 минут начинаем! Чёт или нечёт? Решать вам",
     ]
 )
 
@@ -95,52 +93,102 @@ def _is_in_game_topic_cb(callback: CallbackQuery) -> bool:
     )
 
 
-# --- Inline-клавиатуры для быстрых ставок ---
+# ---------------------------------------------------------------------------
+# Inline-клавиатуры
+# ---------------------------------------------------------------------------
 
-def _bet_type_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура выбора типа ставки."""
+def _shared_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка на общем объявлении раунда."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Сделать ставку", callback_data="r:go")],
+    ])
+
+
+def _type_keyboard(uid: int) -> InlineKeyboardMarkup:
+    """Персональная клавиатура выбора типа ставки."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🔴 Красное", callback_data=f"{_CB}:type:color:red"),
-            InlineKeyboardButton(text="⚫ Чёрное", callback_data=f"{_CB}:type:color:black"),
+            InlineKeyboardButton(text="Красное", callback_data=f"r:u:{uid}:t:color:red"),
+            InlineKeyboardButton(text="Чёрное", callback_data=f"r:u:{uid}:t:color:black"),
         ],
         [
-            InlineKeyboardButton(text="Чёт", callback_data=f"{_CB}:type:parity:even"),
-            InlineKeyboardButton(text="Нечёт", callback_data=f"{_CB}:type:parity:odd"),
+            InlineKeyboardButton(text="Чёт", callback_data=f"r:u:{uid}:t:parity:even"),
+            InlineKeyboardButton(text="Нечёт", callback_data=f"r:u:{uid}:t:parity:odd"),
         ],
         [
-            InlineKeyboardButton(text="🟢 Зеро (0)", callback_data=f"{_CB}:type:number:0"),
+            InlineKeyboardButton(text="Число (0-36)", callback_data=f"r:u:{uid}:nums"),
         ],
     ])
 
 
-def _amount_keyboard(bet_type: str, bet_value: str) -> InlineKeyboardMarkup:
+def _number_keyboard(uid: int) -> InlineKeyboardMarkup:
+    """Клавиатура выбора числа 0-36."""
+    rows: list[list[InlineKeyboardButton]] = []
+    # Зеро отдельно
+    rows.append([InlineKeyboardButton(text="0", callback_data=f"r:u:{uid}:n:0")])
+    # Числа 1-36 по 6 в ряд
+    for start in range(1, 37, 6):
+        row = []
+        for n in range(start, min(start + 6, 37)):
+            row.append(InlineKeyboardButton(text=str(n), callback_data=f"r:u:{uid}:n:{n}"))
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="Назад", callback_data=f"r:u:{uid}:bk")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _amount_keyboard(uid: int, bet_type: str, bet_value: str) -> InlineKeyboardMarkup:
     """Клавиатура выбора суммы ставки."""
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     for amount in _QUICK_AMOUNTS:
         row.append(
             InlineKeyboardButton(
-                text=f"{amount} монет",
-                callback_data=f"{_CB}:bet:{bet_type}:{bet_value}:{amount}",
+                text=str(amount),
+                callback_data=f"r:u:{uid}:a:{bet_type}:{bet_value}:{amount}",
             )
         )
-        if len(row) == 2:
+        if len(row) == 3:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
+    # Ва-банк
     rows.append([
-        InlineKeyboardButton(text="Назад", callback_data=f"{_CB}:back"),
+        InlineKeyboardButton(text="Всё (ва-банк)", callback_data=f"r:u:{uid}:ai:{bet_type}:{bet_value}"),
+    ])
+    rows.append([
+        InlineKeyboardButton(text="Назад", callback_data=f"r:u:{uid}:bk"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# --- Команда /roulette для быстрого выбора ставки ---
+# ---------------------------------------------------------------------------
+# Вспомогательные функции
+# ---------------------------------------------------------------------------
+
+def _extract_uid(data: str, idx: int = 2) -> int | None:
+    """Извлекает user_id из callback_data по индексу."""
+    parts = data.split(":")
+    try:
+        return int(parts[idx])
+    except (IndexError, ValueError):
+        return None
+
+
+async def _get_balance(user_id: int) -> int:
+    async for session in get_session():
+        stats = await get_or_create_user_stats(session, user_id, settings.forum_chat_id)
+        return stats.coins
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Команда /roulette — персональное меню
+# ---------------------------------------------------------------------------
 
 @router.message(Command("roulette"))
 async def handle_roulette_menu(message: Message) -> None:
-    """Показывает inline-меню для быстрой ставки."""
+    """Показывает персональное inline-меню для ставки."""
     if not _is_in_game_topic(message):
         return
     if message.from_user is None:
@@ -155,66 +203,24 @@ async def handle_roulette_menu(message: Message) -> None:
         if rnd is None:
             await message.reply("Сейчас нет активного раунда. Ожидайте начала.")
             return
-        user_stats = await get_or_create_user_stats(session, message.from_user.id, settings.forum_chat_id)
-        balance = user_stats.coins
+        balance = (await get_or_create_user_stats(session, message.from_user.id, settings.forum_chat_id)).coins
         break
 
+    uid = message.from_user.id
     await message.reply(
-        f"🎰 Выберите тип ставки\n💰 Ваш баланс: {balance} монет",
-        reply_markup=_bet_type_keyboard(),
+        f"Выберите тип ставки\n"
+        f"Баланс: {balance} монет",
+        reply_markup=_type_keyboard(uid),
     )
 
 
-@router.callback_query(F.data == f"{_CB}:back")
-async def roulette_back(callback: CallbackQuery) -> None:
-    """Возврат к выбору типа ставки."""
-    if callback.message is None or callback.from_user is None:
-        await callback.answer()
-        return
+# ---------------------------------------------------------------------------
+# Callback: кнопка «Сделать ставку» на общем объявлении
+# ---------------------------------------------------------------------------
 
-    async for session in get_session():
-        user_stats = await get_or_create_user_stats(session, callback.from_user.id, settings.forum_chat_id)
-        balance = user_stats.coins
-        break
-
-    await callback.message.edit_text(
-        f"🎰 Выберите тип ставки\n💰 Ваш баланс: {balance} монет",
-        reply_markup=_bet_type_keyboard(),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith(f"{_CB}:type:"))
-async def roulette_select_type(callback: CallbackQuery) -> None:
-    """Обработка выбора типа ставки — показываем выбор суммы."""
-    if callback.message is None or callback.from_user is None:
-        await callback.answer()
-        return
-
-    parts = callback.data.split(":")
-    if len(parts) != 4:
-        await callback.answer()
-        return
-
-    bet_type = parts[2]
-    bet_value = parts[3]
-    bet_desc = format_bet_description(bet_type, bet_value)
-
-    async for session in get_session():
-        user_stats = await get_or_create_user_stats(session, callback.from_user.id, settings.forum_chat_id)
-        balance = user_stats.coins
-        break
-
-    await callback.message.edit_text(
-        f"🎰 Ставка: {bet_desc}\n💰 Баланс: {balance} монет\n\nВыберите сумму:",
-        reply_markup=_amount_keyboard(bet_type, bet_value),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith(f"{_CB}:bet:"))
-async def roulette_place_bet(callback: CallbackQuery) -> None:
-    """Обработка быстрой ставки через кнопку."""
+@router.callback_query(F.data == "r:go")
+async def handle_start_bet(callback: CallbackQuery) -> None:
+    """Отправляет персональное сообщение для ставки (из общего объявления)."""
     if callback.message is None or callback.from_user is None:
         await callback.answer()
         return
@@ -225,20 +231,256 @@ async def roulette_place_bet(callback: CallbackQuery) -> None:
         await callback.answer("Рулетка работает с 21:00 до 22:00 по Москве.")
         return
 
-    parts = callback.data.split(":")
-    if len(parts) != 5:
+    uid = callback.from_user.id
+    async for session in get_session():
+        rnd = await get_active_round(session, settings.forum_chat_id, settings.topic_games)
+        if rnd is None:
+            await callback.answer("Сейчас нет активного раунда.")
+            return
+        balance = (await get_or_create_user_stats(session, uid, settings.forum_chat_id)).coins
+        break
+
+    display = callback.from_user.username or callback.from_user.full_name
+    # Отправляем персональное сообщение в тот же тред (НЕ редактируем общее)
+    await callback.message.answer(
+        f"@{display}, выберите тип ставки\n"
+        f"Баланс: {balance} монет",
+        reply_markup=_type_keyboard(uid),
+        message_thread_id=callback.message.message_thread_id,
+    )
+    await callback.answer()
+
+
+# ---------------------------------------------------------------------------
+# Callback: выбор типа ставки (персональное сообщение)
+# ---------------------------------------------------------------------------
+
+@router.callback_query(F.data.regexp(r"^r:u:\d+:t:"))
+async def handle_type_select(callback: CallbackQuery) -> None:
+    """Пользователь выбрал тип ставки — показываем суммы."""
+    if callback.message is None or callback.from_user is None:
         await callback.answer()
         return
 
-    bet_type = parts[2]
-    bet_value = parts[3]
+    uid = _extract_uid(callback.data)
+    if uid is None or callback.from_user.id != uid:
+        await callback.answer("Это не ваша ставка.")
+        return
+
+    parts = callback.data.split(":")
+    # r:u:{uid}:t:{bet_type}:{bet_value}
+    if len(parts) != 6:
+        await callback.answer()
+        return
+
+    bet_type = parts[4]
+    bet_value = parts[5]
+    bet_desc = format_bet_description(bet_type, bet_value)
+    balance = await _get_balance(uid)
+
+    await callback.message.edit_text(
+        f"Ставка: {bet_desc}\n"
+        f"Баланс: {balance} монет\n\n"
+        "Выберите сумму (или /bet <тип> <сумма> для произвольной):",
+        reply_markup=_amount_keyboard(uid, bet_type, bet_value),
+    )
+    await callback.answer()
+
+
+# ---------------------------------------------------------------------------
+# Callback: показать сетку чисел
+# ---------------------------------------------------------------------------
+
+@router.callback_query(F.data.regexp(r"^r:u:\d+:nums$"))
+async def handle_show_numbers(callback: CallbackQuery) -> None:
+    """Показывает клавиатуру выбора числа."""
+    if callback.message is None or callback.from_user is None:
+        await callback.answer()
+        return
+
+    uid = _extract_uid(callback.data)
+    if uid is None or callback.from_user.id != uid:
+        await callback.answer("Это не ваша ставка.")
+        return
+
+    await callback.message.edit_text(
+        "Выберите число (0-36):",
+        reply_markup=_number_keyboard(uid),
+    )
+    await callback.answer()
+
+
+# ---------------------------------------------------------------------------
+# Callback: выбрано конкретное число — показываем суммы
+# ---------------------------------------------------------------------------
+
+@router.callback_query(F.data.regexp(r"^r:u:\d+:n:\d+$"))
+async def handle_number_select(callback: CallbackQuery) -> None:
+    """Пользователь выбрал число — показываем суммы."""
+    if callback.message is None or callback.from_user is None:
+        await callback.answer()
+        return
+
+    uid = _extract_uid(callback.data)
+    if uid is None or callback.from_user.id != uid:
+        await callback.answer("Это не ваша ставка.")
+        return
+
+    parts = callback.data.split(":")
+    number = parts[4]
+    balance = await _get_balance(uid)
+
+    await callback.message.edit_text(
+        f"Ставка: число {number}\n"
+        f"Баланс: {balance} монет\n\n"
+        "Выберите сумму:",
+        reply_markup=_amount_keyboard(uid, "number", number),
+    )
+    await callback.answer()
+
+
+# ---------------------------------------------------------------------------
+# Callback: выбрана сумма — размещаем ставку
+# ---------------------------------------------------------------------------
+
+@router.callback_query(F.data.regexp(r"^r:u:\d+:a:"))
+async def handle_amount_select(callback: CallbackQuery) -> None:
+    """Размещает ставку с выбранной суммой."""
+    if callback.message is None or callback.from_user is None:
+        await callback.answer()
+        return
+    if not _is_in_game_topic_cb(callback):
+        await callback.answer("Ставки принимаются только в игровом топике.")
+        return
+
+    uid = _extract_uid(callback.data)
+    if uid is None or callback.from_user.id != uid:
+        await callback.answer("Это не ваша ставка.")
+        return
+
+    parts = callback.data.split(":")
+    # r:u:{uid}:a:{bet_type}:{bet_value}:{amount}
+    if len(parts) != 7:
+        await callback.answer()
+        return
+
+    bet_type = parts[4]
+    bet_value = parts[5]
     try:
-        amount = int(parts[4])
+        amount = int(parts[6])
     except ValueError:
         await callback.answer()
         return
 
-    user_id = callback.from_user.id
+    await _do_place_bet(callback, uid, bet_type, bet_value, amount)
+
+
+# ---------------------------------------------------------------------------
+# Callback: ва-банк
+# ---------------------------------------------------------------------------
+
+@router.callback_query(F.data.regexp(r"^r:u:\d+:ai:"))
+async def handle_all_in(callback: CallbackQuery) -> None:
+    """Ставка ва-банк — все монеты."""
+    if callback.message is None or callback.from_user is None:
+        await callback.answer()
+        return
+    if not _is_in_game_topic_cb(callback):
+        await callback.answer("Ставки принимаются только в игровом топике.")
+        return
+
+    uid = _extract_uid(callback.data)
+    if uid is None or callback.from_user.id != uid:
+        await callback.answer("Это не ваша ставка.")
+        return
+
+    parts = callback.data.split(":")
+    # r:u:{uid}:ai:{bet_type}:{bet_value}
+    if len(parts) != 6:
+        await callback.answer()
+        return
+
+    bet_type = parts[4]
+    bet_value = parts[5]
+
+    balance = await _get_balance(uid)
+    if balance <= 0:
+        await callback.answer("У вас 0 монет.")
+        return
+
+    await _do_place_bet(callback, uid, bet_type, bet_value, balance)
+
+
+# ---------------------------------------------------------------------------
+# Callback: кнопка «Назад»
+# ---------------------------------------------------------------------------
+
+@router.callback_query(F.data.regexp(r"^r:u:\d+:bk$"))
+async def handle_back(callback: CallbackQuery) -> None:
+    """Возврат к выбору типа ставки."""
+    if callback.message is None or callback.from_user is None:
+        await callback.answer()
+        return
+
+    uid = _extract_uid(callback.data)
+    if uid is None or callback.from_user.id != uid:
+        await callback.answer("Это не ваша ставка.")
+        return
+
+    balance = await _get_balance(uid)
+    await callback.message.edit_text(
+        f"Выберите тип ставки\n"
+        f"Баланс: {balance} монет",
+        reply_markup=_type_keyboard(uid),
+    )
+    await callback.answer()
+
+
+# ---------------------------------------------------------------------------
+# Callback: ещё одна ставка
+# ---------------------------------------------------------------------------
+
+@router.callback_query(F.data.regexp(r"^r:u:\d+:more$"))
+async def handle_more(callback: CallbackQuery) -> None:
+    """После размещения ставки — предложить ещё одну."""
+    if callback.message is None or callback.from_user is None:
+        await callback.answer()
+        return
+
+    uid = _extract_uid(callback.data)
+    if uid is None or callback.from_user.id != uid:
+        await callback.answer("Это не ваша ставка.")
+        return
+
+    async for session in get_session():
+        rnd = await get_active_round(session, settings.forum_chat_id, settings.topic_games)
+        if rnd is None:
+            await callback.message.edit_text("Раунд уже завершён.")
+            await callback.answer()
+            return
+        break
+
+    balance = await _get_balance(uid)
+    await callback.message.edit_text(
+        f"Выберите тип ставки\n"
+        f"Баланс: {balance} монет",
+        reply_markup=_type_keyboard(uid),
+    )
+    await callback.answer()
+
+
+# ---------------------------------------------------------------------------
+# Общая логика размещения ставки
+# ---------------------------------------------------------------------------
+
+async def _do_place_bet(
+    callback: CallbackQuery,
+    uid: int,
+    bet_type: str,
+    bet_value: str,
+    amount: int,
+) -> None:
+    """Списывает монеты и размещает ставку."""
     chat_id = settings.forum_chat_id
     topic_id = settings.topic_games
     display_name = callback.from_user.username or callback.from_user.full_name
@@ -247,37 +489,39 @@ async def roulette_place_bet(callback: CallbackQuery) -> None:
         async for session in get_session():
             rnd = await get_active_round(session, chat_id, topic_id)
             if rnd is None:
-                await callback.answer("Сейчас нет активного раунда.")
+                await callback.message.edit_text("Раунд уже завершён, ставки не принимаются.")
+                await callback.answer()
                 return
 
-            bets_count = await get_user_bets_count(session, rnd.id, user_id)
-            if bets_count >= MAX_BETS_PER_ROUND:
-                await callback.answer(f"Максимум {MAX_BETS_PER_ROUND} ставки за раунд.")
-                return
-
-            stats = await deduct_coins(session, user_id, chat_id, amount)
+            stats = await deduct_coins(session, uid, chat_id, amount)
             if stats is None:
-                user_stats = await get_or_create_user_stats(session, user_id, chat_id)
+                user_stats = await get_or_create_user_stats(session, uid, chat_id)
                 await callback.answer(f"Недостаточно монет. Баланс: {user_stats.coins}")
                 return
 
-            await place_bet(session, rnd.id, user_id, bet_type, bet_value, amount, display_name)
+            await place_bet(session, rnd.id, uid, bet_type, bet_value, amount, display_name)
             await session.commit()
+            new_balance = stats.coins
+            break
 
     bet_desc = format_bet_description(bet_type, bet_value)
     await callback.message.edit_text(
-        f"Ставка принята: {bet_desc} — {amount} монет.\n"
-        f"💰 Баланс: {stats.coins} монет.\n\n"
-        "Ещё ставка? Нажмите /roulette",
+        f"Ставка принята: {bet_desc} — {amount} монет\n"
+        f"Баланс: {new_balance} монет",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Ещё ставка", callback_data=f"r:u:{uid}:more")],
+        ]),
     )
-    await callback.answer(f"Ставка: {bet_desc} — {amount} монет")
+    await callback.answer(f"Ставка: {bet_desc} — {amount}")
 
 
-# --- Команда /bet (текстовый вариант) ---
+# ---------------------------------------------------------------------------
+# Команда /bet (текстовый вариант — любая сумма)
+# ---------------------------------------------------------------------------
 
 @router.message(Command("bet"))
 async def handle_bet(message: Message) -> None:
-    """Обработчик команды /bet <тип> <сумма>."""
+    """Обработчик /bet <тип> <сумма> — позволяет ввести произвольную сумму."""
     if not _is_in_game_topic(message):
         return
     if message.from_user is None:
@@ -287,14 +531,13 @@ async def handle_bet(message: Message) -> None:
         await message.reply("Рулетка работает с 21:00 до 22:00 по Москве.")
         return
 
-    # Парсим аргументы: /bet <тип> <сумма>
     args = (message.text or "").split()
     if len(args) < 3:
         await message.reply(
             "Формат: /bet <тип> <сумма>\n"
             "Типы: red/красное, black/чёрное, even/чёт, odd/нечёт, число (0-36)\n"
             "Пример: /bet red 50\n\n"
-            "Или используйте /roulette для быстрого выбора кнопками."
+            "Или используйте /roulette для выбора кнопками."
         )
         return
 
@@ -303,12 +546,12 @@ async def handle_bet(message: Message) -> None:
     if parsed is None:
         await message.reply(
             "Неизвестный тип ставки. Доступны:\n"
-            "• red / красное\n"
-            "• black / чёрное\n"
-            "• even / чёт\n"
-            "• odd / нечёт\n"
-            "• число от 0 до 36\n\n"
-            "Или нажмите /roulette для быстрого выбора."
+            "red / красное\n"
+            "black / чёрное\n"
+            "even / чёт\n"
+            "odd / нечёт\n"
+            "число от 0 до 36\n\n"
+            "Или нажмите /roulette для выбора кнопками."
         )
         return
 
@@ -331,37 +574,33 @@ async def handle_bet(message: Message) -> None:
 
     async with _bet_lock:
         async for session in get_session():
-            # Проверяем наличие активного раунда
             rnd = await get_active_round(session, chat_id, topic_id)
             if rnd is None:
                 await message.reply("Сейчас нет активного раунда. Ожидайте начала.")
                 return
 
-            # Проверяем лимит ставок
-            bets_count = await get_user_bets_count(session, rnd.id, user_id)
-            if bets_count >= MAX_BETS_PER_ROUND:
-                await message.reply(f"Максимум {MAX_BETS_PER_ROUND} ставки за раунд.")
-                return
-
-            # Проверяем и списываем баланс
             stats = await deduct_coins(session, user_id, chat_id, amount)
             if stats is None:
                 user_stats = await get_or_create_user_stats(session, user_id, chat_id)
                 await message.reply(
-                    f"Недостаточно монет. Твой баланс: {user_stats.coins} монет."
+                    f"Недостаточно монет. Баланс: {user_stats.coins} монет."
                 )
                 return
 
-            # Размещаем ставку
             await place_bet(session, rnd.id, user_id, bet_type, bet_value, amount, display_name)
             await session.commit()
+            break
 
     bet_desc = format_bet_description(bet_type, bet_value)
     await message.reply(
         f"Ставка принята: {bet_desc} — {amount} монет.\n"
-        f"Твой баланс: {stats.coins} монет."
+        f"Баланс: {stats.coins} монет."
     )
 
+
+# ---------------------------------------------------------------------------
+# Анонсы и планировщик
+# ---------------------------------------------------------------------------
 
 async def announce_roulette_soon(bot: Bot) -> None:
     """Анонс рулетки за 5 минут до старта."""
@@ -381,31 +620,31 @@ async def announce_roulette_rules(bot: Bot) -> None:
         return
     await bot.send_message(
         settings.forum_chat_id,
-        "📋 Правила рулетки\n\n"
-        "• Ставки принимаются 2 минуты после открытия раунда\n"
-        f"• Максимум {MAX_BETS_PER_ROUND} ставки за раунд\n"
-        "• Типы ставок:\n"
-        "  🔴 Красное / ⚫ Чёрное — выигрыш x2\n"
+        "Правила рулетки\n\n"
+        f"Ставки принимаются {BETTING_DURATION_SEC} секунд после открытия раунда\n"
+        "Количество ставок не ограничено\n"
+        "Типы ставок:\n"
+        "  Красное / Чёрное — выигрыш x2\n"
         "  Чёт / Нечёт — выигрыш x2\n"
         "  Число (0-36) — выигрыш x36\n"
-        "  🟢 Зеро (0) — все ставки на цвет и чёт/нечёт проигрывают\n\n"
+        "  Зеро (0) — все ставки на цвет и чёт/нечёт проигрывают\n\n"
         "Как ставить:\n"
-        "• /roulette — быстрый выбор кнопками\n"
-        "• /bet red 50 — текстовая команда\n\n"
-        "Рулетка стартует через 1 минуту. Удачи! 🍀",
+        "  /roulette — быстрый выбор кнопками\n"
+        "  /bet red 50 — текстовая команда (любая сумма)\n\n"
+        "Рулетка стартует через 1 минуту. Удачи!",
         message_thread_id=settings.topic_games,
     )
 
 
 async def start_roulette_round(bot: Bot) -> None:
-    """Запускает раунд рулетки (вызывается из планировщика или автоматически)."""
+    """Запускает раунд рулетки (вызывается из планировщика)."""
     global _round_task
     if settings.topic_games is None:
         return
     if not _is_roulette_time():
         return
     if _round_task and not _round_task.done():
-        return  # Раунд уже идёт
+        return
 
     _round_task = asyncio.create_task(
         _run_roulette_round(bot, settings.forum_chat_id, settings.topic_games)
@@ -422,45 +661,56 @@ async def _run_roulette_round(bot: Bot, chat_id: int, topic_id: int) -> None:
             await session.commit()
             break
 
-        # 2. Объявляем приём ставок с inline-кнопками
+        # 2. Объявляем приём ставок — общее сообщение с кнопкой
         await bot.send_message(
             chat_id,
-            f"🎰 Рулетка открыта! Приём ставок — {BETTING_DURATION_SEC // 60} минуты.\n\n"
+            f"Рулетка открыта! Приём ставок — {BETTING_DURATION_SEC} секунд.\n\n"
             "Как ставить:\n"
-            "• /roulette — быстрая ставка кнопками\n"
-            "• /bet red 50 — текстом\n\n"
+            "  Нажмите кнопку ниже\n"
+            "  /roulette — меню кнопками\n"
+            "  /bet <тип> <сумма> — текстом (любая сумма)\n\n"
             "Типы: красное, чёрное, чёт, нечёт, число 0-36\n"
-            f"Максимум {MAX_BETS_PER_ROUND} ставки за раунд.",
+            "Количество ставок не ограничено!",
             message_thread_id=topic_id,
-            reply_markup=_bet_type_keyboard(),
+            reply_markup=_shared_keyboard(),
         )
 
         # 3. Ждём приём ставок
         await asyncio.sleep(BETTING_DURATION_SEC)
 
         # 4. Закрываем ставки
-        await bot.send_message(
+        spin_msg = await bot.send_message(
             chat_id,
-            "Ставки закрыты! Крутим рулетку... 🎰",
+            "Ставки закрыты! Крутим рулетку...",
             message_thread_id=topic_id,
         )
 
-        # 5. Анимация вращения (серия сообщений)
-        spin_frames = ["⬜🔴⚫🔴⚫🟢⚫🔴...", "...🔴⚫🟢🔴⚫🔴⬜...", "......⚫🔴🟢⚫🔴⬜"]
+        # 5. Анимация вращения (10 секунд)
+        spin_frames = [
+            "Крутим рулетку...\n⬜🔴⚫🔴⚫🟢⚫🔴",
+            "Крутим рулетку...\n🔴⚫🟢🔴⚫🔴⬜⚫",
+            "Крутим рулетку...\n⚫🔴⬜🟢⚫🔴⚫🔴",
+            "Крутим рулетку...\n🟢⚫🔴⚫🔴⬜⚫🔴",
+        ]
+        frame_delay = SPIN_DURATION_SEC / len(spin_frames)
         for frame in spin_frames:
-            await bot.send_message(chat_id, frame, message_thread_id=topic_id)
-            await asyncio.sleep(3)
+            await asyncio.sleep(frame_delay)
+            try:
+                await spin_msg.edit_text(frame)
+            except Exception:
+                pass
 
         # 6. Генерируем результат
         result_number = spin_wheel()
         result_color = get_number_color(result_number)
         result_parity = get_number_parity(result_number)
 
+        parity_text = f"Чётность: {parity_name_ru(result_parity)}" if result_parity else "Зеро!"
         await bot.send_message(
             chat_id,
-            f"🎰 Выпало: {result_number} {color_emoji(result_color)}\n"
+            f"Выпало: {result_number} {color_emoji(result_color)}\n"
             f"Цвет: {color_name_ru(result_color)}\n"
-            f"{'Чётность: ' + parity_name_ru(result_parity) if result_parity else 'Зеро!'}",
+            f"{parity_text}",
             message_thread_id=topic_id,
         )
 
@@ -484,7 +734,7 @@ async def _run_roulette_round(bot: Bot, chat_id: int, topic_id: int) -> None:
                 losers_lines: list[str] = []
 
                 # Группируем ставки по пользователю для статистики
-                user_results: dict[int, tuple[str | None, int, int]] = {}  # user_id: (name, won, lost)
+                user_results: dict[int, tuple[str | None, int, int]] = {}
 
                 for bet in bets:
                     winnings = calculate_winnings(bet.bet_type, bet.bet_value, bet.amount, result_number)
@@ -495,31 +745,30 @@ async def _run_roulette_round(bot: Bot, chat_id: int, topic_id: int) -> None:
                     if winnings > 0:
                         await credit_coins(session, bet.user_id, chat_id, winnings, display_name=name)
                         user_results[bet.user_id] = (name, prev[1] + winnings, prev[2])
-                        winners_lines.append(f"• @{name}: {bet_desc} ({bet.amount}) -> +{winnings} монет")
+                        winners_lines.append(f"  @{name}: {bet_desc} ({bet.amount}) -> +{winnings} монет")
                     else:
                         user_results[bet.user_id] = (name, prev[1], prev[2] + bet.amount)
-                        losers_lines.append(f"• @{name}: {bet_desc} ({bet.amount}) — проигрыш")
+                        losers_lines.append(f"  @{name}: {bet_desc} ({bet.amount}) — проигрыш")
 
-                # Обновляем статистику рулетки
-                for uid, (uname, won, lost) in user_results.items():
-                    await update_roulette_stats(session, uid, chat_id, won, lost, display_name=uname)
+                # Обновляем статистику
+                for uid_key, (uname, won, lost) in user_results.items():
+                    await update_roulette_stats(session, uid_key, chat_id, won, lost, display_name=uname)
 
                 await session.commit()
 
                 # Публикуем результаты
                 result_lines = ["Результаты раунда:"]
                 if winners_lines:
-                    result_lines.append("\n🏆 Победители:")
+                    result_lines.append("\nПобедители:")
                     result_lines.extend(winners_lines)
                 if losers_lines:
-                    result_lines.append("\n❌ Проигрыши:")
+                    result_lines.append("\nПроигрыши:")
                     result_lines.extend(losers_lines)
 
-                # Показываем обновлённые балансы
-                result_lines.append("\n💰 Балансы:")
-                for uid, (uname, _, _) in user_results.items():
-                    stats = await get_or_create_user_stats(session, uid, chat_id)
-                    result_lines.append(f"• @{uname}: {stats.coins} монет")
+                result_lines.append("\nБалансы:")
+                for uid_key, (uname, _, _) in user_results.items():
+                    st = await get_or_create_user_stats(session, uid_key, chat_id)
+                    result_lines.append(f"  @{uname}: {st.coins} монет")
 
                 await bot.send_message(
                     chat_id,
