@@ -791,30 +791,37 @@ async def ai_command(message: Message) -> None:
         await message.reply("Напишите вопрос после команды: /ai <ваш вопрос>")
         return
 
-    question_key = _normalize_cache_key(prompt)
-
-    context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
-    reply = await get_ai_client().assistant_reply(
-        prompt, context, chat_id=message.chat.id,
-    )
-
-    await _remember_ai_exchange_persistent(
-        message.chat.id, message.from_user.id, prompt, reply,
-    )
-
-    # Трекаем вопрос в FAQ
-    await _track_faq(message.chat.id, question_key, reply)
-
-    # Отправляем ответ с кнопками оценки
-    sent = await message.reply(reply, reply_markup=_feedback_keyboard(0))
-    # Обновляем кнопки с реальным message_id
-    _PENDING_FEEDBACK[sent.message_id] = (
-        message.chat.id, message.from_user.id, prompt[:1000], reply[:800], question_key,
-    )
     try:
-        await sent.edit_reply_markup(reply_markup=_feedback_keyboard(sent.message_id))
+        question_key = _normalize_cache_key(prompt)
+
+        context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
+        reply = await get_ai_client().assistant_reply(
+            prompt, context, chat_id=message.chat.id,
+        )
+
+        await _remember_ai_exchange_persistent(
+            message.chat.id, message.from_user.id, prompt, reply,
+        )
+
+        # Трекаем вопрос в FAQ (не блокируем ответ при ошибке)
+        try:
+            await _track_faq(message.chat.id, question_key, reply)
+        except Exception:
+            logger.warning("Не удалось обновить FAQ-трекинг для /ai.")
+
+        # Отправляем ответ с кнопками оценки
+        sent = await message.reply(reply, reply_markup=_feedback_keyboard(0))
+        # Обновляем кнопки с реальным message_id
+        _PENDING_FEEDBACK[sent.message_id] = (
+            message.chat.id, message.from_user.id, prompt[:1000], reply[:800], question_key,
+        )
+        try:
+            await sent.edit_reply_markup(reply_markup=_feedback_keyboard(sent.message_id))
+        except Exception:
+            pass  # Не критично если не удалось обновить кнопки
     except Exception:
-        pass  # Не критично если не удалось обновить кнопки
+        logger.exception("Ошибка при обработке /ai команды.")
+        await message.reply("Произошла ошибка при обработке запроса. Попробуйте позже.")
 
 
 @router.message(BotMentionFilter(), flags={"block": False})
@@ -831,14 +838,18 @@ async def mention_help(message: Message, bot: Bot) -> None:
     if message.from_user is None:
         return
 
-    # Проверяем модерацию перед ответом ассистента
+    # Проверяем модерацию перед ответом ассистента (только severity >= 2 блокирует)
     prompt = _extract_ai_prompt(message)
     if prompt:
         from app.handlers.moderation import run_moderation
 
-        moderated = await run_moderation(message, bot)
-        if moderated:
-            return  # сообщение нарушает правила, ассистент не отвечает
+        try:
+            moderated = await run_moderation(message, bot)
+            if moderated:
+                logger.info("OUT: MENTION_REPLY_BLOCKED_BY_MODERATION")
+                return  # сообщение нарушает правила, ассистент не отвечает
+        except Exception:
+            logger.exception("Ошибка модерации при обработке упоминания, продолжаем ответ.")
 
     if _is_ai_reply_rate_limited(message.chat.id, message.from_user.id):
         logger.info("OUT: MENTION_REPLY_SKIPPED_RATE_LIMIT")
@@ -846,27 +857,37 @@ async def mention_help(message: Message, bot: Bot) -> None:
         return
 
     if prompt:
-        question_key = _normalize_cache_key(prompt)
-
-        context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
-        reply = await get_ai_client().assistant_reply(prompt, context, chat_id=message.chat.id)
-
-        await _remember_ai_exchange_persistent(
-            message.chat.id, message.from_user.id, prompt, reply,
-        )
-
-        # Трекаем вопрос в FAQ
-        await _track_faq(message.chat.id, question_key, reply)
-
-        # Отправляем с кнопками оценки
-        sent = await message.reply(reply, reply_markup=_feedback_keyboard(0))
-        _PENDING_FEEDBACK[sent.message_id] = (
-            message.chat.id, message.from_user.id, prompt[:1000], reply[:800], question_key,
-        )
         try:
-            await sent.edit_reply_markup(reply_markup=_feedback_keyboard(sent.message_id))
+            question_key = _normalize_cache_key(prompt)
+
+            context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
+            reply = await get_ai_client().assistant_reply(prompt, context, chat_id=message.chat.id)
+
+            await _remember_ai_exchange_persistent(
+                message.chat.id, message.from_user.id, prompt, reply,
+            )
+
+            # Трекаем вопрос в FAQ (не блокируем ответ при ошибке)
+            try:
+                await _track_faq(message.chat.id, question_key, reply)
+            except Exception:
+                logger.warning("Не удалось обновить FAQ-трекинг при упоминании.")
+
+            # Отправляем с кнопками оценки
+            sent = await message.reply(reply, reply_markup=_feedback_keyboard(0))
+            _PENDING_FEEDBACK[sent.message_id] = (
+                message.chat.id, message.from_user.id, prompt[:1000], reply[:800], question_key,
+            )
+            try:
+                await sent.edit_reply_markup(reply_markup=_feedback_keyboard(sent.message_id))
+            except Exception:
+                pass
         except Exception:
-            pass
+            logger.exception("Ошибка при генерации AI-ответа на упоминание.")
+            try:
+                await message.reply(_next_mention_reply())
+            except Exception:
+                logger.exception("Не удалось отправить даже fallback-ответ на упоминание.")
     else:
         reply = _next_mention_reply()
         await message.reply(reply)
