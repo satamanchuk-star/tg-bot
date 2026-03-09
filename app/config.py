@@ -191,6 +191,9 @@ class Settings(BaseSettings):
     ai_summary_topic_id: int | None = None
     db_logs_retention_days: int = 14
     db_stats_retention_days: int = 45
+    google_sheets_spreadsheet_id: str = "1OsPh54Bn5fdkfsEJyKcbYZTcHnue3EWQ"
+    google_sheets_worksheet_name: str = "Objects"
+    google_service_account_file: str | None = None
 
     topic_rules: int | None = None
     topic_important: int | None = None

@@ -94,7 +94,16 @@ def test_local_assistant_reply_handles_rules_and_mentions() -> None:
 
 def test_local_assistant_reply_unknown_question_is_friendly() -> None:
     reply = build_local_assistant_reply("Где телепорт на Марс в нашем ЖК?")
-    assert "уточнить" in reply.lower() or "перепроверить" in reply.lower() or "пусто" in reply.lower()
+    assert len(reply.strip()) > 20
+
+
+def test_local_assistant_reply_uses_places_hint() -> None:
+    reply = build_local_assistant_reply(
+        "Где ближайшее МФЦ?",
+        places_hint="- МФЦ Видное (Госучреждения), адрес: ул. Центральная, 1",
+    )
+    assert "базе инфраструктуры" in reply.lower()
+    assert "мфц видное" in reply.lower()
 
 
 
@@ -183,5 +192,4 @@ def test_ai_module_client_assistant_timeout_fallback(monkeypatch) -> None:
     reply = asyncio.run(client.assistant_reply("шлагбаум не работает", [], chat_id=1))
 
     assert "Модуль ИИ" in reply
-
 

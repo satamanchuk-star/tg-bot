@@ -17,6 +17,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db import get_session
+from app.models import Place
 from app.services.ai_usage import add_usage, can_consume_ai, get_usage_stats
 from app.services.faq import get_faq_answer
 from app.services.resident_kb import build_resident_answer, build_resident_context
@@ -483,6 +484,7 @@ class OpenRouterProvider:
 
         rag_text = await _get_rag_context(chat_id, safe_prompt)
         faq_answer = await _get_faq_answer(chat_id, safe_prompt)
+        places_context = await _get_places_context(safe_prompt)
 
         system_prompt = _ASSISTANT_SYSTEM_PROMPT
         resident_context = build_resident_context(safe_prompt, context=context)
@@ -492,6 +494,11 @@ class OpenRouterProvider:
             system_prompt += f"\n\nБаза знаний ЖК:\n{rag_text}"
         if faq_answer:
             system_prompt += f"\n\nРекомендуемый ответ из FAQ (перефразируй, не копируй дословно):\n{faq_answer}"
+        if places_context:
+            system_prompt += (
+                "\n\nСправочник инфраструктуры ЖК (актуальные данные из БД, используй при ответе):\n"
+                f"{places_context}"
+            )
 
         # Формируем историю как отдельные user/assistant сообщения
         messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
@@ -508,7 +515,7 @@ class OpenRouterProvider:
             return reply
         except RuntimeError as exc:
             self._record_runtime_error(exc)
-            return build_local_assistant_reply(safe_prompt, context=context)
+            return build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context)
 
     async def evaluate_quiz_answer(
         self,
@@ -905,7 +912,12 @@ _EMPTY_PROMPT_REPLIES = (
 )
 
 
-def build_local_assistant_reply(prompt: str, *, context: list[str] | None = None) -> str:
+def build_local_assistant_reply(
+    prompt: str,
+    *,
+    context: list[str] | None = None,
+    places_hint: str | None = None,
+) -> str:
     normalized_prompt = _normalize_assistant_prompt(prompt)
     if not normalized_prompt:
         return random.choice(_EMPTY_PROMPT_REPLIES)
@@ -917,6 +929,9 @@ def build_local_assistant_reply(prompt: str, *, context: list[str] | None = None
     rule_reply = _assistant_rule_reply(normalized_prompt)
     if rule_reply:
         return rule_reply
+
+    if places_hint:
+        return f"Вот что нашёл в базе инфраструктуры:\n{places_hint[:700]}"
 
     return _pick_fallback_variant(normalized_prompt)
 
@@ -990,6 +1005,53 @@ async def _get_rag_context(chat_id: int, query: str) -> str:
             return await build_rag_context(session, chat_id=chat_id, query=query, top_k=8)
     except Exception as exc:
         logger.warning("RAG search failed: %s", exc)
+    return ""
+
+
+async def _get_places_context(query: str, *, top_k: int = 5) -> str:
+    """Подбирает релевантные объекты инфраструктуры для AI-ответа."""
+    normalized = query.strip().lower()
+    if not normalized:
+        return ""
+
+    try:
+        async for session in get_session():
+            like = f"%{normalized}%"
+            rows = (
+                await session.execute(
+                    select(Place)
+                    .where(
+                        Place.is_active.is_(True),
+                        (
+                            Place.name.ilike(like)
+                            | Place.address.ilike(like)
+                            | Place.category.ilike(like)
+                            | Place.subcategory.ilike(like)
+                        ),
+                    )
+                    .order_by(Place.distance_km.asc().nulls_last(), Place.name.asc())
+                    .limit(top_k)
+                )
+            ).scalars().all()
+            if not rows:
+                return ""
+
+            parts: list[str] = []
+            for item in rows:
+                snippet = f"- {item.name} ({item.category}"
+                if item.subcategory:
+                    snippet += f" / {item.subcategory}"
+                snippet += f"), адрес: {item.address}"
+                if item.phone:
+                    snippet += f", тел: {item.phone}"
+                if item.website:
+                    snippet += f", сайт: {item.website}"
+                if item.distance_km is not None:
+                    snippet += f", расстояние: {item.distance_km:.1f} км"
+                parts.append(snippet)
+            return "\n".join(parts)
+    except Exception as exc:
+        logger.warning("Places search failed: %s", exc)
     return ""
 
 

@@ -233,6 +233,15 @@ async def init_db(async_engine: AsyncEngine) -> None:
                         text("ALTER TABLE message_logs ADD COLUMN sentiment VARCHAR(20)")
                     )
 
+            if inspector.has_table("places"):
+                sync_conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS "
+                        "uq_places_name_address_category_idx "
+                        "ON places(name, address, category)"
+                    )
+                )
+
 
         await conn.run_sync(_ensure_columns)
 
