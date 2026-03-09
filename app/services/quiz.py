@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import json
+import logging
 import random
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import QuizQuestion, QuizSession, QuizUsedQuestion, QuizUserStat, UserStat
 
+logger = logging.getLogger(__name__)
+
 QUIZ_QUESTIONS_COUNT = 15
 QUIZ_QUESTION_TIMEOUT_SEC = 60
 QUIZ_BREAK_BETWEEN_QUESTIONS_SEC = 60
+# Сессия считается зависшей, если последний вопрос был задан более 5 минут назад
+QUIZ_STALE_SESSION_SEC = 5 * 60
 QUIZ_WINNER_COINS_BONUS = 50
 QUIZ_CORRECT_ANSWER_COINS = 20
 
@@ -46,6 +51,19 @@ async def get_available_questions_count(session: AsyncSession) -> int:
     return len(available)
 
 
+def _is_session_stale(quiz_session: QuizSession) -> bool:
+    """Проверяет, зависла ли сессия (например, после перезапуска бота)."""
+    if quiz_session.question_started_at is None:
+        # Сессия без активного вопроса — зависла между вопросами
+        return True
+    now = datetime.now(timezone.utc)
+    started = quiz_session.question_started_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    elapsed = (now - started).total_seconds()
+    return elapsed > QUIZ_STALE_SESSION_SEC
+
+
 async def can_start_quiz(
     session: AsyncSession,
     chat_id: int,
@@ -53,7 +71,16 @@ async def can_start_quiz(
 ) -> tuple[bool, str]:
     active = await get_active_session(session, chat_id, topic_id)
     if active:
-        return False, "Викторина уже запущена в этом топике."
+        if _is_session_stale(active):
+            logger.warning(
+                "Обнаружена зависшая сессия викторины (id=%s, question_started_at=%s). Завершаю.",
+                active.id,
+                active.question_started_at,
+            )
+            await end_quiz_session(session, active)
+            await session.commit()
+        else:
+            return False, "Викторина уже запущена в этом топике."
 
     available_count = await get_available_questions_count(session)
     if available_count < QUIZ_QUESTIONS_COUNT:
