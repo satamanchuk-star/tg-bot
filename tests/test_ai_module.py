@@ -14,6 +14,7 @@ from app.services.ai_module import (
     mask_personal_data,
     normalize_for_profanity,
     parse_quiz_answer_response,
+    _extract_search_words,
 )
 
 
@@ -193,3 +194,8 @@ def test_ai_module_client_assistant_timeout_fallback(monkeypatch) -> None:
 
     assert "Модуль ИИ" in reply
 
+
+def test_extract_search_words_adds_stem_variant_for_school_words() -> None:
+    words = _extract_search_words("Какая школа рядом?")
+    assert "школа" in words
+    assert "школ" in words
