@@ -651,6 +651,24 @@ async def start_roulette_round(bot: Bot) -> None:
     )
 
 
+async def resume_roulette_if_needed(bot: Bot) -> None:
+    """Возобновляет рулетку после перезагрузки бота, если сейчас время игры (21-22)."""
+    if not _is_roulette_time():
+        return
+    if settings.topic_games is None:
+        return
+    # Закрываем зависший раунд (если бот упал посреди раунда)
+    async for session in get_session():
+        stale = await get_active_round(session, settings.forum_chat_id, settings.topic_games)
+        if stale is not None:
+            logger.info("Рулетка: закрываем зависший раунд #%s после перезагрузки.", stale.id)
+            await close_round(session, stale, -1)  # -1 = раунд отменён
+            await session.commit()
+        break
+    logger.info("Рулетка: время игры (21-22), возобновляем раунды после перезагрузки.")
+    await start_roulette_round(bot)
+
+
 async def _run_roulette_round(bot: Bot, chat_id: int, topic_id: int) -> None:
     """Полный цикл одного раунда рулетки."""
     try:

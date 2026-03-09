@@ -610,6 +610,9 @@ async def on_startup(bot: Bot) -> None:
     # Импорт инфраструктуры из Google Sheets (если настроен сервисный аккаунт)
     await _sync_places_from_sheets()
 
+    # Возобновляем рулетку, если бот перезагрузился в игровое время
+    await roulette.resume_roulette_if_needed(bot)
+
     # Инициализируем AI-клиент и логируем режим работы
     get_ai_client()
     if settings.ai_enabled and settings.ai_key:
