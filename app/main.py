@@ -469,7 +469,29 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         hour="0,6,12,18",
         minute=30,
     )
-    # Рулетка: анонс за 5 минут и запуск первого раунда в 21:00
+    # Викторина: анонс → правила → автостарт
+    scheduler.add_job(
+        quiz.announce_quiz_soon,
+        "cron",
+        hour=19,
+        minute=55,
+        args=[bot],
+    )
+    scheduler.add_job(
+        quiz.announce_quiz_rules,
+        "cron",
+        hour=19,
+        minute=59,
+        args=[bot],
+    )
+    scheduler.add_job(
+        quiz.start_quiz_auto,
+        "cron",
+        hour=20,
+        minute=0,
+        args=[bot],
+    )
+    # Рулетка: анонс → правила → запуск первого раунда
     scheduler.add_job(
         roulette.announce_roulette_soon,
         "cron",
@@ -478,10 +500,25 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         args=[bot],
     )
     scheduler.add_job(
+        roulette.announce_roulette_rules,
+        "cron",
+        hour=20,
+        minute=59,
+        args=[bot],
+    )
+    scheduler.add_job(
         roulette.start_roulette_round,
         "cron",
         hour=21,
         minute=0,
+        args=[bot],
+    )
+    # Блэкджек: правила за минуту до старта
+    scheduler.add_job(
+        games.announce_blackjack_rules,
+        "cron",
+        hour=21,
+        minute=59,
         args=[bot],
     )
     scheduler.start()
@@ -558,6 +595,17 @@ async def on_startup(bot: Bot) -> None:
         load_resident_kb()
     except Exception:
         logger.exception("Не удалось загрузить базу знаний жителей (resident_kb.json).")
+
+    # Seed инфраструктуры из JSON (если таблица пустая)
+    try:
+        from scripts.seed_places import seed_places
+        async for session in get_session():
+            seeded = await seed_places(session)
+            if seeded:
+                await session.commit()
+                logger.info("Seed инфраструктуры: добавлено %s объектов.", seeded)
+    except Exception:
+        logger.exception("Ошибка seed инфраструктуры.")
 
     # Импорт инфраструктуры из Google Sheets (если настроен сервисный аккаунт)
     await _sync_places_from_sheets()
