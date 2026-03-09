@@ -489,6 +489,14 @@ class OpenRouterProvider:
 
         system_prompt = _ASSISTANT_SYSTEM_PROMPT
         resident_context = build_resident_context(safe_prompt, context=context)
+
+        # Логируем какие контексты были найдены
+        logger.info(
+            "AI assistant context: resident_kb=%s rag=%s faq=%s places=%s prompt=%r",
+            bool(resident_context), bool(rag_text), bool(faq_answer), bool(places_context),
+            safe_prompt[:100],
+        )
+
         if resident_context:
             system_prompt += f"\n\nКаноническая база знаний ЖК:\n{resident_context}"
         if rag_text:
@@ -1081,6 +1089,7 @@ def _extract_search_words(query: str) -> list[str]:
 async def _get_places_context(query: str, *, top_k: int = 5) -> str:
     """Подбирает релевантные объекты инфраструктуры для AI-ответа."""
     search_words = _extract_search_words(query)
+    logger.info("Places search: query=%r words=%s", query[:100], search_words[:5])
     if not search_words:
         return ""
 
@@ -1109,7 +1118,9 @@ async def _get_places_context(query: str, *, top_k: int = 5) -> str:
                 )
             ).scalars().all()
             if not rows:
+                logger.info("Places search: no results found for words=%s", search_words[:5])
                 return ""
+            logger.info("Places search: found %d results", len(rows))
 
             parts: list[str] = []
             for item in rows:
