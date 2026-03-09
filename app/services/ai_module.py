@@ -1022,13 +1022,27 @@ _PLACES_STOP_WORDS = {
 _MIN_WORD_LENGTH = 3
 
 
+def _word_search_variants(word: str) -> tuple[str, ...]:
+    """Добавляет простой морфологический fallback для поиска по базе мест."""
+    normalized = word.lower().strip()
+    if len(normalized) < _MIN_WORD_LENGTH:
+        return ()
+
+    variants = [normalized]
+    if len(normalized) >= 5 and normalized[-1] in {"а", "я", "ы", "и", "у", "ю", "е", "о", "ь"}:
+        variants.append(normalized[:-1])
+    return tuple(dict.fromkeys(variants))
+
+
 def _extract_search_words(query: str) -> list[str]:
     """Извлекает значимые слова из запроса для поиска по инфраструктуре."""
     words = re.findall(r"[а-яёa-z0-9]+", query.strip().lower())
-    return [
-        w for w in words
-        if len(w) >= _MIN_WORD_LENGTH and w not in _PLACES_STOP_WORDS
-    ]
+    variants: list[str] = []
+    for word in words:
+        if len(word) < _MIN_WORD_LENGTH or word in _PLACES_STOP_WORDS:
+            continue
+        variants.extend(_word_search_variants(word))
+    return list(dict.fromkeys(variants))
 
 
 async def _get_places_context(query: str, *, top_k: int = 5) -> str:
