@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-import asyncio
 import random
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlalchemy import select, delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import RouletteBet, RouletteRound, RouletteUserStat, UserStat
 
-# Максимум ставок на раунд для одного пользователя
-MAX_BETS_PER_ROUND = 3
-
 # Время приёма ставок в секундах
-BETTING_DURATION_SEC = 120
+BETTING_DURATION_SEC = 60
+
+# Время вращения шарика в секундах
+SPIN_DURATION_SEC = 10
 
 # Таблица цветов рулетки: 0 = зелёный
 RED_NUMBERS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
