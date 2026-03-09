@@ -469,7 +469,14 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         hour="0,6,12,18",
         minute=30,
     )
-    # Рулетка: запуск первого раунда в 21:00
+    # Рулетка: анонс за 5 минут и запуск первого раунда в 21:00
+    scheduler.add_job(
+        roulette.announce_roulette_soon,
+        "cron",
+        hour=20,
+        minute=55,
+        args=[bot],
+    )
     scheduler.add_job(
         roulette.start_roulette_round,
         "cron",

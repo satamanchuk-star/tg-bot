@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from itertools import cycle
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
@@ -41,6 +42,26 @@ router = Router()
 
 # Лок для защиты от гонок при размещении ставок
 _bet_lock = asyncio.Lock()
+
+_ROULETTE_MAIN_CHAT_INVITES = cycle(
+    [
+        "Через 5 минут в «Блэкджек и боулинг» открывается рулетка! Крутите колесо фортуны 🎰",
+        "Соседи, рулетка стартует через 5 минут! Заходите в игровой топик испытать удачу 🍀",
+        "Кто сегодня сорвёт куш? Рулетка через 5 минут в «Блэкджек и боулинг»! 💰",
+        "Внимание! Через 5 минут начинается рулетка. Готовьте ставки и нервы 😎",
+        "Колесо фортуны ждёт! Рулетка через 5 минут в игровом топике 🎡",
+    ]
+)
+
+_ROULETTE_TOPIC_INVITES = cycle(
+    [
+        "Через 5 минут рулетка! Красное или чёрное — делайте ваши ставки 🔴⚫",
+        "Рулетка через 5 минут! Кто поставит на зеро и станет легендой? 🟢",
+        "5 минут до рулетки! Подготовьте монеты и интуицию 🎲",
+        "Скоро крутим колесо! Рулетка стартует через 5 минут — не пропустите 🎰",
+        "Через 5 минут начинаем! Чёт или нечёт? Решать вам 🤔",
+    ]
+)
 
 # Задача текущего раунда (чтобы не запускать дубли)
 _round_task: asyncio.Task | None = None
@@ -143,6 +164,18 @@ async def handle_bet(message: Message) -> None:
     await message.reply(
         f"Ставка принята: {bet_desc} — {amount} монет.\n"
         f"Твой баланс: {stats.coins} монет."
+    )
+
+
+async def announce_roulette_soon(bot: Bot) -> None:
+    """Анонс рулетки за 5 минут до старта."""
+    if settings.topic_games is None:
+        return
+    await bot.send_message(settings.forum_chat_id, next(_ROULETTE_MAIN_CHAT_INVITES))
+    await bot.send_message(
+        settings.forum_chat_id,
+        next(_ROULETTE_TOPIC_INVITES),
+        message_thread_id=settings.topic_games,
     )
 
 
