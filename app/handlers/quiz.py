@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, date
 from itertools import cycle
 from typing import TYPE_CHECKING
 
@@ -54,6 +54,10 @@ _session_results: dict[tuple[int, int], dict[int, tuple[str, int]]] = {}
 _answer_grace_tasks: dict[tuple[int, int], asyncio.Task[None]] = {}
 _pending_answers: dict[tuple[int, int], dict[int, tuple[str, bool]]] = {}
 _session_locks: dict[tuple[int, int], asyncio.Lock] = {}
+# Лимит ручных запусков викторины: не более 2 в день
+_MANUAL_QUIZ_DAILY_LIMIT = 2
+_manual_quiz_launches: dict[str, int] = {}  # "YYYY-MM-DD" -> count
+_manual_quiz_date: date | None = None
 
 _MAIN_CHAT_INVITES = cycle(
     [
@@ -313,6 +317,22 @@ async def _finish_quiz_and_notify(
     )
 
 
+def _check_manual_limit() -> tuple[bool, int]:
+    """Проверяет лимит ручных запусков. Возвращает (можно_запустить, осталось)."""
+    global _manual_quiz_date
+    today = date.today()
+    if _manual_quiz_date != today:
+        _manual_quiz_launches.clear()
+        _manual_quiz_date = today
+    count = _manual_quiz_launches.get("count", 0)
+    remaining = _MANUAL_QUIZ_DAILY_LIMIT - count
+    return remaining > 0, remaining
+
+
+def _increment_manual_count() -> None:
+    _manual_quiz_launches["count"] = _manual_quiz_launches.get("count", 0) + 1
+
+
 @router.message(Command("umnij_start"))
 async def start_quiz_admin(message: Message, bot: Bot) -> None:
     if settings.topic_games is None:
@@ -324,12 +344,22 @@ async def start_quiz_admin(message: Message, bot: Bot) -> None:
         await message.reply("Команда доступна только администраторам.")
         return
 
+    allowed, remaining = _check_manual_limit()
+    if not allowed:
+        await message.reply(
+            f"Лимит ручных запусков исчерпан ({_MANUAL_QUIZ_DAILY_LIMIT} в день). "
+            "Попробуйте завтра."
+        )
+        return
+
     started, reason = await _start_quiz(bot, settings.forum_chat_id, settings.topic_games, actor="admin")
     if not started:
         await message.reply(f"Ручной запуск не выполнен: {reason}")
         return
 
-    await message.reply("Ручной запуск викторины выполнен.")
+    _increment_manual_count()
+    _, left = _check_manual_limit()
+    await message.reply(f"Ручной запуск викторины выполнен. Осталось запусков сегодня: {left}.")
 
 
 @router.message(Command("bal"))
