@@ -469,7 +469,29 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         hour="0,6,12,18",
         minute=30,
     )
-    # Рулетка: анонс за 5 минут и запуск первого раунда в 21:00
+    # Викторина: анонс → правила → автостарт
+    scheduler.add_job(
+        quiz.announce_quiz_soon,
+        "cron",
+        hour=19,
+        minute=55,
+        args=[bot],
+    )
+    scheduler.add_job(
+        quiz.announce_quiz_rules,
+        "cron",
+        hour=19,
+        minute=59,
+        args=[bot],
+    )
+    scheduler.add_job(
+        quiz.start_quiz_auto,
+        "cron",
+        hour=20,
+        minute=0,
+        args=[bot],
+    )
+    # Рулетка: анонс → правила → запуск первого раунда
     scheduler.add_job(
         roulette.announce_roulette_soon,
         "cron",
@@ -478,10 +500,25 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         args=[bot],
     )
     scheduler.add_job(
+        roulette.announce_roulette_rules,
+        "cron",
+        hour=20,
+        minute=59,
+        args=[bot],
+    )
+    scheduler.add_job(
         roulette.start_roulette_round,
         "cron",
         hour=21,
         minute=0,
+        args=[bot],
+    )
+    # Блэкджек: правила за минуту до старта
+    scheduler.add_job(
+        games.announce_blackjack_rules,
+        "cron",
+        hour=21,
+        minute=59,
         args=[bot],
     )
     scheduler.start()

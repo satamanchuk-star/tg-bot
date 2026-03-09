@@ -93,6 +93,26 @@ async def announce_quiz_soon(bot: Bot) -> None:
     )
 
 
+async def announce_quiz_rules(bot: Bot) -> None:
+    """Публикует правила викторины за минуту до старта."""
+    if settings.topic_games is None:
+        return
+    await bot.send_message(
+        settings.forum_chat_id,
+        "📋 Правила викторины\n\n"
+        f"• {QUIZ_QUESTIONS_COUNT} вопросов подряд\n"
+        f"• {QUIZ_QUESTION_TIMEOUT_SEC} секунд на каждый ответ\n"
+        f"• Пауза {QUIZ_BREAK_BETWEEN_QUESTIONS_SEC} секунд между вопросами\n"
+        f"• За правильный ответ: +{QUIZ_CORRECT_ANSWER_COINS} монет\n"
+        f"• Победитель раунда получает бонус: +{QUIZ_WINNER_COINS_BONUS} монет\n"
+        "• Каждый может ответить на вопрос только 1 раз\n"
+        "• Пишите ответ обычным сообщением в чат\n"
+        "• Бот оценивает ответы с учётом опечаток\n\n"
+        "Викторина стартует через 1 минуту. Удачи! 🍀",
+        message_thread_id=settings.topic_games,
+    )
+
+
 async def announce_questions_left(bot: Bot) -> None:
     if settings.topic_games is None:
         return

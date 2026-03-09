@@ -375,6 +375,28 @@ async def announce_roulette_soon(bot: Bot) -> None:
     )
 
 
+async def announce_roulette_rules(bot: Bot) -> None:
+    """Публикует правила рулетки за минуту до старта."""
+    if settings.topic_games is None:
+        return
+    await bot.send_message(
+        settings.forum_chat_id,
+        "📋 Правила рулетки\n\n"
+        "• Ставки принимаются 2 минуты после открытия раунда\n"
+        f"• Максимум {MAX_BETS_PER_ROUND} ставки за раунд\n"
+        "• Типы ставок:\n"
+        "  🔴 Красное / ⚫ Чёрное — выигрыш x2\n"
+        "  Чёт / Нечёт — выигрыш x2\n"
+        "  Число (0-36) — выигрыш x36\n"
+        "  🟢 Зеро (0) — все ставки на цвет и чёт/нечёт проигрывают\n\n"
+        "Как ставить:\n"
+        "• /roulette — быстрый выбор кнопками\n"
+        "• /bet red 50 — текстовая команда\n\n"
+        "Рулетка стартует через 1 минуту. Удачи! 🍀",
+        message_thread_id=settings.topic_games,
+    )
+
+
 async def start_roulette_round(bot: Bot) -> None:
     """Запускает раунд рулетки (вызывается из планировщика или автоматически)."""
     global _round_task
