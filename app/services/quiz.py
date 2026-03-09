@@ -12,10 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import QuizQuestion, QuizSession, QuizUsedQuestion, QuizUserStat, UserStat
 
-QUIZ_QUESTIONS_COUNT = 10
+QUIZ_QUESTIONS_COUNT = 15
 QUIZ_QUESTION_TIMEOUT_SEC = 60
 QUIZ_BREAK_BETWEEN_QUESTIONS_SEC = 60
 QUIZ_WINNER_COINS_BONUS = 50
+QUIZ_CORRECT_ANSWER_COINS = 20
 
 
 def get_used_question_ids(quiz_session: QuizSession) -> list[int]:
@@ -216,6 +217,24 @@ async def award_point(
         stat = QuizUserStat(user_id=user_id, chat_id=chat_id, total_points=1, display_name=display_name)
         session.add(stat)
     return stat
+
+
+async def award_correct_answer_coins(
+    session: AsyncSession,
+    user_id: int,
+    chat_id: int,
+    display_name: str | None = None,
+) -> UserStat:
+    """Начисляет монеты за правильный ответ в викторине."""
+    stats = await session.get(UserStat, {"user_id": user_id, "chat_id": chat_id})
+    if stats is None:
+        stats = UserStat(user_id=user_id, chat_id=chat_id, coins=100, display_name=display_name)
+        session.add(stats)
+    if display_name:
+        stats.display_name = display_name
+    stats.coins += QUIZ_CORRECT_ANSWER_COINS
+    await session.flush()
+    return stats
 
 
 async def end_quiz_session(session: AsyncSession, quiz_session: QuizSession) -> None:

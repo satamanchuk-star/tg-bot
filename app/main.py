@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.config import settings
 from app.db import Base, engine, get_session
-from app.handlers import admin, forms, games, help as help_handler, moderation, quiz
+from app.handlers import admin, forms, games, help as help_handler, moderation, quiz, roulette
 from app.models import MigrationFlag, UserStat
 from app.services.topic_stats import bump_topic_stat
 from app.services.games import (
@@ -469,6 +469,21 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         hour="0,6,12,18",
         minute=30,
     )
+    # Рулетка: анонс за 5 минут и запуск первого раунда в 21:00
+    scheduler.add_job(
+        roulette.announce_roulette_soon,
+        "cron",
+        hour=20,
+        minute=55,
+        args=[bot],
+    )
+    scheduler.add_job(
+        roulette.start_roulette_round,
+        "cron",
+        hour=21,
+        minute=0,
+        args=[bot],
+    )
     scheduler.start()
     return scheduler
 
@@ -614,6 +629,7 @@ async def main() -> None:
     dp.include_router(games.router)  # игры (команды /21, /score)
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     dp.include_router(quiz.router)  # викторина (команды /umnij_start, /bal, /topumnij)
+    dp.include_router(roulette.router)  # рулетка (команда /bet)
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     # stats.router убран — статистика через middleware
 

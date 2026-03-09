@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import QuizQuestion
 
-QUIZ_XLSX_PATH = Path(__file__).resolve().parents[2] / "viktorinavopros_QA.xlsx"
+_QUIZ_XLSX_PRIMARY = Path(__file__).resolve().parents[2] / "quiz_questions_normalized.xlsx"
+_QUIZ_XLSX_FALLBACK = Path(__file__).resolve().parents[2] / "viktorinavopros_QA.xlsx"
+QUIZ_XLSX_PATH = _QUIZ_XLSX_PRIMARY if _QUIZ_XLSX_PRIMARY.exists() else _QUIZ_XLSX_FALLBACK
 QUIZ_TEXT_PATH = Path(__file__).resolve().parents[1] / "data" / "quiz_questions.txt"
 _NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 
