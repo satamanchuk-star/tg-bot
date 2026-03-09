@@ -18,9 +18,11 @@ from app.config import settings
 from app.db import get_session
 from app.services.quiz import (
     QUIZ_BREAK_BETWEEN_QUESTIONS_SEC,
+    QUIZ_CORRECT_ANSWER_COINS,
     QUIZ_QUESTION_TIMEOUT_SEC,
     QUIZ_QUESTIONS_COUNT,
     QUIZ_WINNER_COINS_BONUS,
+    award_correct_answer_coins,
     award_point,
     award_winner_bonus_coins,
     build_answer_hint,
@@ -139,7 +141,9 @@ async def _start_quiz(bot: Bot, chat_id: int, topic_id: int, actor: str) -> tupl
 
     await bot.send_message(
         chat_id,
-        "Викторина начинается! 10 вопросов, по 60 секунд на ответ и 60 секунд пауза между вопросами.",
+        f"Викторина начинается! {QUIZ_QUESTIONS_COUNT} вопросов, по 60 секунд на ответ и 60 секунд пауза между вопросами.\n"
+        f"Каждый пользователь может ответить на каждый вопрос только 1 раз.\n"
+        f"За правильный ответ: +{QUIZ_CORRECT_ANSWER_COINS} монет.",
         message_thread_id=topic_id,
     )
     await _send_question(bot, chat_id, topic_id, question_number, question_text, hint)
@@ -321,6 +325,7 @@ async def add_quiz_point_admin(message: Message, bot: Bot) -> None:
 
     async for session in get_session():
         stat = await award_point(session, target_user.id, settings.forum_chat_id, display_name=display_name)
+        coin_stat = await award_correct_answer_coins(session, target_user.id, settings.forum_chat_id, display_name=display_name)
         await session.commit()
         break
 
@@ -330,7 +335,10 @@ async def add_quiz_point_admin(message: Message, bot: Bot) -> None:
     points = _session_results[key].get(target_user.id, (display_name, 0))[1] + 1
     _session_results[key][target_user.id] = (display_name, points)
 
-    await message.reply(f"Начислен +1 балл @{display_name}. Всего: {stat.total_points}")
+    await message.reply(
+        f"Начислен +1 балл и +{QUIZ_CORRECT_ANSWER_COINS} монет @{display_name}.\n"
+        f"Очки: {stat.total_points}, Баланс: {coin_stat.coins} монет"
+    )
 
 
 @router.message(Command("topumnij"))
@@ -446,10 +454,14 @@ async def _finalize_answers_after_grace(
 
                 for user_id, (name, is_close) in accepted.items():
                     stat = await award_point(session, user_id, chat_id, display_name=name)
+                    coin_stat = await award_correct_answer_coins(session, user_id, chat_id, display_name=name)
                     prev_points = _session_results[key].get(user_id, (name, 0))[1]
                     _session_results[key][user_id] = (name, prev_points + 1)
                     suffix = " (близкий ответ, засчитано ИИ)" if is_close else ""
-                    lines.append(f"• @{name} +1, всего: {stat.total_points}{suffix}")
+                    lines.append(
+                        f"• @{name} +1, +{QUIZ_CORRECT_ANSWER_COINS} монет "
+                        f"(баланс: {coin_stat.coins}){suffix}"
+                    )
 
                 await bot.send_message(chat_id, "\n".join(lines), message_thread_id=topic_id)
 
