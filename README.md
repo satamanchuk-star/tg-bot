@@ -11,6 +11,7 @@ Telegram-бот для управления форумом жилого комп
 - **RAG-база знаний**: расширенные категории (включая детскую площадку, коммунальные сервисы, доступ и платежи) и приоритет админских записей в контексте
 - **Тональный анализ грубостей**: распознавание маскированного мата и мягкие предупреждения (`warning`) для сообщений средней агрессии
 - **Память диалога**: краткий summary последних реплик перед ответом ассистента
+- **Инфраструктура ЖК**: импорт объектов из Google Sheets в БД и использование этих данных в ответах ассистента
 
 ## Архитектура
 
@@ -52,6 +53,40 @@ app/
 | `AI_*` | Настройки AI endpoint, таймаутов, ретраев и лимитов |
 | `AI_FEATURE_*` | Точечное отключение AI-функций (модерация/ассистент/сводка) |
 | `TOPIC_*` | ID топиков форума (см. `.env.example`) |
+| `GOOGLE_SHEETS_SPREADSHEET_ID` | ID таблицы Google Sheets для импорта |
+| `GOOGLE_SHEETS_WORKSHEET_NAME` | Имя листа для импорта (по умолчанию `Objects`) |
+| `GOOGLE_SERVICE_ACCOUNT_FILE` | Путь к JSON-файлу service account |
+
+## Импорт инфраструктуры из Google Sheets
+
+1. Установить зависимости:
+
+```bash
+pip install -r requirements.txt
+```
+
+2. Создать Service Account в Google Cloud Console и скачать JSON-ключ.
+3. Выдать доступ service account к таблице Google Sheets (как обычному пользователю по email аккаунта).
+4. Положить JSON-ключ в безопасное место на сервере (например `/opt/alexbot/secrets/google-service-account.json`).
+5. Заполнить env-переменные:
+   - `GOOGLE_SHEETS_SPREADSHEET_ID=1OsPh54Bn5fdkfsEJyKcbYZTcHnue3EWQ`
+   - `GOOGLE_SHEETS_WORKSHEET_NAME=Objects`
+   - `GOOGLE_SERVICE_ACCOUNT_FILE=/opt/alexbot/secrets/google-service-account.json`
+6. Запустить импорт:
+
+```bash
+python scripts/import_places_from_google_sheets.py
+```
+
+Для безопасной проверки без записи в БД:
+
+```bash
+python scripts/import_places_from_google_sheets.py --dry-run
+```
+
+Проверка загрузки данных:
+- задать ассистенту вопрос про объект/категорию/адрес инфраструктуры (например, про МФЦ или ближайшие магазины);
+- убедиться, что в ответе используются данные из локальной БД.
 
 ## AI: текущий статус
 
@@ -191,5 +226,3 @@ cp .env.example .env
 # заполните обязательные поля и перезапустите
 python -m app.main
 ```
-
-

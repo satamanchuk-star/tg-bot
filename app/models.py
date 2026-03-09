@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -243,6 +243,36 @@ class AiUsage(Base):
     chat_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     request_count: Mapped[int] = mapped_column(Integer, default=0)
     tokens_used: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+class Place(Base):
+    """Почему: справочник инфраструктуры нужен для быстрых ответов бота без внешних API."""
+
+    __tablename__ = "places"
+    __table_args__ = (
+        UniqueConstraint("name", "address", "category", name="uq_places_name_address_category"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), index=True)
+    category: Mapped[str] = mapped_column(String(120), index=True)
+    subcategory: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    address: Mapped[str] = mapped_column(String(255), index=True)
+    phone: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    website: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    distance_km: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    work_time: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
