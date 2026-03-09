@@ -559,6 +559,17 @@ async def on_startup(bot: Bot) -> None:
     except Exception:
         logger.exception("Не удалось загрузить базу знаний жителей (resident_kb.json).")
 
+    # Seed инфраструктуры из JSON (если таблица пустая)
+    try:
+        from scripts.seed_places import seed_places
+        async for session in get_session():
+            seeded = await seed_places(session)
+            if seeded:
+                await session.commit()
+                logger.info("Seed инфраструктуры: добавлено %s объектов.", seeded)
+    except Exception:
+        logger.exception("Ошибка seed инфраструктуры.")
+
     # Импорт инфраструктуры из Google Sheets (если настроен сервисный аккаунт)
     await _sync_places_from_sheets()
 
