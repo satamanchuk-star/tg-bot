@@ -218,6 +218,10 @@ async def init_db(async_engine: AsyncEngine) -> None:
                     sync_conn.execute(
                         text("ALTER TABLE rag_messages ADD COLUMN expires_at DATETIME")
                     )
+                if "is_admin" not in columns:
+                    sync_conn.execute(
+                        text("ALTER TABLE rag_messages ADD COLUMN is_admin BOOLEAN DEFAULT 0 NOT NULL")
+                    )
 
             # Миграция message_logs: sentiment
             if inspector.has_table("message_logs"):
