@@ -242,11 +242,11 @@ async def handle_start_bet(callback: CallbackQuery) -> None:
 
     display = callback.from_user.username or callback.from_user.full_name
     # Отправляем персональное сообщение в тот же тред (НЕ редактируем общее)
+    # message_thread_id копируется автоматически из callback.message в answer()
     await callback.message.answer(
         f"@{display}, выберите тип ставки\n"
         f"Баланс: {balance} монет",
         reply_markup=_type_keyboard(uid),
-        message_thread_id=callback.message.message_thread_id,
     )
     await callback.answer()
 
