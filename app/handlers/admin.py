@@ -28,6 +28,7 @@ from app.services.ai_module import (
     get_ai_usage_for_today,
     is_ai_runtime_enabled,
     set_ai_runtime_enabled,
+    resolve_provider_mode,
 )
 from app.services.ai_usage import next_reset_delta, reset_ai_usage
 from app.services.rag import add_rag_message, build_canonical_text, get_rag_count, systematize_rag
@@ -255,7 +256,7 @@ async def ai_status(message: Message, bot: Bot) -> None:
     if runtime.last_error_at:
         last_error = f"{last_error} ({runtime.last_error_at.isoformat(timespec='seconds')} UTC)"
 
-    provider = "Remote API" if settings.ai_enabled and bool(settings.ai_key) else "STUB"
+    provider = "Remote API" if resolve_provider_mode() == "remote" else "STUB"
     await message.reply(
         "Статус AI:\n"
         f"• Провайдер: {provider}\n"
