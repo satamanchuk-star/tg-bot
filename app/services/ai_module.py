@@ -339,7 +339,8 @@ class StubAiProvider:
         safe_prompt = mask_personal_data(prompt)[:1000]
         if not is_assistant_topic_allowed(safe_prompt):
             return random.choice(_FORBIDDEN_TOPIC_REPLIES)
-        return f"{_USER_FALLBACK} {build_local_assistant_reply(safe_prompt, context=context)}"
+        places_context = await _get_places_context(safe_prompt)
+        return f"{_USER_FALLBACK} {build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context)}"
 
     async def evaluate_quiz_answer(
         self,
@@ -670,7 +671,8 @@ class AiModuleClient:
                 "AI assistant timeout after %s seconds; using local fallback.",
                 _ASSISTANT_SOFT_TIMEOUT_SECONDS,
             )
-            return f"{_USER_FALLBACK} {build_local_assistant_reply(prompt, context=context)}"
+            places_context = await _get_places_context(prompt)
+            return f"{_USER_FALLBACK} {build_local_assistant_reply(prompt, context=context, places_hint=places_context)}"
 
     async def assistant_reply_with_history(
         self,
@@ -931,6 +933,10 @@ def build_local_assistant_reply(
     if not normalized_prompt:
         return random.choice(_EMPTY_PROMPT_REPLIES)
 
+    # Данные из БД инфраструктуры приоритетнее статичной базы знаний
+    if places_hint:
+        return f"Вот что нашёл в базе инфраструктуры:\n{places_hint[:700]}"
+
     resident_answer = build_resident_answer(normalized_prompt, context=context)
     if resident_answer:
         return resident_answer
@@ -938,9 +944,6 @@ def build_local_assistant_reply(
     rule_reply = _assistant_rule_reply(normalized_prompt)
     if rule_reply:
         return rule_reply
-
-    if places_hint:
-        return f"Вот что нашёл в базе инфраструктуры:\n{places_hint[:700]}"
 
     return _pick_fallback_variant(normalized_prompt)
 
