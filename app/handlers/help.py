@@ -935,7 +935,9 @@ async def mention_help(message: Message, bot: Bot) -> None:
         return
 
     # Помечаем сообщение как обработанное, чтобы не обрабатывать дважды
-    _mark_message_processed(message.message_id)
+    message_id = getattr(message, "message_id", None)
+    if message_id is not None:
+        _mark_message_processed(message_id)
 
     # Проверяем модерацию перед ответом ассистента (только severity >= 2 блокирует)
     prompt = _extract_ai_prompt(message)
