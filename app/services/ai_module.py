@@ -339,7 +339,9 @@ class StubAiProvider:
         if not is_assistant_topic_allowed(safe_prompt):
             return random.choice(_FORBIDDEN_TOPIC_REPLIES)
         places_context = await _get_places_context(safe_prompt)
-        return f"{_USER_FALLBACK} {build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context)}"
+        rag_text = await _get_rag_context(chat_id, safe_prompt)
+        faq_answer = await _get_faq_answer(chat_id, safe_prompt)
+        return f"{_USER_FALLBACK} {build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer)}"
 
     async def evaluate_quiz_answer(
         self,
@@ -524,7 +526,7 @@ class OpenRouterProvider:
             return reply
         except RuntimeError as exc:
             self._record_runtime_error(exc)
-            return build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context)
+            return build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer)
 
     async def evaluate_quiz_answer(
         self,
@@ -671,7 +673,9 @@ class AiModuleClient:
                 _ASSISTANT_SOFT_TIMEOUT_SECONDS,
             )
             places_context = await _get_places_context(prompt)
-            return f"{_USER_FALLBACK} {build_local_assistant_reply(prompt, context=context, places_hint=places_context)}"
+            rag_text = await _get_rag_context(chat_id, prompt)
+            faq_answer = await _get_faq_answer(chat_id, prompt)
+            return f"{_USER_FALLBACK} {build_local_assistant_reply(prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer)}"
 
     async def assistant_reply_with_history(
         self,
@@ -927,14 +931,24 @@ def build_local_assistant_reply(
     *,
     context: list[str] | None = None,
     places_hint: str | None = None,
+    rag_hint: str | None = None,
+    faq_hint: str | None = None,
 ) -> str:
     normalized_prompt = _normalize_assistant_prompt(prompt)
     if not normalized_prompt:
         return random.choice(_EMPTY_PROMPT_REPLIES)
 
+    # FAQ-ответ — наивысший приоритет (закреплённый ответ из базы)
+    if faq_hint:
+        return faq_hint[:800]
+
     # Данные из БД инфраструктуры приоритетнее статичной базы знаний
     if places_hint:
         return f"Вот что нашёл в базе инфраструктуры:\n{places_hint[:700]}"
+
+    # RAG-контекст из базы знаний ЖК
+    if rag_hint:
+        return f"Вот что нашёл в базе знаний:\n{rag_hint[:700]}"
 
     resident_answer = build_resident_answer(normalized_prompt, context=context)
     if resident_answer:

@@ -106,11 +106,25 @@ def _score_entry(query_tokens: set[str], entry: ResidentKbEntry) -> float:
         return 0.0
 
     entry_tokens = _entry_tokens(entry)
-    overlap = len(query_tokens & entry_tokens)
-    if overlap == 0:
+    overlap = query_tokens & entry_tokens
+    overlap_count = len(overlap)
+    if overlap_count == 0:
         return 0.0
 
-    overlap_ratio = overlap / max(len(query_tokens), 1)
+    # Общие слова, которые не должны считаться значимым совпадением
+    _GENERIC_TOKENS = {
+        "какие", "какой", "какая", "какое", "есть", "рядом", "жк",
+        "дом", "доме", "квартира", "квартиры", "район", "районе",
+        "сколько", "почему", "зачем", "откуда", "ответ", "вопрос",
+    }
+    meaningful_overlap = overlap - _GENERIC_TOKENS
+    meaningful_count = len(meaningful_overlap)
+
+    # Если совпадают только общие слова — не считаем это релевантным ответом
+    if meaningful_count == 0 and overlap_count <= 2:
+        return 0.0
+
+    overlap_ratio = overlap_count / max(len(query_tokens), 1)
     keyword_bonus = 0.0
     if any(keyword in query_tokens for keyword in _STRONG_KEYWORDS) and any(
         keyword in entry_tokens for keyword in _STRONG_KEYWORDS
@@ -118,7 +132,8 @@ def _score_entry(query_tokens: set[str], entry: ResidentKbEntry) -> float:
         keyword_bonus = 0.2
 
     category_bonus = 0.08 if entry.category in {"шлагбаум", "ук", "аварийка"} else 0.0
-    priority_bonus = min(entry.priority, 100) / 250
+    # Приоритет влияет меньше, чтобы не вытягивать нерелевантные записи
+    priority_bonus = min(entry.priority, 100) / 500
     return overlap_ratio + keyword_bonus + category_bonus + priority_bonus
 
 
