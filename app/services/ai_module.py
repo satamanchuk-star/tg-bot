@@ -497,6 +497,7 @@ class OpenRouterProvider:
         payload = {
             "model": self._model,
             "temperature": 0.7,
+            "max_tokens": settings.ai_max_tokens,
             "messages": messages,
         }
         headers = {
@@ -528,6 +529,14 @@ class OpenRouterProvider:
                 )
                 if status_code == 429 and attempt < self._retries:
                     continue
+                error_hint = ""
+                try:
+                    error_payload = exc.response.json()
+                    error_hint = str(error_payload.get("error", {}).get("message") or "")[:160]
+                except ValueError:
+                    error_hint = response_text[:160]
+                if error_hint:
+                    raise RuntimeError(f"AI API вернул ошибку {status_code}: {error_hint}") from exc
                 raise RuntimeError(f"AI API вернул ошибку {status_code}") from exc
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 if attempt >= self._retries:
