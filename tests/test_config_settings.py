@@ -163,7 +163,7 @@ def test_extract_compose_bot_env_resolves_compose_placeholders(monkeypatch, tmp_
     assert env["ADMIN_LOG_CHAT_ID"] == "-100777"
 
 
-def test_inject_env_from_server_compose_overrides_existing(monkeypatch, tmp_path) -> None:
+def test_inject_env_from_server_compose_keeps_existing_process_env(monkeypatch, tmp_path) -> None:
     compose = tmp_path / "docker-compose.yaml"
     compose.write_text(
         """services:
@@ -186,7 +186,27 @@ def test_inject_env_from_server_compose_overrides_existing(monkeypatch, tmp_path
 
     _inject_env_from_server_compose()
 
-    assert os.environ["BOT_TOKEN"] == "from-compose"
+    assert os.environ["BOT_TOKEN"] == "from-env"
     assert os.environ["FORUM_CHAT_ID"] == "-100123"
     assert os.environ["ADMIN_LOG_CHAT_ID"] == "-100456"
     assert os.environ["AI_MODEL"] == "qwen/qwen3.5-flash"
+
+
+def test_inject_env_from_server_compose_skips_empty_values(monkeypatch, tmp_path) -> None:
+    compose = tmp_path / "docker-compose.yaml"
+    compose.write_text(
+        """services:
+  bot:
+    image: test
+    environment:
+      AI_KEY: ${AI_KEY}
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("app.config.SERVER_COMPOSE_PATH", compose)
+    monkeypatch.delenv("AI_KEY", raising=False)
+
+    _inject_env_from_server_compose()
+
+    assert "AI_KEY" not in os.environ
