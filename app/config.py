@@ -264,6 +264,17 @@ class Settings(BaseSettings):
             return cleaned if cleaned else None
         return value
 
+    @field_validator("ai_model", mode="before")
+    @classmethod
+    def _normalize_ai_model(cls, value: object) -> object:
+        """Исправляет частую опечатку `qwen3,5` -> `qwen3.5` в AI_MODEL."""
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip().strip("'\"")
+        if "," in normalized:
+            normalized = normalized.replace(",", ".")
+        return normalized
+
 
     @property
     def data_dir(self) -> Path:

@@ -60,6 +60,16 @@ def test_settings_reads_openrouter_api_key_alias() -> None:
     assert settings.ai_key == "or-test-key"
 
 
+def test_settings_normalizes_ai_model_decimal_separator() -> None:
+    settings = Settings(
+        **BASE_ENV,
+        _env_file=None,
+        AI_MODEL="qwen/qwen3,5-flash",
+    )
+
+    assert settings.ai_model == "qwen/qwen3.5-flash"
+
+
 def test_extract_compose_bot_env_from_environment_block(tmp_path) -> None:
     compose = tmp_path / "docker-compose.yaml"
     compose.write_text(
