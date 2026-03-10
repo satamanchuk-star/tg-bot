@@ -531,7 +531,12 @@ class OpenRouterProvider:
                     continue
                 response.raise_for_status()
                 data = response.json()
-                content = str(data["choices"][0]["message"]["content"])
+                content_raw = data["choices"][0]["message"]["content"]
+                if content_raw is None:
+                    raise RuntimeError("AI вернул пустой ответ")
+                content = str(content_raw).strip()
+                if not content:
+                    raise RuntimeError("AI вернул пустой текст")
                 tokens = int(data.get("usage", {}).get("total_tokens") or 0)
                 await _add_remote_usage(chat_id, tokens)
                 if used_fallback_model and self._model != model_id:
@@ -1525,7 +1530,7 @@ async def build_dialog_summary_for_prompt(chat_id: int, user_id: int, *, limit: 
 
 
 _AI_CLIENT: AiModuleClient | None = None
-_AI_RUNTIME_ENABLED: bool = False
+_AI_RUNTIME_ENABLED: bool = True
 _ADMIN_ALERT_NOTIFIER: Callable[[str], Awaitable[None]] | None = None
 _LAST_ERROR: str | None = "stub_mode"
 _LAST_ERROR_AT: datetime | None = datetime.utcnow()
@@ -1565,7 +1570,7 @@ async def get_ai_usage_for_today(chat_id: int) -> tuple[int, int]:
 
 
 async def get_ai_diagnostics(chat_id: int) -> AiDiagnosticsReport:
-    provider_mode: Literal["remote", "stub"] = "remote" if settings.ai_enabled and bool(settings.ai_key) else "stub"
+    provider_mode: Literal["remote", "stub"] = "remote" if settings.ai_enabled and bool(settings.ai_key) and is_ai_runtime_enabled() else "stub"
     req_used, tok_used = await get_ai_usage_for_today(chat_id)
     probe_result = await get_ai_client().probe()
     return AiDiagnosticsReport(
@@ -1591,22 +1596,31 @@ def is_ai_runtime_enabled() -> bool:
 
 
 def set_ai_runtime_enabled(value: bool) -> None:
-    global _AI_RUNTIME_ENABLED
+    global _AI_RUNTIME_ENABLED, _AI_CLIENT, _LAST_ERROR, _LAST_ERROR_AT
     _AI_RUNTIME_ENABLED = value
-    logger.info("AI runtime toggle requested (%s), но активен stub-режим.", value)
+    _AI_CLIENT = None
+    if value:
+        logger.info("AI runtime flag enabled.")
+    else:
+        _LAST_ERROR = "runtime_disabled"
+        _LAST_ERROR_AT = datetime.utcnow()
+        logger.info("AI runtime flag disabled; forcing stub mode.")
 
 
 def get_ai_client() -> AiModuleClient:
     global _LAST_ERROR, _LAST_ERROR_AT
     global _AI_CLIENT
     if _AI_CLIENT is None:
-        if settings.ai_enabled and settings.ai_key:
+        if settings.ai_enabled and settings.ai_key and is_ai_runtime_enabled():
             _AI_CLIENT = AiModuleClient(OpenRouterProvider())
             _LAST_ERROR = None
             _LAST_ERROR_AT = None
         else:
             _AI_CLIENT = AiModuleClient()
-            _LAST_ERROR = "stub_mode"
+            if not is_ai_runtime_enabled():
+                _LAST_ERROR = "runtime_disabled"
+            else:
+                _LAST_ERROR = "stub_mode"
             _LAST_ERROR_AT = datetime.utcnow()
     return _AI_CLIENT
 

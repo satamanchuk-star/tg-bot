@@ -18,6 +18,9 @@ from app.services.ai_module import (
     parse_quiz_answer_response,
     _extract_search_words,
     _normalize_model_id,
+    get_ai_client,
+    is_ai_runtime_enabled,
+    set_ai_runtime_enabled,
 )
 
 
@@ -228,6 +231,41 @@ def test_openrouter_summary_fallback_on_runtime_error(monkeypatch) -> None:
     asyncio.run(provider.aclose())
 
 
+def test_openrouter_chat_completion_raises_on_empty_content(monkeypatch) -> None:
+    provider = OpenRouterProvider()
+
+    async def _fake_add_usage(chat_id: int, tokens: int) -> None:
+        return None
+
+    async def _post(*args, **kwargs):  # type: ignore[no-untyped-def]
+        request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "choices": [{"message": {"content": None}}],
+                "usage": {"total_tokens": 0},
+            },
+        )
+
+    async def _allow(chat_id: int) -> tuple[bool, str | None]:
+        return (True, None)
+
+    monkeypatch.setattr("app.services.ai_module.settings.ai_key", "test-key", raising=False)
+    monkeypatch.setattr("app.services.ai_module._can_use_remote_ai", _allow)
+    monkeypatch.setattr("app.services.ai_module._add_remote_usage", _fake_add_usage)
+    monkeypatch.setattr(provider._client, "post", _post)
+
+    try:
+        asyncio.run(provider._chat_completion([{"role": "user", "content": "ping"}], chat_id=1))
+    except RuntimeError as exc:
+        assert "пустой ответ" in str(exc)
+    else:
+        raise AssertionError("Expected RuntimeError for empty AI content")
+    finally:
+        asyncio.run(provider.aclose())
+
+
 def test_get_ai_diagnostics_for_stub(monkeypatch) -> None:
     async def _fake_usage(chat_id: int) -> tuple[int, int]:
         return (0, 0)
@@ -261,3 +299,33 @@ def test_extract_search_words_adds_stem_variant_for_school_words() -> None:
     words = _extract_search_words("Какая школа рядом?")
     assert "школа" in words
     assert "школ" in words
+
+
+def test_runtime_flag_is_enabled_by_default() -> None:
+    assert is_ai_runtime_enabled() is True
+
+
+def test_get_ai_client_uses_stub_when_runtime_disabled(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.ai_module._AI_CLIENT", None, raising=False)
+    monkeypatch.setattr("app.services.ai_module.settings.ai_enabled", True, raising=False)
+    monkeypatch.setattr("app.services.ai_module.settings.ai_key", "test-key", raising=False)
+
+    set_ai_runtime_enabled(False)
+    client = get_ai_client()
+
+    assert type(client._provider).__name__ == "StubAiProvider"
+
+
+def test_runtime_toggle_recreates_client(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.ai_module._AI_CLIENT", None, raising=False)
+    monkeypatch.setattr("app.services.ai_module.settings.ai_enabled", True, raising=False)
+    monkeypatch.setattr("app.services.ai_module.settings.ai_key", "test-key", raising=False)
+
+    set_ai_runtime_enabled(False)
+    first = get_ai_client()
+    set_ai_runtime_enabled(True)
+    second = get_ai_client()
+
+    assert first is not second
+
+    asyncio.run(second.aclose())
