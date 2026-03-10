@@ -14,13 +14,18 @@ from app.models import Place
 logger = logging.getLogger(__name__)
 
 SEED_FILE = Path(__file__).resolve().parent.parent / "data" / "places_seed.json"
+# Fallback: bind mount data/ может перекрывать файл, но kb/ всегда доступен в образе
+SEED_FILE_FALLBACK = Path(__file__).resolve().parent.parent / "kb" / "places_seed.json"
 
 
 def _load_seed_data() -> list[dict[str, object]]:
-    if not SEED_FILE.exists():
-        logger.warning("Файл %s не найден, seed пропущен.", SEED_FILE)
+    path = SEED_FILE
+    if not path.exists():
+        path = SEED_FILE_FALLBACK
+    if not path.exists():
+        logger.warning("Файл %s не найден, seed пропущен.", path)
         return []
-    with open(SEED_FILE, encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
