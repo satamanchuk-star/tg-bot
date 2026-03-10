@@ -163,7 +163,7 @@ def test_inject_env_from_server_compose_overrides_existing(monkeypatch, tmp_path
       - BOT_TOKEN=from-compose
       - FORUM_CHAT_ID=-100123
       - ADMIN_LOG_CHAT_ID=-100456
-      - AI_MODEL=qwen/qwen3-32b
+      - AI_MODEL=qwen/qwen3.5-flash
 """,
         encoding="utf-8",
     )
@@ -179,4 +179,4 @@ def test_inject_env_from_server_compose_overrides_existing(monkeypatch, tmp_path
     assert os.environ["BOT_TOKEN"] == "from-compose"
     assert os.environ["FORUM_CHAT_ID"] == "-100123"
     assert os.environ["ADMIN_LOG_CHAT_ID"] == "-100456"
-    assert os.environ["AI_MODEL"] == "qwen/qwen3-32b"
+    assert os.environ["AI_MODEL"] == "qwen/qwen3.5-flash"
