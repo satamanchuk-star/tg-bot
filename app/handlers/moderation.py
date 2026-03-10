@@ -73,14 +73,17 @@ async def _store_message_log(message: Message, severity: int, sentiment: str | N
         await session.commit()
 
 
-async def _get_topic_context(chat_id: int, topic_id: int | None, limit: int = 5) -> list[str]:
-    """Возвращает последние сообщения из того же топика для контекстной модерации."""
+async def _get_topic_context(chat_id: int, topic_id: int | None, limit: int = 10) -> list[str]:
+    """Возвращает последние сообщения из того же топика для контекстной модерации.
+
+    Формат: «[user_NNNN]: текст» — чтобы AI видел, кто что написал.
+    """
     if topic_id is None:
         return []
     try:
         async for session in get_session():
             result = await session.execute(
-                select(MessageLog.text)
+                select(MessageLog.user_id, MessageLog.text)
                 .where(
                     and_(
                         MessageLog.chat_id == chat_id,
@@ -91,8 +94,8 @@ async def _get_topic_context(chat_id: int, topic_id: int | None, limit: int = 5)
                 .order_by(MessageLog.created_at.desc())
                 .limit(limit)
             )
-            rows = result.scalars().all()
-            return list(reversed(rows))
+            rows = result.all()
+            return [f"[user_{uid}]: {txt}" for uid, txt in reversed(rows)]
     except Exception:
         logger.warning("Не удалось загрузить контекст топика для модерации")
         return []
@@ -161,7 +164,11 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
     topic_context = await _get_topic_context(chat_id, message.message_thread_id)
 
     ai_client = get_ai_client()
-    decision = await ai_client.moderate(text, chat_id=chat_id, context=topic_context)
+    # Добавляем текущее сообщение с user_id для полного контекста
+    current_msg = f"[user_{user_id}]: {text}"
+    decision = await ai_client.moderate(
+        current_msg, chat_id=chat_id, context=topic_context,
+    )
     severity = decision.severity
     violation_type = getattr(decision, "violation_type", None)
     confidence = getattr(decision, "confidence", None)

@@ -84,35 +84,46 @@ _MODERATION_SYSTEM_PROMPT = (
     '{"violation_type":"none|profanity|rude|aggression","severity":0-3,'
     '"confidence":0..1,"action":"none|warn|delete_warn|delete_strike",'
     '"sentiment":"positive|neutral|negative"}.\n\n'
-    "ГЛАВНОЕ ПРАВИЛО: анализируй КОНТЕКСТ и НАМЕРЕНИЕ сообщения, а не отдельные слова.\n"
-    "Если перед сообщением приведён контекст беседы — используй его для оценки тона.\n"
-    "Дружеская перепалка (взаимные ответы с шутками/смайлами) — НЕ нарушение.\n"
-    "Матерные и грубые слова в дружеском или нейтральном контексте — НЕ нарушение.\n"
-    "Например: «блин, опять лифт сломался» или «ну нифига себе цены» — это severity 0.\n"
-    "Лёгкая грубость в бытовом общении между соседями — НЕ повод для наказания.\n\n"
+    "ГЛАВНОЕ ПРАВИЛО: анализируй КОНТЕКСТ, НАМЕРЕНИЕ и АДРЕСАТА сообщения.\n"
+    "Контекст беседы передаётся в формате «[user_NNNN]: текст» — используй его, "
+    "чтобы понять, кто кому отвечает и нарастает ли конфликт.\n\n"
+    "ОПРЕДЕЛЕНИЕ SEVERITY:\n"
+    "severity 0 — всё в порядке, нарушения нет:\n"
+    "  • бытовой мат без адресата («блин, опять лифт сломался», «ну нифига себе цены»)\n"
+    "  • эмоциональные жалобы на ситуацию, УК, застройщика (даже грубые)\n"
+    "  • дружеская перепалка (взаимные шутки, смайлы, ирония)\n"
+    "  • цитирование или пересказ чужих слов\n"
+    "  • сарказм, грубоватый юмор\n\n"
+    "severity 1 — мягкое предупреждение (грубоватый тон, направленный на соседа):\n"
+    "  • пренебрежительный или уничижительный тон к конкретному человеку\n"
+    "  • пассивная агрессия с переходом на личности («может хватит чушь нести»)\n"
+    "  • снисходительные замечания, высмеивание конкретного человека\n"
+    "  • грубая критика адресно («ты вообще адекватный?», «вам лечиться надо»)\n\n"
+    "severity 2 — жёсткое предупреждение + счётчик:\n"
+    "  • прямые оскорбления конкретного человека (дебил, идиот, тупой, мразь и т.п.)\n"
+    "  • агрессивные нападки на соседа с матом в его адрес\n"
+    "  • повторная грубость к тому же человеку (видно из контекста)\n"
+    "  • спам и реклама\n\n"
+    "severity 3 — удаление + мут + уведомление админа:\n"
+    "  • угрозы физической расправой\n"
+    "  • прямые оскорбления с матом и агрессией, направленные на человека\n"
+    "  • доксинг — публикация чужих персональных данных\n"
+    "  • целенаправленная травля или буллинг\n\n"
     "КОНТЕКСТНЫЙ АНАЛИЗ:\n"
-    "- Если идёт шутливая перепалка между знакомыми — severity 0.\n"
-    "- Если человек жалуется на ситуацию (а не на конкретного соседа) — severity 0.\n"
-    "- Если грубость направлена на организацию (УК, застройщик) — severity 0.\n"
-    "- Если используется цитирование или пересказ чужих слов — severity 0.\n"
-    "- Если сообщение содержит смайлы/эмодзи вместе с грубым словом — скорее всего юмор.\n"
-    "- Эскалация: если в контексте видно нарастание агрессии между двумя людьми, "
-    "оценивай строже (severity +1 к обычной оценке).\n\n"
-    "Удаление и бан ТОЛЬКО за:\n"
-    "- Прямые оскорбления конкретного человека с агрессией (severity 3)\n"
-    "- Угрозы физической расправой (severity 3)\n"
-    "- Доксинг — публикация чужих персональных данных (severity 3)\n"
-    "- Целенаправленная травля или буллинг (severity 3)\n"
-    "- Спам и реклама (severity 2)\n\n"
-    "НЕ наказывай за:\n"
-    "- Мат без агрессии и без адресата (бытовой мат): severity 0\n"
-    "- Эмоциональные высказывания без оскорблений конкретных людей: severity 0\n"
-    "- Жалобы на соседей, УК, сервисы (даже в грубой форме): severity 0\n"
-    "- Сарказм и ирония: severity 0\n"
-    "- Грубоватый юмор: severity 0\n\n"
+    "- Смотри на историю: если человек уже грубил в предыдущих сообщениях — оценивай строже.\n"
+    "- Если в контексте видно нарастание конфликта между людьми — severity +1.\n"
+    "- Если грубость направлена на конкретного соседа (по имени, реплаем, «ты/вы» + оскорбление) — "
+    "это ВАЖНЕЕ, чем наличие/отсутствие мата.\n"
+    "- Оскорбление без мата, но адресно («дурак», «тупой», «неадекват») — это severity 1-2.\n"
+    "- Мат + адресное оскорбление конкретного человека — severity 2-3.\n"
+    "- Если сообщение содержит смайлы вместе с грубостью — проверь, юмор это или сарказм с агрессией.\n\n"
+    "ВАЖНО: не путай жалобы на ситуацию с нападками на человека.\n"
+    "«УК — дебилы» → severity 0 (жалоба на организацию).\n"
+    "«Ты дебил» → severity 2 (оскорбление конкретного человека).\n\n"
     "Поле sentiment: оцени общий тон сообщения (positive/neutral/negative).\n"
-    "При ЛЮБОМ сомнении — severity 0 (не наказывать). "
-    "Лучше пропустить 10 грубых сообщений, чем наказать 1 невиновного."
+    "При сомнении между severity 0 и 1 — ставь 0. "
+    "При сомнении между severity 1 и 2 — ставь 1. "
+    "Но НЕ ставь severity 0 на явные оскорбления конкретных людей."
 )
 
 _ASSISTANT_SYSTEM_PROMPT = (
@@ -236,6 +247,14 @@ _RUDE_PATTERNS = (
     "сдохни",
     "уничтож",
     "калечить",
+    "зарежу",
+    "задушу",
+    "прибью",
+    "порву",
+    "голову оторв",
+    "башку оторв",
+    "закопаю",
+    "урою",
 )
 _FORBIDDEN_TOPIC_REPLIES = (
     "С этим лучше к профильному специалисту 🙌 Я тут больше про жизнь дома.",
@@ -256,6 +275,58 @@ _AGGRESSIVE_INSULT_PATTERNS = (
     "мразь",
     "тварь",
     "ублюд",
+    "дурак",
+    "дура ",
+    "тупой",
+    "тупая",
+    "тупица",
+    "кретин",
+    "придурок",
+    "придурошн",
+    "неадекват",
+    "чмо",
+    "лох",
+    "лошар",
+    "чушка",
+    "свинья",
+    "скотин",
+    "отброс",
+    "конченн",
+    "конч ",
+    "быдло",
+    "шлюх",
+    "шалав",
+)
+
+# Паттерны мягкой грубости — пассивная агрессия, снисходительность (severity 1)
+_SOFT_AGGRESSION_PATTERNS = (
+    "рот закрой",
+    "заткнись",
+    "завали",
+    "чушь нес",
+    "бред нес",
+    "не лезь",
+    "тебя не спраш",
+    "тебя не просили",
+    "вас не спраш",
+    "вас не просили",
+    "иди отсюда",
+    "иди лесом",
+    "иди нафиг",
+    "пошёл вон",
+    "пошла вон",
+    "пошёл нах",
+    "пошла нах",
+    "отвали",
+    "вали отсюда",
+    "лечись",
+    "лечиться надо",
+    "к врачу сходи",
+    "к психиатру",
+    "к психологу сходи",
+    "ты больной",
+    "ты больная",
+    "ты бешен",
 )
 _LATIN_TO_CYR = str.maketrans({
     "a": "а",
@@ -479,7 +550,7 @@ class OpenRouterProvider:
             user_content = ""
             if context:
                 user_content = "Контекст беседы (последние сообщения):\n"
-                user_content += "\n".join(context[-5:]) + "\n\n"
+                user_content += "\n".join(context[-8:]) + "\n\n"
             user_content += f"Сообщение для проверки:\n{text[:2000]}"
 
             content, _ = await self._chat_completion(
@@ -808,10 +879,32 @@ class AiModuleClient:
 
 
 def _has_aggressive_target(text: str) -> bool:
-    """Проверяет, направлена ли грубость на конкретного человека."""
+    """Проверяет, направлена ли грубость на конкретного человека.
+
+    Ищет комбинацию обращения (ты/вы/@) вместе с оскорбительным контекстом,
+    а не просто наличие местоимений (они есть почти в каждом сообщении).
+    """
     lowered = text.lower()
-    target_markers = ("ты ", "тебя ", "тебе ", "вы ", "вас ", "вам ", "@")
-    return any(marker in lowered for marker in target_markers)
+    # Прямое упоминание через @ — всегда адресно
+    if "@" in lowered:
+        return True
+    # Проверяем связки: местоимение + оскорбительное слово рядом
+    direct_patterns = (
+        "ты ", "тебя ", "тебе ", "тебой ",
+        "вы ", "вас ", "вам ", "вами ",
+    )
+    has_pronoun = any(marker in lowered or lowered.startswith(marker.strip()) for marker in direct_patterns)
+    if not has_pronoun:
+        return False
+    # Есть местоимение — проверяем наличие оскорбительных слов или агрессивных конструкций
+    aggression_markers = (
+        "идиот", "дебил", "даун", "тупой", "тупая", "дурак", "дура ",
+        "мразь", "тварь", "ублюд", "кретин", "придурок", "неадекват",
+        "чмо", "лох", "быдло", "скотин", "отброс",
+        "заткнись", "завали", "отвали", "рот закрой",
+        "больной", "больная", "бешен", "лечись",
+    )
+    return any(marker in lowered for marker in aggression_markers)
 
 
 def local_moderation(text: str) -> ModerationDecision:
@@ -825,22 +918,36 @@ def local_moderation(text: str) -> ModerationDecision:
 
     has_profanity = detect_profanity(normalized)
     has_insult = any(pattern in lowered for pattern in _AGGRESSIVE_INSULT_PATTERNS)
+    has_soft_aggression = any(pattern in lowered for pattern in _SOFT_AGGRESSION_PATTERNS)
+    has_target = _has_aggressive_target(text)
 
     # Прямое оскорбление конкретного человека с матом — severity 3
-    if has_profanity and has_insult and _has_aggressive_target(text):
+    if has_profanity and has_insult and has_target:
         return ModerationDecision("aggression", 3, 0.85, "delete_strike", False)
 
-    # Агрессия средней силы — предупреждение без удаления
-    if has_profanity and _has_aggressive_target(text) and aggression_level == "low":
+    # Оскорбление конкретного человека (без мата, но адресно) — severity 2
+    if has_insult and has_target:
+        return ModerationDecision("rude", 2, 0.8, "warn", False)
+
+    # Мат с адресатом, но без прямого оскорбления — severity 2
+    if has_profanity and has_target and aggression_level == "high":
+        return ModerationDecision("profanity", 2, 0.75, "warn", False)
+
+    # Мат с адресатом, низкая агрессия — severity 1
+    if has_profanity and has_target:
         return ModerationDecision("profanity", 1, 0.7, "warn", False)
+
+    # Пассивная агрессия / грубые команды адресно — severity 1
+    if has_soft_aggression:
+        return ModerationDecision("rude", 1, 0.7, "warn", False)
 
     # Мат без агрессии и адресата (бытовой мат) — severity 0, не наказываем
     if has_profanity:
         return ModerationDecision("none", 0, 0.6, "none", False)
 
-    # Оскорбление без мата, направленное на человека — severity 1
-    if has_insult and _has_aggressive_target(text):
-        return ModerationDecision("rude", 1, 0.7, "warn", False)
+    # Оскорбительные слова без адресата (жалоба на ситуацию) — severity 0
+    if has_insult:
+        return ModerationDecision("none", 0, 0.5, "none", False)
 
     return ModerationDecision("none", 0, 0.99, "none", False)
 
@@ -865,10 +972,15 @@ def detect_aggression_level(text: str) -> Literal["low", "high"]:
     lowered = text.lower()
     has_threat = any(pattern in lowered for pattern in _RUDE_PATTERNS)
     has_insult = any(pattern in lowered for pattern in _AGGRESSIVE_INSULT_PATTERNS)
+    has_soft_aggression = any(pattern in lowered for pattern in _SOFT_AGGRESSION_PATTERNS)
     has_target = _has_aggressive_target(text)
     has_profanity = detect_profanity(normalize_for_profanity(text))
 
     if has_threat or (has_insult and has_target and has_profanity):
+        return "high"
+    if has_insult and has_target:
+        return "high"
+    if has_profanity and has_soft_aggression:
         return "high"
     return "low"
 
