@@ -66,6 +66,9 @@ class BotMentionFilter(BaseFilter):
     async def __call__(self, message: Message, bot: Bot) -> bool:
         if message.from_user and message.from_user.is_bot:
             return False
+        # Пропускаем уже обработанные сообщения
+        if message.message_id in _PROCESSED_MSG_IDS:
+            return False
         text = _get_message_text(message)
         if text is None:
             return False
@@ -73,12 +76,24 @@ class BotMentionFilter(BaseFilter):
         if not text and not entities:
             return False
         me = await _get_bot_profile(bot)
-        is_reply_to_bot = bool(
-            message.reply_to_message
+
+        has_direct_mention = _is_bot_mentioned(message, me) or _is_bot_name_called(text, me)
+
+        # Реплай на бота: только если есть содержательный текст (≥ 5 символов без пробелов)
+        # и это не просто цитирование бота
+        is_reply_to_bot = False
+        if (
+            not has_direct_mention
+            and message.reply_to_message
             and message.reply_to_message.from_user
             and message.reply_to_message.from_user.id == me.id
-        )
-        return _is_bot_mentioned(message, me) or _is_bot_name_called(text, me) or is_reply_to_bot
+        ):
+            stripped = text.strip()
+            # Минимум 5 символов реального текста и не начинается с команды
+            if len(stripped) >= 5 and not stripped.startswith("/"):
+                is_reply_to_bot = True
+
+        return has_direct_mention or is_reply_to_bot
 
 
 HELP_MENU_TEXT = (
@@ -146,6 +161,58 @@ WAITING_TIMEOUT = timedelta(minutes=2)
 HINT_COOLDOWN = timedelta(seconds=30)
 HELP_DELETE_TIMEOUT = timedelta(minutes=2)
 AI_MENTION_COOLDOWN = timedelta(seconds=20)
+
+# Дедупликация: предотвращаем повторные ответы на одинаковые вопросы
+_RECENT_RESPONSES: dict[tuple[int, str], datetime] = {}  # (chat_id, norm_prompt) → время
+_DEDUP_WINDOW = timedelta(minutes=5)
+_DEDUP_MAX = 300
+# Множество обработанных message_id для предотвращения двойной обработки
+_PROCESSED_MSG_IDS: set[int] = set()
+_PROCESSED_MSG_IDS_MAX = 500
+
+
+def _is_duplicate_prompt(chat_id: int, prompt: str) -> bool:
+    """Проверяет, отвечал ли бот на такой же запрос в этом чате недавно."""
+    if not prompt:
+        return False
+    normalized = _normalize_cache_key(prompt)
+    if not normalized:
+        return False
+    key = (chat_id, normalized)
+    now = datetime.now(timezone.utc)
+
+    # Очистка устаревших записей
+    if len(_RECENT_RESPONSES) > _DEDUP_MAX:
+        expired = [k for k, v in _RECENT_RESPONSES.items() if now - v > _DEDUP_WINDOW]
+        for k in expired:
+            _RECENT_RESPONSES.pop(k, None)
+
+    last_time = _RECENT_RESPONSES.get(key)
+    if last_time and now - last_time < _DEDUP_WINDOW:
+        return True
+    return False
+
+
+def _mark_prompt_answered(chat_id: int, prompt: str) -> None:
+    """Помечает запрос как отвеченный для дедупликации."""
+    if not prompt:
+        return
+    normalized = _normalize_cache_key(prompt)
+    if not normalized:
+        return
+    _RECENT_RESPONSES[(chat_id, normalized)] = datetime.now(timezone.utc)
+
+
+def _mark_message_processed(message_id: int) -> None:
+    """Помечает сообщение как обработанное, чтобы не обрабатывать дважды."""
+    if len(_PROCESSED_MSG_IDS) > _PROCESSED_MSG_IDS_MAX:
+        # Удаляем половину самых старых (по значению ID, которые растут)
+        to_remove = sorted(_PROCESSED_MSG_IDS)[:_PROCESSED_MSG_IDS_MAX // 2]
+        for mid in to_remove:
+            _PROCESSED_MSG_IDS.discard(mid)
+    _PROCESSED_MSG_IDS.add(message_id)
+
+
 def _next_mention_reply() -> str:
     return random.choice(MENTION_REPLIES)
 
@@ -791,6 +858,14 @@ async def ai_command(message: Message) -> None:
         await message.reply("Напишите вопрос после команды: /ai <ваш вопрос>")
         return
 
+    # Дедупликация: проверяем, не отвечали ли недавно на такой же запрос
+    if _is_duplicate_prompt(message.chat.id, prompt):
+        logger.info("OUT: AI_CMD_SKIPPED_DUPLICATE prompt=%r", prompt[:80])
+        await message.reply(
+            "На этот вопрос я уже отвечал выше. Прокрутите чат или задайте уточняющий вопрос."
+        )
+        return
+
     try:
         question_key = _normalize_cache_key(prompt)
 
@@ -802,6 +877,9 @@ async def ai_command(message: Message) -> None:
         await _remember_ai_exchange_persistent(
             message.chat.id, message.from_user.id, prompt, reply,
         )
+
+        # Помечаем запрос как отвеченный для дедупликации
+        _mark_prompt_answered(message.chat.id, prompt)
 
         # Трекаем вопрос в FAQ (не блокируем ответ при ошибке)
         try:
@@ -838,6 +916,9 @@ async def mention_help(message: Message, bot: Bot) -> None:
     if message.from_user is None:
         return
 
+    # Помечаем сообщение как обработанное, чтобы не обрабатывать дважды
+    _mark_message_processed(message.message_id)
+
     # Проверяем модерацию перед ответом ассистента (только severity >= 2 блокирует)
     prompt = _extract_ai_prompt(message)
     if prompt:
@@ -857,6 +938,14 @@ async def mention_help(message: Message, bot: Bot) -> None:
         return
 
     if prompt:
+        # Дедупликация: проверяем, не отвечали ли недавно на такой же запрос
+        if _is_duplicate_prompt(message.chat.id, prompt):
+            logger.info("OUT: MENTION_REPLY_SKIPPED_DUPLICATE prompt=%r", prompt[:80])
+            await message.reply(
+                "На этот вопрос я уже отвечал выше. Прокрутите чат или задайте уточняющий вопрос."
+            )
+            return
+
         try:
             question_key = _normalize_cache_key(prompt)
 
@@ -866,6 +955,9 @@ async def mention_help(message: Message, bot: Bot) -> None:
             await _remember_ai_exchange_persistent(
                 message.chat.id, message.from_user.id, prompt, reply,
             )
+
+            # Помечаем запрос как отвеченный для дедупликации
+            _mark_prompt_answered(message.chat.id, prompt)
 
             # Трекаем вопрос в FAQ (не блокируем ответ при ошибке)
             try:
