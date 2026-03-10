@@ -180,7 +180,7 @@ class Settings(BaseSettings):
     ai_api_url: str | None = None
     ai_key: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("AI_KEY", "OPENROUTER_API_KEY"),
+        validation_alias=AliasChoices("AI_KEY", "OPENROUTER_API_KEY", "AI_API_KEY"),
     )
     ai_model: str = "qwen/qwen3.5-flash"
     ai_max_tokens: int = 800

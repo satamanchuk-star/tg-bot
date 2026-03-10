@@ -91,7 +91,7 @@ python scripts/import_places_from_google_sheets.py --dry-run
 ## AI: текущий статус
 
 Бот поддерживает два режима AI:
-- **Remote AI**: если заданы `AI_KEY` (и опционально `AI_API_URL`, `AI_MODEL`), используется внешний провайдер через Chat Completions API.
+- **Remote AI**: если задан `AI_KEY` (или алиас `OPENROUTER_API_KEY`/`AI_API_KEY`) и опционально `AI_API_URL`, `AI_MODEL`, используется внешний провайдер через Chat Completions API.
 - **Stub fallback**: если ключ не задан или API недоступен, бот автоматически работает в локальном режиме без падений.
 
 В remote-режиме включены:
@@ -122,7 +122,7 @@ python scripts/import_places_from_google_sheets.py --dry-run
 
 ### Что контролирует админ
 
-- `/ai_on` — включает runtime-флаг AI (если есть `AI_KEY`, бот работает через внешний провайдер).
+- `/ai_on` — включает runtime-флаг AI (если есть `AI_KEY` (или алиасы), бот работает через внешний провайдер).
 - `/ai_off` — принудительно отключает runtime AI и переводит функции в локальный fallback.
 - `/ai_status` — показывает текущий режим, usage за день и последнюю ошибку.
 - `/ai_ping` — быстрый health-check клиента.
@@ -196,7 +196,7 @@ python -m app.main
 python scripts/check_openrouter.py --api-key sk-or-...
 ```
 
-Если аргументы не переданы, скрипт берёт `AI_KEY` (или `OPENROUTER_API_KEY`), `AI_MODEL`, `AI_API_URL`
+Если аргументы не переданы, скрипт берёт `AI_KEY` (или `OPENROUTER_API_KEY`/`AI_API_KEY`), `AI_MODEL`, `AI_API_URL`
 сначала из переменных окружения процесса, затем из локального файла `.env`.
 
 Или через переменные окружения:
