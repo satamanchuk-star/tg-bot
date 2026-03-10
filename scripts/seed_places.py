@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Place
@@ -27,6 +27,36 @@ def _load_seed_data() -> list[dict[str, object]]:
         return []
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+async def purge_old_places(session: AsyncSession) -> int:
+    """Удаляет записи из places, которых нет в актуальном seed-файле. Возвращает количество удалённых."""
+    data = _load_seed_data()
+    if not data:
+        return 0
+
+    # Собираем набор (name, address, category) из seed-файла
+    seed_keys: set[tuple[str, str, str]] = set()
+    for item in data:
+        name = item.get("name")
+        address = item.get("address")
+        category = item.get("category")
+        if all((name, address, category)):
+            seed_keys.add((name, address, category))
+
+    # Загружаем все записи из БД
+    rows = (await session.execute(select(Place))).scalars().all()
+    ids_to_delete: list[int] = []
+    for row in rows:
+        if (row.name, row.address, row.category) not in seed_keys:
+            ids_to_delete.append(row.id)
+
+    if ids_to_delete:
+        await session.execute(delete(Place).where(Place.id.in_(ids_to_delete)))
+        await session.flush()
+        logger.info("Удалено %s устаревших записей инфраструктуры.", len(ids_to_delete))
+
+    return len(ids_to_delete)
 
 
 async def seed_places(session: AsyncSession) -> int:
