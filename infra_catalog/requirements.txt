@@ -1,0 +1,6 @@
+pydantic>=2.0
+pandas>=2.0
+openpyxl>=3.1
+rapidfuzz>=3.0
+phonenumbers>=8.13
+pytest>=7.0
