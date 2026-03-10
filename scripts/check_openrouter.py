@@ -25,8 +25,10 @@ def build_parser() -> argparse.ArgumentParser:
     default_api_key = (
         os.getenv("AI_KEY")
         or os.getenv("OPENROUTER_API_KEY")
+        or os.getenv("AI_API_KEY")
         or env_values.get("AI_KEY")
         or env_values.get("OPENROUTER_API_KEY")
+        or env_values.get("AI_API_KEY")
     )
     default_model = os.getenv("AI_MODEL") or env_values.get("AI_MODEL") or "qwen/qwen3.5-flash"
     default_api_url = os.getenv("AI_API_URL") or env_values.get("AI_API_URL") or "https://openrouter.ai/api/v1"
@@ -84,7 +86,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if not args.api_key:
-        print("ERROR: не задан API ключ. Передайте --api-key или переменную AI_KEY/OPENROUTER_API_KEY.")
+        print("ERROR: не задан API ключ. Передайте --api-key или переменную AI_KEY/OPENROUTER_API_KEY/AI_API_KEY.")
         return 2
 
     result = asyncio.run(

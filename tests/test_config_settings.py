@@ -60,6 +60,16 @@ def test_settings_reads_openrouter_api_key_alias() -> None:
     assert settings.ai_key == "or-test-key"
 
 
+def test_settings_reads_ai_api_key_alias() -> None:
+    settings = Settings(
+        **BASE_ENV,
+        _env_file=None,
+        AI_API_KEY="legacy-test-key",
+    )
+
+    assert settings.ai_key == "legacy-test-key"
+
+
 def test_settings_normalizes_ai_model_decimal_separator() -> None:
     settings = Settings(
         **BASE_ENV,
