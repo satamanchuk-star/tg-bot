@@ -517,6 +517,18 @@ class OpenRouterProvider:
                 await _add_remote_usage(chat_id, tokens)
                 logger.info("AI response <- tokens=%s chat_id=%s", tokens, chat_id)
                 return content, tokens
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                response_text = exc.response.text[:500].strip()
+                logger.warning(
+                    "AI HTTP error status=%s chat_id=%s body=%r",
+                    status_code,
+                    chat_id,
+                    response_text,
+                )
+                if status_code == 429 and attempt < self._retries:
+                    continue
+                raise RuntimeError(f"AI API вернул ошибку {status_code}") from exc
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 if attempt >= self._retries:
                     raise RuntimeError("Сбой соединения с AI API") from exc

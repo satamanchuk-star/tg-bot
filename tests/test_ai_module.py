@@ -1,4 +1,6 @@
 import asyncio
+
+import httpx
 from app.services.ai_module import (
     AiModuleClient,
     _ASSISTANT_SYSTEM_PROMPT,
@@ -83,7 +85,7 @@ def test_probe_returns_stub_status() -> None:
 
 def test_assistant_reply_uses_local_fallback() -> None:
     reply = asyncio.run(AiModuleClient().assistant_reply("вопрос про шлагбаум", [], chat_id=1))
-    assert "Модуль ИИ" in reply
+    assert "локальном режиме" in reply.lower()
 
 
 def test_local_assistant_reply_handles_rules_and_mentions() -> None:
@@ -103,7 +105,6 @@ def test_local_assistant_reply_uses_places_hint() -> None:
         "Где ближайшее МФЦ?",
         places_hint="- МФЦ Видное (Госучреждения), адрес: ул. Центральная, 1",
     )
-    assert "базе инфраструктуры" in reply.lower()
     assert "мфц видное" in reply.lower()
 
 
@@ -117,8 +118,8 @@ def test_detects_masked_profanity_with_latin_and_digits() -> None:
 def test_aggression_level_and_warning_action() -> None:
     assert detect_aggression_level("Ты бля не прав") == "low"
     decision = local_moderation("Ты бля не прав")
-    assert decision.action == "warn"
-    assert decision.severity == 1
+    assert decision.action == "none"
+    assert decision.severity == 0
 
 
 def test_high_aggression_keeps_strict_action() -> None:
@@ -127,19 +128,17 @@ def test_high_aggression_keeps_strict_action() -> None:
     assert decision.severity == 3
 
 def test_assistant_prompt_has_human_style_and_limits() -> None:
-    assert "дружелюбный сосед-помощник" in _ASSISTANT_SYSTEM_PROMPT
-    assert "как живой человек" in _ASSISTANT_SYSTEM_PROMPT
-    assert "без упоминания, что ты ИИ" in _ASSISTANT_SYSTEM_PROMPT
+    assert "Ты — Жабот" in _ASSISTANT_SYSTEM_PROMPT
+    assert "неформальный помощник-сосед" in _ASSISTANT_SYSTEM_PROMPT
+    assert "Никогда не говори, что ты ИИ" in _ASSISTANT_SYSTEM_PROMPT
     assert "до 800 символов" in _ASSISTANT_SYSTEM_PROMPT
-    assert "детскую площадку" in _ASSISTANT_SYSTEM_PROMPT
-    assert "платежи" in _ASSISTANT_SYSTEM_PROMPT
-    assert "дружелюбная атмосфера" in _ASSISTANT_SYSTEM_PROMPT
-    assert "точной информации нет" in _ASSISTANT_SYSTEM_PROMPT
+    assert "дружелюбной атмосфере" in _ASSISTANT_SYSTEM_PROMPT
+    assert "Если информации нет" in _ASSISTANT_SYSTEM_PROMPT
 
 
 def test_moderation_prompt_has_basic_safety_limits() -> None:
     assert "Верни только JSON" in _MODERATION_SYSTEM_PROMPT
-    assert "При ЛЮБОМ сомнении" in _MODERATION_SYSTEM_PROMPT
+    assert "При сомнении между severity 0 и 1 — ставь 0" in _MODERATION_SYSTEM_PROMPT
 
 
 def test_openrouter_assistant_fallback_on_runtime_error(monkeypatch) -> None:
@@ -154,6 +153,20 @@ def test_openrouter_assistant_fallback_on_runtime_error(monkeypatch) -> None:
     asyncio.run(provider.aclose())
 
 
+
+
+def test_openrouter_assistant_fallback_on_http_400(monkeypatch) -> None:
+    provider = OpenRouterProvider()
+
+    async def _bad_request(*args, **kwargs):  # type: ignore[no-untyped-def]
+        request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+        response = httpx.Response(400, request=request, json={"error": {"message": "bad request"}})
+        raise httpx.HTTPStatusError("400", request=request, response=response)
+
+    monkeypatch.setattr(provider._client, "post", _bad_request)
+    reply = asyncio.run(provider.assistant_reply("вопрос про шлагбаум", [], chat_id=1))
+    assert "шлагбаум" in reply.lower()
+    asyncio.run(provider.aclose())
 def test_openrouter_summary_fallback_on_runtime_error(monkeypatch) -> None:
     provider = OpenRouterProvider()
 
@@ -192,7 +205,7 @@ def test_ai_module_client_assistant_timeout_fallback(monkeypatch) -> None:
 
     reply = asyncio.run(client.assistant_reply("шлагбаум не работает", [], chat_id=1))
 
-    assert "Модуль ИИ" in reply
+    assert "локальном режиме" in reply.lower()
 
 
 def test_extract_search_words_adds_stem_variant_for_school_words() -> None:

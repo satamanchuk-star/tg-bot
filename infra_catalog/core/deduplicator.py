@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import logging
+from difflib import SequenceMatcher
 
-from rapidfuzz import fuzz
+try:
+    from rapidfuzz import fuzz
+except ModuleNotFoundError:  # pragma: no cover - зависит от окружения
+    fuzz = None
 
 from ..config import DEDUP_DISTANCE_THRESHOLD_M, DEDUP_NAME_SIMILARITY_THRESHOLD
 from ..models import InfraObject, ValidationIssue
@@ -82,7 +86,10 @@ def _proximity_dedup(
             dist = haversine_km(obj_a.lat, obj_a.lon, obj_b.lat, obj_b.lon)
             if dist > threshold_km:
                 continue
-            name_sim = fuzz.ratio(obj_a.name.lower(), obj_b.name.lower()) / 100.0
+            if fuzz is not None:
+                name_sim = fuzz.ratio(obj_a.name.lower(), obj_b.name.lower()) / 100.0
+            else:
+                name_sim = SequenceMatcher(None, obj_a.name.lower(), obj_b.name.lower()).ratio()
             if name_sim >= DEDUP_NAME_SIMILARITY_THRESHOLD:
                 current = merge_objects(current, obj_b)
                 used.add(j)
