@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import logging
 import random
 import re
@@ -224,9 +225,12 @@ def check_answer(question: QuizQuestion, answer: str) -> bool:
         return _match_words(correct_words, answer_words, needed_matches=1, typo_budget=1)
 
     if len(correct_words) == 2:
-        return _match_words(correct_words, answer_words, needed_matches=1, typo_budget=2)
+        needed_matches = math.ceil(len(correct_words) * 0.7)
+    else:
+        needed_matches = math.ceil(len(correct_words) * 0.4)
 
-    return _match_words(correct_words, answer_words, needed_matches=2, typo_budget=2)
+    typo_budget = 2 if needed_matches <= 2 else 3
+    return _match_words(correct_words, answer_words, needed_matches=needed_matches, typo_budget=typo_budget)
 
 
 async def award_point(
