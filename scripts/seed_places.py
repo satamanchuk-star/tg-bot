@@ -65,7 +65,11 @@ async def seed_places(session: AsyncSession) -> int:
             website=item.get("website"),
             work_time=item.get("work_time"),
             description=item.get("description"),
-            is_active=True,
+            lat=item.get("lat"),
+            lon=item.get("lon"),
+            distance_km=item.get("distance_km"),
+            source=item.get("source"),
+            is_active=item.get("is_active", True),
         )
         session.add(place)
         added += 1
