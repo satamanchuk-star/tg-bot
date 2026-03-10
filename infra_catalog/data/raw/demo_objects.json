@@ -1,0 +1,181 @@
+[
+  {
+    "source_name": "static:demo",
+    "raw_name": "Поликлиника №2",
+    "raw_type": "поликлиника",
+    "raw_address": "г. Видное, ул. Заводская, д. 17",
+    "raw_phone": "8 (495) 541-11-22",
+    "raw_website": "vidnoe-poliklinika2.ru",
+    "raw_work_time": "Пн-Пт 8:00-20:00, Сб 9:00-15:00",
+    "raw_description": "Городская поликлиника",
+    "raw_lat": 55.5527,
+    "raw_lon": 37.6105
+  },
+  {
+    "source_name": "static:demo",
+    "raw_name": "Аптека «Горздрав»",
+    "raw_type": "аптека",
+    "raw_address": "г. Видное, ул. Советская, д. 3",
+    "raw_phone": "+7 (495) 541-33-44",
+    "raw_website": "",
+    "raw_work_time": "09:00-21:00 ежедневно",
+    "raw_lat": 55.5480,
+    "raw_lon": 37.6200
+  },
+  {
+    "source_name": "static:demo",
+    "raw_name": "Пятёрочка",
+    "raw_type": "супермаркет",
+    "raw_address": "Ленинский р-н, пос. Развилка, д. 45",
+    "raw_phone": "8-800-555-55-05",
+    "raw_work_time": "07:00-23:00",
+    "raw_lat": 55.5900,
+    "raw_lon": 37.7200
+  },
+  {
+    "source_name": "static:demo",
+    "raw_name": "Школа №1 г. Видное",
+    "raw_type": "школа",
+    "raw_address": "г. Видное, ул. Школьная, д. 10",
+    "raw_phone": "8 (495) 541-55-66",
+    "raw_website": "school1-vidnoe.ru",
+    "raw_work_time": "Пн-Пт 8:00-18:00",
+    "raw_lat": 55.5430,
+    "raw_lon": 37.6300
+  },
+  {
+    "source_name": "static:demo",
+    "raw_name": "Детский сад «Солнышко»",
+    "raw_type": "детский сад",
+    "raw_address": "г. Видное, ул. Ленинская, д. 22",
+    "raw_phone": "8(495)541-77-88",
+    "raw_lat": 55.5500,
+    "raw_lon": 37.6150
+  },
+  {
+    "source_name": "static:demo",
+    "raw_name": "МФЦ Ленинского городского округа",
+    "raw_type": "МФЦ",
+    "raw_address": "г. Видное, ул. Советская, д. 12",
+    "raw_phone": "+7 (495) 541-99-00",
+    "raw_website": "https://mfc-vidnoe.ru",
+    "raw_work_time": "Пн-Сб 8:00-20:00",
+    "raw_description": "Многофункциональный центр",
+    "raw_lat": 55.5510,
+    "raw_lon": 37.6180
+  },
+  {
+    "source_name": "static:demo",
+    "raw_name": "Почта России — отделение 142700",
+    "raw_type": "почта",
+    "raw_address": "г. Видное, ул. Советская, д. 8",
+    "raw_phone": "8-800-1-000-000",
+    "raw_website": "https://pochta.ru",
+    "raw_work_time": "Пн-Пт 8:00-20:00, Сб 9:00-18:00",
+    "raw_lat": 55.5495,
+    "raw_lon": 37.6170
+  },
+  {
+    "source_name": "static:demo",
+    "raw_name": "Кафе «У дома»",
+    "raw_type": "кафе",
+    "raw_address": "пос. Молоково, ул. Центральная, д. 5",
+    "raw_phone": "",
+    "raw_work_time": "10:00-22:00",
+    "raw_lat": 55.5180,
+    "raw_lon": 37.6050
+  },
+  {
+    "source_name": "static:demo",
+    "raw_name": "Лемана ПРО",
+    "raw_type": "стройматериалы",
+    "raw_address": "Ленинский р-н, МКАД 14 км",
+    "raw_phone": "8-800-700-00-99",
+    "raw_website": "https://lemanapro.ru",
+    "raw_work_time": "07:00-23:00 ежедневно",
+    "raw_description": "Гипермаркет строительных материалов",
+    "raw_lat": 55.5720,
+    "raw_lon": 37.6600
+  },
+  {
+    "source_name": "static:demo",
+    "raw_name": "Стоматология «Улыбка»",
+    "raw_type": "стоматология",
+    "raw_address": "г. Видное, ул. Заводская, д. 5",
+    "raw_phone": "+74955419999",
+    "raw_website": "ulybka-vidnoe.ru",
+    "raw_work_time": "Пн-Сб 9:00-21:00",
+    "raw_description": "Частная стоматологическая клиника",
+    "raw_lat": 55.5515,
+    "raw_lon": 37.6130
+  },
+  {
+    "source_name": "static:demo",
+    "raw_name": "ТЦ «Видное Парк»",
+    "raw_type": "торговый центр",
+    "raw_address": "г. Видное, Белокаменное ш., д. 1",
+    "raw_phone": "8(495)541-00-11",
+    "raw_website": "https://vidnoepark.ru",
+    "raw_work_time": "10:00-22:00 ежедневно",
+    "raw_lat": 55.5470,
+    "raw_lon": 37.6250
+  },
+  {
+    "source_name": "static:demo",
+    "raw_name": "Администрация Ленинского городского округа",
+    "raw_type": "администрация",
+    "raw_address": "г. Видное, ул. Советская, д. 17",
+    "raw_phone": "8 (495) 541-23-45",
+    "raw_website": "https://www.adm-vidnoe.ru",
+    "raw_work_time": "Пн-Пт 9:00-18:00",
+    "raw_lat": 55.5505,
+    "raw_lon": 37.6195
+  },
+  {
+    "source_name": "static:demo",
+    "raw_name": "Кофейня «Coffee Like»",
+    "raw_type": "кофейня",
+    "raw_address": "г. Видное, просп. Ленинского Комсомола, д. 1",
+    "raw_work_time": "08:00-22:00",
+    "raw_lat": 55.5460,
+    "raw_lon": 37.6210
+  },
+  {
+    "source_name": "static:demo",
+    "raw_name": "Ветклиника «Айболит»",
+    "raw_type": "ветеринарная клиника",
+    "raw_address": "г. Видное, ул. Строительная, д. 14",
+    "raw_phone": "8 (495) 541-12-34",
+    "raw_work_time": "09:00-21:00 ежедневно",
+    "raw_lat": 55.5540,
+    "raw_lon": 37.6140
+  },
+  {
+    "source_name": "static:demo",
+    "raw_name": "Пункт выдачи Wildberries",
+    "raw_type": "пункт выдачи",
+    "raw_address": "г. Видное, ул. Советская, д. 1а",
+    "raw_work_time": "09:00-21:00",
+    "raw_lat": 55.5490,
+    "raw_lon": 37.6175
+  },
+  {
+    "source_name": "static:demo_duplicate",
+    "raw_name": "Поликлиника № 2",
+    "raw_type": "больница",
+    "raw_address": "Видное, улица Заводская, дом 17",
+    "raw_phone": "+7 495 541-11-22",
+    "raw_website": "https://vidnoe-poliklinika2.ru",
+    "raw_work_time": "Пн-Пт 8:00-20:00, Сб 9:00-15:00",
+    "raw_lat": 55.5528,
+    "raw_lon": 37.6106
+  },
+  {
+    "source_name": "static:demo",
+    "raw_name": "Объект за пределами радиуса",
+    "raw_type": "школа",
+    "raw_address": "г. Москва, центр",
+    "raw_lat": 55.7558,
+    "raw_lon": 37.6173
+  }
+]
