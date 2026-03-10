@@ -1561,6 +1561,13 @@ def get_ai_runtime_status() -> AiRuntimeStatus:
     return AiRuntimeStatus(last_error=_LAST_ERROR, last_error_at=_LAST_ERROR_AT)
 
 
+def resolve_provider_mode() -> Literal["remote", "stub"]:
+    """Возвращает фактический режим провайдера с учетом ключа и runtime-флага."""
+    if settings.ai_enabled and bool(settings.ai_key) and is_ai_runtime_enabled():
+        return "remote"
+    return "stub"
+
+
 async def get_ai_usage_for_today(chat_id: int) -> tuple[int, int]:
     date_key = now_tz().date().isoformat()
     async for session in get_session():
@@ -1570,7 +1577,7 @@ async def get_ai_usage_for_today(chat_id: int) -> tuple[int, int]:
 
 
 async def get_ai_diagnostics(chat_id: int) -> AiDiagnosticsReport:
-    provider_mode: Literal["remote", "stub"] = "remote" if settings.ai_enabled and bool(settings.ai_key) and is_ai_runtime_enabled() else "stub"
+    provider_mode = resolve_provider_mode()
     req_used, tok_used = await get_ai_usage_for_today(chat_id)
     probe_result = await get_ai_client().probe()
     return AiDiagnosticsReport(

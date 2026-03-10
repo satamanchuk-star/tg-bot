@@ -21,6 +21,7 @@ from app.services.ai_module import (
     get_ai_client,
     is_ai_runtime_enabled,
     set_ai_runtime_enabled,
+    resolve_provider_mode,
 )
 
 
@@ -303,6 +304,17 @@ def test_extract_search_words_adds_stem_variant_for_school_words() -> None:
 
 def test_runtime_flag_is_enabled_by_default() -> None:
     assert is_ai_runtime_enabled() is True
+
+
+def test_resolve_provider_mode_respects_runtime_flag(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.ai_module.settings.ai_enabled", True, raising=False)
+    monkeypatch.setattr("app.services.ai_module.settings.ai_key", "test-key", raising=False)
+
+    set_ai_runtime_enabled(False)
+    assert resolve_provider_mode() == "stub"
+
+    set_ai_runtime_enabled(True)
+    assert resolve_provider_mode() == "remote"
 
 
 def test_get_ai_client_uses_stub_when_runtime_disabled(monkeypatch) -> None:
