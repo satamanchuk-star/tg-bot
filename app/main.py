@@ -44,7 +44,7 @@ from app.services.games import (
 from app.services.health import get_health_state, update_heartbeat, update_notice
 from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
-from app.services.ai_module import close_ai_client, get_ai_client, set_ai_admin_notifier
+from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, set_ai_admin_notifier
 from app.services.daily_summary import build_daily_summary, render_daily_summary
 from app.services.resident_kb import load_resident_kb
 
@@ -590,6 +590,12 @@ async def on_startup(bot: Bot) -> None:
             ],
             scope=BotCommandScopeChatAdministrators(chat_id=settings.forum_chat_id),
         )
+    # Сброс кэшей при старте, чтобы не использовать устаревшие данные
+    cleared = clear_assistant_cache()
+    if cleared:
+        logger.info("Сброшен AI-кэш: %d записей.", cleared)
+    load_resident_kb.cache_clear()  # Сброс lru_cache, чтобы подхватить актуальный файл
+
     # Проверяем и прогреваем каноническую базу знаний жителей
     try:
         load_resident_kb()
