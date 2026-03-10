@@ -45,6 +45,20 @@ _CACHE_STOP_WORDS = {
 }
 
 
+def _normalize_model_id(model_id: str) -> str:
+    """Исправляет частые опечатки в ID модели OpenRouter."""
+    normalized = model_id.strip().strip("'\"")
+    return normalized.replace(",", ".").replace("，", ".")
+
+
+_MODEL_FALLBACK_ID = "openrouter/auto"
+
+
+def _is_invalid_model_id_error(error_hint: str) -> bool:
+    normalized = error_hint.lower()
+    return "valid model id" in normalized or "invalid model" in normalized
+
+
 def _normalize_cache_key(text: str) -> str:
     """Нормализует запрос для кэша: lowercase, без стоп-слов, сортировка."""
     tokens = sorted(
@@ -481,7 +495,9 @@ class OpenRouterProvider:
             base_url=base_url.rstrip("/"),
             timeout=httpx.Timeout(settings.ai_timeout_seconds),
         )
-        self._model = settings.ai_model
+        self._model = _normalize_model_id(settings.ai_model)
+        if self._model != settings.ai_model:
+            logger.warning("AI model id normalized: %r -> %r", settings.ai_model, self._model)
         self._retries = max(0, settings.ai_retries)
 
     async def aclose(self) -> None:
@@ -495,7 +511,6 @@ class OpenRouterProvider:
             raise RuntimeError(f"AI лимит: {reason or 'превышен'}")
 
         payload = {
-            "model": self._model,
             "temperature": 0.7,
             "max_tokens": settings.ai_max_tokens,
             "messages": messages,
@@ -504,9 +519,12 @@ class OpenRouterProvider:
             "Authorization": f"Bearer {settings.ai_key}",
             "Content-Type": "application/json",
         }
-        logger.info("AI request -> model=%s chat_id=%s", self._model, chat_id)
+        model_id = self._model
+        used_fallback_model = False
 
         for attempt in range(self._retries + 1):
+            payload["model"] = model_id
+            logger.info("AI request -> model=%s chat_id=%s", model_id, chat_id)
             try:
                 response = await self._client.post("/chat/completions", json=payload, headers=headers)
                 if response.status_code >= 500 and attempt < self._retries:
@@ -516,6 +534,9 @@ class OpenRouterProvider:
                 content = str(data["choices"][0]["message"]["content"])
                 tokens = int(data.get("usage", {}).get("total_tokens") or 0)
                 await _add_remote_usage(chat_id, tokens)
+                if used_fallback_model and self._model != model_id:
+                    logger.warning("AI model switched to fallback for runtime stability: %r", model_id)
+                    self._model = model_id
                 logger.info("AI response <- tokens=%s chat_id=%s", tokens, chat_id)
                 return content, tokens
             except httpx.HTTPStatusError as exc:
@@ -535,6 +556,20 @@ class OpenRouterProvider:
                     error_hint = str(error_payload.get("error", {}).get("message") or "")[:160]
                 except ValueError:
                     error_hint = response_text[:160]
+                if (
+                    status_code == 400
+                    and _is_invalid_model_id_error(error_hint)
+                    and not used_fallback_model
+                    and model_id != _MODEL_FALLBACK_ID
+                ):
+                    logger.warning(
+                        "AI invalid model id, retrying with fallback model: %r -> %r",
+                        model_id,
+                        _MODEL_FALLBACK_ID,
+                    )
+                    model_id = _MODEL_FALLBACK_ID
+                    used_fallback_model = True
+                    continue
                 if error_hint:
                     raise RuntimeError(f"AI API вернул ошибку {status_code}: {error_hint}") from exc
                 raise RuntimeError(f"AI API вернул ошибку {status_code}") from exc

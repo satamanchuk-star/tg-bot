@@ -17,6 +17,7 @@ from app.services.ai_module import (
     normalize_for_profanity,
     parse_quiz_answer_response,
     _extract_search_words,
+    _normalize_model_id,
 )
 
 
@@ -48,6 +49,10 @@ class _SlowProvider:
     async def categorize_rag_entry(self, text: str, *, chat_id: int):  # type: ignore[no-untyped-def]
         await asyncio.sleep(0.1)
 
+
+def test_normalize_model_id_replaces_decimal_commas() -> None:
+    assert _normalize_model_id("qwen/qwen3,5-flash") == "qwen/qwen3.5-flash"
+    assert _normalize_model_id("qwen/qwen3，5-flash") == "qwen/qwen3.5-flash"
 
 def test_detects_masked_profanity() -> None:
     normalized = normalize_for_profanity("Да ты б*л_я!")
@@ -167,6 +172,50 @@ def test_openrouter_assistant_fallback_on_http_400(monkeypatch) -> None:
     reply = asyncio.run(provider.assistant_reply("вопрос про шлагбаум", [], chat_id=1))
     assert "шлагбаум" in reply.lower()
     asyncio.run(provider.aclose())
+
+
+def test_openrouter_retries_with_fallback_model_on_invalid_id(monkeypatch) -> None:
+    provider = OpenRouterProvider()
+    sent_models: list[str] = []
+
+    async def _fake_add_usage(chat_id: int, tokens: int) -> None:
+        return None
+
+    async def _post(*args, **kwargs):  # type: ignore[no-untyped-def]
+        model = kwargs["json"]["model"]
+        sent_models.append(model)
+        request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+        if len(sent_models) == 1:
+            return httpx.Response(
+                400,
+                request=request,
+                json={"error": {"message": f"{model} is not a valid model ID"}},
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"total_tokens": 12},
+            },
+        )
+
+    async def _allow(chat_id: int) -> tuple[bool, str | None]:
+        return (True, None)
+
+    monkeypatch.setattr("app.services.ai_module.settings.ai_key", "test-key", raising=False)
+    monkeypatch.setattr("app.services.ai_module._can_use_remote_ai", _allow)
+    monkeypatch.setattr("app.services.ai_module._add_remote_usage", _fake_add_usage)
+    monkeypatch.setattr(provider._client, "post", _post)
+
+    content, tokens = asyncio.run(provider._chat_completion([{"role": "user", "content": "ping"}], chat_id=1))
+
+    assert content == "ok"
+    assert tokens == 12
+    assert len(sent_models) == 2
+    assert sent_models[-1] == "openrouter/auto"
+    asyncio.run(provider.aclose())
+
 def test_openrouter_summary_fallback_on_runtime_error(monkeypatch) -> None:
     provider = OpenRouterProvider()
 
