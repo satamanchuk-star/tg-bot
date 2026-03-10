@@ -602,14 +602,15 @@ async def on_startup(bot: Bot) -> None:
     except Exception:
         logger.exception("Не удалось загрузить базу знаний жителей (resident_kb.json).")
 
-    # Seed инфраструктуры из JSON (если таблица пустая)
+    # Очистка устаревших и seed инфраструктуры из JSON
     try:
-        from scripts.seed_places import seed_places
+        from scripts.seed_places import purge_old_places, seed_places
         async for session in get_session():
+            purged = await purge_old_places(session)
             seeded = await seed_places(session)
-            if seeded:
+            if purged or seeded:
                 await session.commit()
-                logger.info("Seed инфраструктуры: добавлено %s объектов.", seeded)
+                logger.info("Инфраструктура: удалено %s, добавлено %s объектов.", purged, seeded)
     except Exception:
         logger.exception("Ошибка seed инфраструктуры.")
 
