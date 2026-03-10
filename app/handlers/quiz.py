@@ -28,6 +28,7 @@ from app.services.quiz import (
     build_answer_hint,
     build_session_stats,
     can_start_quiz,
+    check_answer,
     end_quiz_session,
     get_active_session,
     get_current_question,
@@ -39,7 +40,6 @@ from app.services.quiz import (
     start_quiz_session,
     winners_from_results,
 )
-from app.services.ai_module import get_ai_client
 from app.utils.admin import is_admin_message
 
 if TYPE_CHECKING:
@@ -52,7 +52,8 @@ _timeout_tasks: dict[tuple[int, int], asyncio.Task] = {}
 _question_started_at: dict[tuple[int, int], datetime | None] = {}
 _session_results: dict[tuple[int, int], dict[int, tuple[str, int]]] = {}
 _answer_grace_tasks: dict[tuple[int, int], asyncio.Task[None]] = {}
-_pending_answers: dict[tuple[int, int], dict[int, tuple[str, bool]]] = {}
+_pending_answers: dict[tuple[int, int], dict[int, str]] = {}
+_question_attempts: dict[tuple[int, int], set[int]] = {}
 _session_locks: dict[tuple[int, int], asyncio.Lock] = {}
 # Лимит ручных запусков викторины: не более 2 в день
 _MANUAL_QUIZ_DAILY_LIMIT = 2
@@ -216,6 +217,7 @@ def _cancel_answer_grace(chat_id: int, topic_id: int) -> None:
     if task:
         task.cancel()
     _pending_answers.pop(key, None)
+    _question_attempts.pop(key, None)
 
 
 async def _handle_timeout(bot: Bot, chat_id: int, topic_id: int) -> None:
@@ -240,6 +242,8 @@ async def _handle_timeout(bot: Bot, chat_id: int, topic_id: int) -> None:
 
         quiz_session.current_question_id = None
         quiz_session.question_started_at = None
+        _question_attempts.pop(key, None)
+        _pending_answers.pop(key, None)
         await session.commit()
 
         if await is_quiz_finished(quiz_session):
@@ -435,25 +439,21 @@ async def check_quiz_answer(message: Message, bot: Bot) -> None:
             if not question:
                 return
 
-            ai_client = get_ai_client()
-            decision = await ai_client.evaluate_quiz_answer(
-                question.question,
-                question.answer,
-                message_text,
-                chat_id=chat_id,
-            )
-            if not (decision.is_correct or decision.is_close):
+            if key not in _question_attempts:
+                _question_attempts[key] = set()
+            if message.from_user.id in _question_attempts[key]:
+                return
+            _question_attempts[key].add(message.from_user.id)
+
+            if not check_answer(question, message_text):
                 return
 
             display_name = _display_name(message) or str(message.from_user.id)
             if key not in _pending_answers:
                 _pending_answers[key] = {}
-            _pending_answers[key][message.from_user.id] = (display_name, decision.is_close and not decision.is_correct)
+            _pending_answers[key][message.from_user.id] = display_name
 
             if key in _answer_grace_tasks:
-                await message.reply(
-                    f"Ответ @{display_name} принят. Проверяю одновременно пришедшие ответы..."
-                )
                 return
 
             _cancel_timeout(chat_id, topic_id)
@@ -465,9 +465,6 @@ async def check_quiz_answer(message: Message, bot: Bot) -> None:
                     question_id=question.id,
                     question_started_at=quiz_session.question_started_at,
                 )
-            )
-            await message.reply(
-                f"Ответ @{display_name} принят. Даю 1 секунду на возможные одновременные ответы."
             )
             return
 
@@ -502,15 +499,14 @@ async def _finalize_answers_after_grace(
                 if key not in _session_results:
                     _session_results[key] = {}
 
-                for user_id, (name, is_close) in accepted.items():
+                for user_id, name in accepted.items():
                     stat = await award_point(session, user_id, chat_id, display_name=name)
                     coin_stat = await award_correct_answer_coins(session, user_id, chat_id, display_name=name)
                     prev_points = _session_results[key].get(user_id, (name, 0))[1]
                     _session_results[key][user_id] = (name, prev_points + 1)
-                    suffix = " (близкий ответ, засчитано ИИ)" if is_close else ""
                     lines.append(
                         f"• @{name} +1, +{QUIZ_CORRECT_ANSWER_COINS} монет "
-                        f"(баланс: {coin_stat.coins}){suffix}"
+                        f"(баланс: {coin_stat.coins})"
                     )
 
                 await bot.send_message(chat_id, "\n".join(lines), message_thread_id=topic_id)
@@ -528,3 +524,4 @@ async def _finalize_answers_after_grace(
     finally:
         _answer_grace_tasks.pop(key, None)
         _pending_answers.pop(key, None)
+        _question_attempts.pop(key, None)
