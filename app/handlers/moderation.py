@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import random
 from datetime import datetime, timedelta
 
 from aiogram import Bot, Router
@@ -23,6 +24,24 @@ from app.utils.text import contains_forbidden_link
 logger = logging.getLogger(__name__)
 router = Router()
 FLOOD_TRACKER = FloodTracker(limit=10, window_seconds=120)
+
+# Вариативные мягкие предупреждения (L1)
+_SOFT_WARNINGS = (
+    "давайте мягче 🙂",
+    "чуть полегче, пожалуйста 🙌",
+    "тут все соседи — давайте дружелюбнее!",
+    "понимаю эмоции, но давайте без резкости 😊",
+    "осторожнее с формулировками — тут все свои.",
+    "полегче с тоном, пожалуйста. Мы же соседи!",
+)
+
+# Вариативные жёсткие предупреждения (L2)
+_HARD_WARNINGS = (
+    "это предупреждение ({count}/3). Пожалуйста, соблюдайте правила.",
+    "получаете предупреждение ({count}/3). Давайте без нарушений.",
+    "предупреждение номер {count} из 3. Пожалуйста, будьте корректнее.",
+    "это {count}-е предупреждение из 3. Правила действуют для всех.",
+)
 
 
 async def _warn_user(message: Message, text: str, bot: Bot) -> None:
@@ -157,7 +176,7 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
 
     # L1: мягкое предупреждение, без счётчика
     if severity == 1:
-        await _warn_user(message, "давайте мягче 🙂", bot)
+        await _warn_user(message, random.choice(_SOFT_WARNINGS), bot)
         return True
 
     # L2: жёсткое предупреждение + счётчик +1, без удаления
@@ -169,11 +188,8 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
             chat_id, user_id, "warn", severity,
             message_id=message.message_id, reason=violation_type, confidence=confidence,
         )
-        await _warn_user(
-            message,
-            f"это предупреждение ({strike_count}/3). Пожалуйста, соблюдайте правила.",
-            bot,
-        )
+        warn_text = random.choice(_HARD_WARNINGS).format(count=strike_count)
+        await _warn_user(message, warn_text, bot)
         await _apply_strike_threshold(bot, message, user_id, strike_count)
         return True
 
