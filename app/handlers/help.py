@@ -997,7 +997,9 @@ async def mention_help(message: Message, bot: Bot) -> None:
         except Exception:
             logger.exception("Ошибка при генерации AI-ответа на упоминание.")
             try:
-                await message.reply(_next_mention_reply())
+                from app.services.ai_module import build_local_assistant_reply
+                fallback_reply = build_local_assistant_reply(prompt, context=context)
+                await message.reply(fallback_reply)
             except Exception:
                 logger.exception("Не удалось отправить даже fallback-ответ на упоминание.")
     else:

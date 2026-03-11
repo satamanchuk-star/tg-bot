@@ -56,7 +56,12 @@ _MODEL_FALLBACK_ID = "openrouter/auto"
 
 def _is_invalid_model_id_error(error_hint: str) -> bool:
     normalized = error_hint.lower()
-    return "valid model id" in normalized or "invalid model" in normalized
+    return (
+        "valid model id" in normalized
+        or "invalid model" in normalized
+        or "model not found" in normalized
+        or "not found" in normalized
+    )
 
 
 def _normalize_cache_key(text: str) -> str:
@@ -562,7 +567,7 @@ class OpenRouterProvider:
                 except ValueError:
                     error_hint = response_text[:160]
                 if (
-                    status_code == 400
+                    status_code in (400, 404, 422)
                     and _is_invalid_model_id_error(error_hint)
                     and not used_fallback_model
                     and model_id != _MODEL_FALLBACK_ID
