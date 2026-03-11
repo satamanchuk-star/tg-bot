@@ -8,7 +8,6 @@ __pycache__
 .claude
 tests/
 docs/
-scripts/
 *.sh
 *.bat
 docker-compose.yml
