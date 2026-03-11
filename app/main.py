@@ -344,7 +344,7 @@ async def heartbeat_job(bot: Bot) -> None:
                         settings.admin_log_chat_id,
                         "Бот был недоступен. Сейчас снова онлайн.",
                     )
-                except TelegramNetworkError as exc:
+                except (TelegramNetworkError, TelegramAPIError) as exc:
                     logger.warning(
                         "Не удалось отправить heartbeat-уведомление в Telegram: %s",
                         exc,
@@ -550,9 +550,11 @@ async def on_startup(bot: Bot) -> None:
             await asyncio.sleep(5)
         except TelegramAPIError as exc:
             logger.error(
-                "Не удалось получить данные бота из Telegram API: %s. "
-                "Проверьте BOT_TOKEN и права доступа.",
+                "Не удалось получить данные бота из Telegram API: %s "
+                "(token=%s..., len=%d). Проверьте BOT_TOKEN и права доступа.",
                 exc,
+                settings.bot_token[:10],
+                len(settings.bot_token),
             )
             break
     await init_db(engine)
@@ -663,18 +665,34 @@ async def error_handler(event: ErrorEvent) -> bool:
 
 
 async def main() -> None:
+    logger.info(
+        "Запуск бота: version=%s data_dir=%s db=%s ai_enabled=%s ai_key_set=%s",
+        settings.build_version,
+        settings.data_dir,
+        settings.database_url.split("///")[-1] if "///" in settings.database_url else "???",
+        settings.ai_enabled,
+        bool(settings.ai_key),
+    )
+
     # Проверка флага остановки — если бот был остановлен командой /shutdown_bot
     if STOP_FLAG.exists():
-        logger.info("Бот остановлен. Удалите %s для запуска.", STOP_FLAG)
-        return
+        logger.error(
+            "Бот остановлен флагом %s (создан командой /shutdown_bot). "
+            "Удалите файл для запуска: rm %s",
+            STOP_FLAG,
+            STOP_FLAG,
+        )
+        raise SystemExit(1)
 
     try:
         bot = Bot(token=settings.bot_token, session=RetryOnFloodSession())
     except TokenValidationError:
+        token_preview = settings.bot_token[:10] + "..." if len(settings.bot_token) > 10 else settings.bot_token
         logger.error(
-            "BOT_TOKEN невалиден (%r). Проверьте формат: ЧИСЛА:БУКВЫ. "
+            "BOT_TOKEN невалиден (%r, len=%d). Проверьте формат: ЧИСЛА:БУКВЫ. "
             "Если токен в кавычках в .env — уберите их.",
-            settings.bot_token[:10] + "..." if len(settings.bot_token) > 10 else settings.bot_token,
+            token_preview,
+            len(settings.bot_token),
         )
         raise SystemExit(1)
     dp = Dispatcher(storage=MemoryStorage())
@@ -699,14 +717,16 @@ async def main() -> None:
             await dp.start_polling(bot)
         except TelegramNetworkError as exc:
             logger.error(
-                "Не удалось запустить polling: нет доступа к Telegram API (%s)",
+                "Не удалось запустить polling: нет доступа к Telegram API (%s). "
+                "Проверьте DNS, сеть и доступность api.telegram.org.",
                 exc,
             )
         except TelegramAPIError as exc:
             logger.error(
                 "Не удалось запустить polling: ошибка Telegram API (%s). "
-                "Проверьте BOT_TOKEN и настройки бота.",
+                "Проверьте BOT_TOKEN (len=%d) и настройки бота.",
                 exc,
+                len(settings.bot_token),
             )
     finally:
         if scheduler is not None:
