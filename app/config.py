@@ -182,7 +182,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("AI_KEY", "OPENROUTER_API_KEY", "AI_API_KEY"),
     )
-    ai_model: str = "qwen/qwen3.5-flash-02-23"
+    ai_model: str = Field(
+        default="qwen/qwen3.5-flash-02-23",
+        validation_alias=AliasChoices("AI_MODEL", "ai_model"),
+    )
     ai_max_tokens: int = 800
     ai_timeout_seconds: int = 20
     ai_retries: int = 2
