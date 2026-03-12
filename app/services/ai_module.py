@@ -21,6 +21,7 @@ from app.models import Place
 from app.services.ai_usage import add_usage, can_consume_ai, get_usage_stats
 from app.services.faq import get_faq_answer
 from app.services.resident_kb import build_resident_answer, build_resident_context
+from app.services.web_search import format_search_context, search_duckduckgo, should_search_web
 from app.utils.time import now_tz
 
 logger = logging.getLogger(__name__)
@@ -485,7 +486,14 @@ class StubAiProvider:
         places_context = await _get_places_context(safe_prompt)
         rag_text = await _get_rag_context(chat_id, safe_prompt)
         faq_answer = await _get_faq_answer(chat_id, safe_prompt)
-        return build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer)
+        web_hint = ""
+        if should_search_web(safe_prompt) and not rag_text and not faq_answer:
+            try:
+                web_results = await search_duckduckgo(safe_prompt)
+                web_hint = format_search_context(web_results)
+            except Exception:
+                pass
+        return build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer, web_hint=web_hint)
 
     async def evaluate_quiz_answer(
         self,
@@ -701,11 +709,20 @@ class OpenRouterProvider:
 
         resident_context = build_resident_context(safe_prompt, context=context)
 
+        # Веб-поиск: если вопрос выходит за рамки локальной базы знаний
+        web_context = ""
+        if should_search_web(safe_prompt) and not resident_context and not rag_text and not faq_answer:
+            try:
+                web_results = await search_duckduckgo(safe_prompt)
+                web_context = format_search_context(web_results)
+            except Exception:
+                logger.warning("Веб-поиск при ответе ассистента не удался.")
+
         # Логируем какие контексты были найдены
         logger.info(
-            "AI assistant context: resident_kb=%s rag=%s faq=%s places=%s prompt=%r",
+            "AI assistant context: resident_kb=%s rag=%s faq=%s places=%s web=%s prompt=%r",
             bool(resident_context), bool(rag_text), bool(faq_answer), bool(places_context),
-            safe_prompt[:100],
+            bool(web_context), safe_prompt[:100],
         )
 
         if resident_context:
@@ -719,6 +736,8 @@ class OpenRouterProvider:
                 "\n\nСправочник инфраструктуры ЖК (актуальные данные из БД, используй при ответе):\n"
                 f"{places_context}"
             )
+        if web_context:
+            system_prompt += f"\n\n{web_context}"
 
         # Формируем историю как отдельные user/assistant сообщения
         messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
@@ -1285,6 +1304,7 @@ def build_local_assistant_reply(
     places_hint: str | None = None,
     rag_hint: str | None = None,
     faq_hint: str | None = None,
+    web_hint: str | None = None,
 ) -> str:
     normalized_prompt = _normalize_assistant_prompt(prompt)
     if not normalized_prompt:
@@ -1328,6 +1348,15 @@ def build_local_assistant_reply(
             "Есть данные по этой теме:",
         )
         return f"{random.choice(intros)}\n{rag_hint.strip()[:700]}"
+
+    # Результаты веб-поиска
+    if web_hint and web_hint.strip():
+        intros = (
+            "Вот что нашёл в интернете:",
+            "По результатам поиска:",
+            "Нашёл в сети по вашему запросу:",
+        )
+        return f"{random.choice(intros)}\n{web_hint.strip()[:700]}"
 
     rule_reply = _assistant_rule_reply(normalized_prompt)
     if rule_reply:
