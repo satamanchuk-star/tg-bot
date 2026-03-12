@@ -140,6 +140,21 @@ def test_local_assistant_reply_uses_places_hint() -> None:
     assert "мфц видное" in reply.lower()
 
 
+def test_local_assistant_reply_prioritizes_resident_kb_over_places(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.services.ai_module.build_resident_answer",
+        lambda prompt, *, context=None: "Ответ по шлагбауму из базы ЖК",  # type: ignore[return-value]
+    )
+
+    reply = build_local_assistant_reply(
+        "Как оформить пропуск на шлагбаум?",
+        places_hint="- Школа №1, адрес: ул. Центральная, 10",
+    )
+
+    assert "шлагбаум" in reply.lower()
+    assert "школа" not in reply.lower()
+
+
 
 
 def test_detects_masked_profanity_with_latin_and_digits() -> None:
