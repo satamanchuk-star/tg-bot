@@ -25,11 +25,13 @@ from app.utils.time import now_tz
 
 logger = logging.getLogger(__name__)
 
-_MODERATION_SOFT_TIMEOUT_SECONDS = 8
-_ASSISTANT_SOFT_TIMEOUT_SECONDS = 12
-_QUIZ_SOFT_TIMEOUT_SECONDS = 12
-_SUMMARY_SOFT_TIMEOUT_SECONDS = 12
-_RAG_CATEGORIZE_SOFT_TIMEOUT_SECONDS = 10
+# Soft timeout = настроенный ai_timeout_seconds + запас на сеть (2 сек)
+_SOFT_TIMEOUT_BASE = settings.ai_timeout_seconds + 2
+_MODERATION_SOFT_TIMEOUT_SECONDS = _SOFT_TIMEOUT_BASE
+_ASSISTANT_SOFT_TIMEOUT_SECONDS = _SOFT_TIMEOUT_BASE
+_QUIZ_SOFT_TIMEOUT_SECONDS = _SOFT_TIMEOUT_BASE
+_SUMMARY_SOFT_TIMEOUT_SECONDS = _SOFT_TIMEOUT_BASE
+_RAG_CATEGORIZE_SOFT_TIMEOUT_SECONDS = _SOFT_TIMEOUT_BASE
 
 # ---------------------------------------------------------------------------
 # Кэш ответов ассистента (in-memory, TTL 24ч)
@@ -265,32 +267,6 @@ _CONVERSATION_SUMMARY_PROMPT = (
     "Результат — краткое резюме разговора, до 500 символов."
 )
 
-_USER_FALLBACK = ""
-
-_ALLOWED_ASSISTANT_TOPICS = (
-    "жк",
-    "двор",
-    "подъезд",
-    "парков",
-    "шлагбаум",
-    "инфраструктур",
-    "ремонт",
-    "сосед",
-    "быт",
-    "коммун",
-    "дом",
-    "квартира",
-    "правил",
-    "ук",
-    "управля",
-    "шум",
-    "сосед",
-    "парковк",
-    "лифт",
-    "мусор",
-    "охран",
-    "чат",
-)
 _FORBIDDEN_ASSISTANT_TOPICS = (
     "полит",
     "религи",
@@ -655,6 +631,7 @@ class OpenRouterProvider:
         global _LAST_ERROR, _LAST_ERROR_AT
         _LAST_ERROR = str(error)
         _LAST_ERROR_AT = datetime.utcnow()
+        logger.warning("AI provider error: %s", error)
 
     async def moderate(self, text: str, *, chat_id: int, context: list[str] | None = None) -> ModerationDecision:
         try:
@@ -1588,8 +1565,8 @@ async def build_dialog_summary_for_prompt(chat_id: int, user_id: int, *, limit: 
 _AI_CLIENT: AiModuleClient | None = None
 _AI_RUNTIME_ENABLED: bool = True
 _ADMIN_ALERT_NOTIFIER: Callable[[str], Awaitable[None]] | None = None
-_LAST_ERROR: str | None = "stub_mode"
-_LAST_ERROR_AT: datetime | None = datetime.utcnow()
+_LAST_ERROR: str | None = None
+_LAST_ERROR_AT: datetime | None = None
 
 
 async def _can_use_remote_ai(chat_id: int) -> tuple[bool, str | None]:

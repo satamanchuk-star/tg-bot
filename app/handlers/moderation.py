@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 router = Router()
 FLOOD_TRACKER = FloodTracker(limit=10, window_seconds=120)
 
+# Множество message_id, уже прошедших модерацию (предотвращает двойной вызов)
+_MODERATED_MSG_IDS: set[int] = set()
+_MODERATED_MSG_IDS_MAX = 500
+
 # Вариативные мягкие предупреждения (L1)
 _SOFT_WARNINGS = (
     "давайте мягче 🙂",
@@ -146,6 +150,17 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
         return False
     if message.from_user is None or message.text is None:
         return False
+
+    # Предотвращаем двойную модерацию одного сообщения (mention_help + moderate_message)
+    msg_id = message.message_id
+    if msg_id in _MODERATED_MSG_IDS:
+        return False
+    if len(_MODERATED_MSG_IDS) > _MODERATED_MSG_IDS_MAX:
+        to_remove = sorted(_MODERATED_MSG_IDS)[:_MODERATED_MSG_IDS_MAX // 2]
+        for mid in to_remove:
+            _MODERATED_MSG_IDS.discard(mid)
+    _MODERATED_MSG_IDS.add(msg_id)
+
     if await is_admin(bot, settings.forum_chat_id, message.from_user.id):
         return False
 
@@ -163,12 +178,17 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
     # Загружаем контекст разговора из того же топика
     topic_context = await _get_topic_context(chat_id, message.message_thread_id)
 
-    ai_client = get_ai_client()
     # Добавляем текущее сообщение с user_id для полного контекста
     current_msg = f"[user_{user_id}]: {text}"
-    decision = await ai_client.moderate(
-        current_msg, chat_id=chat_id, context=topic_context,
-    )
+
+    if settings.ai_feature_moderation:
+        ai_client = get_ai_client()
+        decision = await ai_client.moderate(
+            current_msg, chat_id=chat_id, context=topic_context,
+        )
+    else:
+        from app.services.ai_module import local_moderation
+        decision = local_moderation(current_msg)
     severity = decision.severity
     violation_type = getattr(decision, "violation_type", None)
     confidence = getattr(decision, "confidence", None)

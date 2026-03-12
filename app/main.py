@@ -259,6 +259,9 @@ async def apply_v11_stats_reset(session: AsyncSession) -> None:
 
 
 async def send_daily_summary(bot: Bot) -> None:
+    if not settings.ai_feature_daily_summary:
+        logger.info("Ежедневная сводка пропущена: ai_feature_daily_summary=false.")
+        return
     target_chat_id = settings.forum_chat_id
     target_thread_id = settings.ai_summary_topic_id
     if target_thread_id is None:
