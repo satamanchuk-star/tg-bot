@@ -45,6 +45,12 @@ _CACHE_STOP_WORDS = {
 }
 
 
+def _strip_think_tags(text: str) -> str:
+    """Удаляет теги <think>...</think> из ответов моделей (Qwen, DeepSeek и др.)."""
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    return cleaned
+
+
 def _normalize_model_id(model_id: str) -> str:
     """Исправляет частые опечатки в ID модели OpenRouter."""
     normalized = model_id.strip().strip("'\"")
@@ -539,9 +545,9 @@ class OpenRouterProvider:
                 content_raw = data["choices"][0]["message"]["content"]
                 if content_raw is None:
                     raise RuntimeError("AI вернул пустой ответ")
-                content = str(content_raw).strip()
+                content = _strip_think_tags(str(content_raw))
                 if not content:
-                    raise RuntimeError("AI вернул пустой текст")
+                    raise RuntimeError("AI вернул пустой текст (только think-теги)")
                 tokens = int(data.get("usage", {}).get("total_tokens") or 0)
                 await _add_remote_usage(chat_id, tokens)
                 if used_fallback_model and self._model != model_id:
@@ -1273,11 +1279,11 @@ def build_local_assistant_reply(
         return random.choice(_THANKS_REPLIES)
 
     # FAQ-ответ — наивысший приоритет (закреплённый ответ из базы)
-    if faq_hint:
-        return faq_hint[:800]
+    if faq_hint and faq_hint.strip():
+        return faq_hint.strip()[:800]
 
     # Данные из БД инфраструктуры приоритетнее статичной базы знаний
-    if places_hint:
+    if places_hint and places_hint.strip():
         # Варьируем вступление к ответу из БД инфраструктуры
         intros = (
             "Вот что нашёл в базе инфраструктуры:",
@@ -1285,17 +1291,17 @@ def build_local_assistant_reply(
             "Есть информация по вашему запросу:",
             "Нашёл кое-что полезное:",
         )
-        return f"{random.choice(intros)}\n{places_hint[:700]}"
+        return f"{random.choice(intros)}\n{places_hint.strip()[:700]}"
 
     # RAG-контекст из базы знаний ЖК
-    if rag_hint:
+    if rag_hint and rag_hint.strip():
         intros = (
             "Вот что нашёл в базе знаний:",
             "По базе знаний есть такая информация:",
             "Нашёл в наших записях:",
             "Есть данные по этой теме:",
         )
-        return f"{random.choice(intros)}\n{rag_hint[:700]}"
+        return f"{random.choice(intros)}\n{rag_hint.strip()[:700]}"
 
     resident_answer = build_resident_answer(normalized_prompt, context=context)
     if resident_answer:

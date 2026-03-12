@@ -892,6 +892,12 @@ async def ai_command(message: Message) -> None:
             prompt, context, chat_id=message.chat.id,
         )
 
+        # Защита от пустого ответа (think-теги, whitespace и т.д.)
+        if not reply or not reply.strip():
+            from app.services.ai_module import build_local_assistant_reply
+            reply = build_local_assistant_reply(prompt, context=context)
+            logger.warning("AI вернул пустой ответ, использован локальный fallback.")
+
         await _remember_ai_exchange_persistent(
             message.chat.id, message.from_user.id, prompt, reply,
         )
@@ -971,6 +977,12 @@ async def mention_help(message: Message, bot: Bot) -> None:
 
             context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
             reply = await get_ai_client().assistant_reply(prompt, context, chat_id=message.chat.id)
+
+            # Защита от пустого ответа (think-теги, whitespace и т.д.)
+            if not reply or not reply.strip():
+                from app.services.ai_module import build_local_assistant_reply
+                reply = build_local_assistant_reply(prompt, context=context)
+                logger.warning("AI вернул пустой ответ на упоминание, использован локальный fallback.")
 
             await _remember_ai_exchange_persistent(
                 message.chat.id, message.from_user.id, prompt, reply,
