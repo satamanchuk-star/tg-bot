@@ -1211,7 +1211,10 @@ def _assistant_rule_reply(prompt: str) -> str | None:
 
 
 def _pick_fallback_variant(seed_text: str) -> str:
-    return random.choice(_FALLBACK_VARIANTS)
+    base_reply = random.choice(_FALLBACK_VARIANTS)
+    if "уточн" in base_reply.lower():
+        return base_reply
+    return f"{base_reply} Если хотите, можете уточнить вопрос — попробую помочь точнее."
 
 
 _EMPTY_PROMPT_REPLIES = (

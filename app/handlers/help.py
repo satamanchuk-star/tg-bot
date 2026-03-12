@@ -964,6 +964,7 @@ async def mention_help(message: Message, bot: Bot) -> None:
         return
 
     if prompt:
+        context: list[str] = []
         # Дедупликация: проверяем, не отвечали ли недавно на такой же запрос
         if _is_duplicate_prompt(message.chat.id, prompt):
             logger.info("OUT: MENTION_REPLY_SKIPPED_DUPLICATE prompt=%r", prompt[:80])
