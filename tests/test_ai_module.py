@@ -17,6 +17,7 @@ from app.services.ai_module import (
     normalize_for_profanity,
     parse_quiz_answer_response,
     _extract_search_words,
+    _extract_response_content,
     _normalize_model_id,
     get_ai_client,
     is_ai_runtime_enabled,
@@ -57,6 +58,27 @@ class _SlowProvider:
 def test_normalize_model_id_replaces_decimal_commas() -> None:
     assert _normalize_model_id("qwen/qwen3,5-flash") == "qwen/qwen3.5-flash"
     assert _normalize_model_id("qwen/qwen3，5-flash") == "qwen/qwen3.5-flash"
+
+
+def test_extract_response_content_supports_string() -> None:
+    payload = {"choices": [{"message": {"content": "Привет"}}]}
+    assert _extract_response_content(payload) == "Привет"
+
+
+def test_extract_response_content_supports_content_parts() -> None:
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Первая часть"},
+                        {"type": "text", "text": "Вторая часть"},
+                    ]
+                }
+            }
+        ]
+    }
+    assert _extract_response_content(payload) == "Первая часть\nВторая часть"
 
 def test_detects_masked_profanity() -> None:
     normalized = normalize_for_profanity("Да ты б*л_я!")
@@ -304,7 +326,7 @@ def test_openrouter_chat_completion_raises_on_empty_content(monkeypatch) -> None
     try:
         asyncio.run(provider._chat_completion([{"role": "user", "content": "ping"}], chat_id=1))
     except RuntimeError as exc:
-        assert "пустой ответ" in str(exc)
+        assert "пустой текст" in str(exc)
     else:
         raise AssertionError("Expected RuntimeError for empty AI content")
     finally:

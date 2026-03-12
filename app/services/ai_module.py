@@ -51,6 +51,45 @@ def _strip_think_tags(text: str) -> str:
     return cleaned
 
 
+def _extract_response_content(data: dict[str, object]) -> str:
+    """Извлекает текст ответа OpenRouter из разных совместимых форматов."""
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError("AI вернул ответ без choices")
+
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        raise RuntimeError("AI вернул некорректный формат choices")
+
+    message = first_choice.get("message")
+    if not isinstance(message, dict):
+        raise RuntimeError("AI вернул ответ без message")
+
+    content_raw = message.get("content")
+    if isinstance(content_raw, str):
+        return content_raw
+    if content_raw is None:
+        return ""
+    if isinstance(content_raw, list):
+        parts: list[str] = []
+        for item in content_raw:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            text_part = item.get("text")
+            if isinstance(text_part, str) and text_part.strip():
+                parts.append(text_part)
+                continue
+            if item.get("type") == "reasoning":
+                reasoning_part = item.get("reasoning")
+                if isinstance(reasoning_part, str) and reasoning_part.strip():
+                    parts.append(reasoning_part)
+        return "\n".join(parts)
+    return str(content_raw)
+
+
 def _normalize_model_id(model_id: str) -> str:
     """Исправляет частые опечатки в ID модели OpenRouter."""
     normalized = model_id.strip().strip("'\"")
@@ -545,10 +584,7 @@ class OpenRouterProvider:
                     continue
                 response.raise_for_status()
                 data = response.json()
-                content_raw = data["choices"][0]["message"]["content"]
-                if content_raw is None:
-                    raise RuntimeError("AI вернул пустой ответ")
-                content = _strip_think_tags(str(content_raw))
+                content = _strip_think_tags(_extract_response_content(data))
                 if not content:
                     raise RuntimeError("AI вернул пустой текст (только think-теги)")
                 tokens = int(data.get("usage", {}).get("total_tokens") or 0)
