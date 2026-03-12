@@ -871,6 +871,9 @@ async def ai_command(message: Message) -> None:
         return
     if message.from_user is None or message.from_user.is_bot:
         return
+    if not settings.ai_feature_assistant:
+        await message.reply("AI-ассистент временно отключён.")
+        return
     prompt = _extract_ai_prompt(message)
     if not prompt:
         await message.reply("Напишите вопрос после команды: /ai <ваш вопрос>")
@@ -944,6 +947,12 @@ async def mention_help(message: Message, bot: Bot) -> None:
     message_id = getattr(message, "message_id", None)
     if message_id is not None:
         _mark_message_processed(message_id)
+
+    # Если AI-ассистент отключён — отвечаем шуткой
+    if not settings.ai_feature_assistant:
+        await message.reply(_next_mention_reply())
+        logger.info("OUT: MENTION_REPLY (ai_feature_assistant=off)")
+        return
 
     # Проверяем модерацию перед ответом ассистента (только severity >= 2 блокирует)
     prompt = _extract_ai_prompt(message)
