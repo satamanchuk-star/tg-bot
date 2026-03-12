@@ -221,6 +221,49 @@ def test_openrouter_retries_with_fallback_model_on_invalid_id(monkeypatch) -> No
     assert sent_models[-1] == "openrouter/auto"
     asyncio.run(provider.aclose())
 
+
+def test_openrouter_retries_with_fallback_model_on_no_endpoints(monkeypatch) -> None:
+    provider = OpenRouterProvider()
+    sent_models: list[str] = []
+
+    async def _fake_add_usage(chat_id: int, tokens: int) -> None:
+        return None
+
+    async def _post(*args, **kwargs):  # type: ignore[no-untyped-def]
+        model = kwargs["json"]["model"]
+        sent_models.append(model)
+        request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+        if len(sent_models) == 1:
+            return httpx.Response(
+                404,
+                request=request,
+                json={"error": {"message": f"No endpoints found for {model}"}},
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"total_tokens": 7},
+            },
+        )
+
+    async def _allow(chat_id: int) -> tuple[bool, str | None]:
+        return (True, None)
+
+    monkeypatch.setattr("app.services.ai_module.settings.ai_key", "test-key", raising=False)
+    monkeypatch.setattr("app.services.ai_module._can_use_remote_ai", _allow)
+    monkeypatch.setattr("app.services.ai_module._add_remote_usage", _fake_add_usage)
+    monkeypatch.setattr(provider._client, "post", _post)
+
+    content, tokens = asyncio.run(provider._chat_completion([{"role": "user", "content": "ping"}], chat_id=1))
+
+    assert content == "ok"
+    assert tokens == 7
+    assert len(sent_models) == 2
+    assert sent_models[-1] == "openrouter/auto"
+    asyncio.run(provider.aclose())
+
 def test_openrouter_summary_fallback_on_runtime_error(monkeypatch) -> None:
     provider = OpenRouterProvider()
 

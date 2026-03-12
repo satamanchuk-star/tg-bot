@@ -67,6 +67,9 @@ def _is_invalid_model_id_error(error_hint: str) -> bool:
         or "invalid model" in normalized
         or "model not found" in normalized
         or "not found" in normalized
+        or "no endpoints found" in normalized
+        or "provider returned error" in normalized and "model" in normalized
+        or "is not available" in normalized
     )
 
 
