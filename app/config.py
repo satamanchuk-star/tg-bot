@@ -194,6 +194,7 @@ class Settings(BaseSettings):
     ai_feature_moderation: bool = True
     ai_feature_assistant: bool = True
     ai_feature_quiz: bool = True
+    ai_feature_web_search: bool = True
     ai_feature_daily_summary: bool = True
     ai_summary_hour: int = 21
     ai_summary_minute: int = 0
