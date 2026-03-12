@@ -223,7 +223,7 @@ _CONVERSATION_SUMMARY_PROMPT = (
     "Результат — краткое резюме разговора, до 500 символов."
 )
 
-_USER_FALLBACK = "Жабот работает в локальном режиме."
+_USER_FALLBACK = ""
 
 _ALLOWED_ASSISTANT_TOPICS = (
     "жк",
@@ -467,7 +467,7 @@ class StubAiProvider:
         places_context = await _get_places_context(safe_prompt)
         rag_text = await _get_rag_context(chat_id, safe_prompt)
         faq_answer = await _get_faq_answer(chat_id, safe_prompt)
-        return f"{_USER_FALLBACK} {build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer)}"
+        return build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer)
 
     async def evaluate_quiz_answer(
         self,
@@ -868,7 +868,7 @@ class AiModuleClient:
             places_context = await _get_places_context(prompt)
             rag_text = await _get_rag_context(chat_id, prompt)
             faq_answer = await _get_faq_answer(chat_id, prompt)
-            return f"{_USER_FALLBACK} {build_local_assistant_reply(prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer)}"
+            return build_local_assistant_reply(prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer)
 
     async def assistant_reply_with_history(
         self,

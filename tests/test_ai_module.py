@@ -94,7 +94,8 @@ def test_probe_returns_stub_status() -> None:
 
 def test_assistant_reply_uses_local_fallback() -> None:
     reply = asyncio.run(AiModuleClient().assistant_reply("вопрос про шлагбаум", [], chat_id=1))
-    assert "локальном режиме" in reply.lower()
+    assert "локальном режиме" not in reply.lower()
+    assert len(reply.strip()) > 0
 
 
 def test_local_assistant_reply_handles_rules_and_mentions() -> None:
@@ -293,7 +294,8 @@ def test_ai_module_client_assistant_timeout_fallback(monkeypatch) -> None:
 
     reply = asyncio.run(client.assistant_reply("шлагбаум не работает", [], chat_id=1))
 
-    assert "локальном режиме" in reply.lower()
+    assert "локальном режиме" not in reply.lower()
+    assert len(reply.strip()) > 0
 
 
 def test_extract_search_words_adds_stem_variant_for_school_words() -> None:
