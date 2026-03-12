@@ -1324,7 +1324,14 @@ def build_local_assistant_reply(
     if faq_hint and faq_hint.strip():
         return faq_hint.strip()[:800]
 
-    # Данные из БД инфраструктуры приоритетнее статичной базы знаний
+    # Каноническая база знаний ЖК приоритетнее инфраструктурной БД,
+    # чтобы домовые вопросы (шлагбаум, УК, аварийка) не перебивались
+    # общими объектами вроде школ и магазинов.
+    resident_answer = build_resident_answer(normalized_prompt, context=context)
+    if resident_answer:
+        return resident_answer
+
+    # Данные из БД инфраструктуры — следующий приоритет
     if places_hint and places_hint.strip():
         # Варьируем вступление к ответу из БД инфраструктуры
         intros = (
@@ -1344,10 +1351,6 @@ def build_local_assistant_reply(
             "Есть данные по этой теме:",
         )
         return f"{random.choice(intros)}\n{rag_hint.strip()[:700]}"
-
-    resident_answer = build_resident_answer(normalized_prompt, context=context)
-    if resident_answer:
-        return resident_answer
 
     rule_reply = _assistant_rule_reply(normalized_prompt)
     if rule_reply:
