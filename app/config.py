@@ -196,6 +196,9 @@ class Settings(BaseSettings):
     ai_feature_quiz: bool = True
     ai_feature_web_search: bool = True
     ai_feature_daily_summary: bool = True
+    # Тихое обучение модерации: бот НЕ модерирует, а отправляет подозрительные
+    # сообщения в лог-чат для разметки участниками (реакции 👍/👎).
+    moderation_training_mode: bool = False
     ai_summary_hour: int = 21
     ai_summary_minute: int = 0
     ai_summary_topic_id: int | None = None
