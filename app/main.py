@@ -605,8 +605,6 @@ async def on_startup(bot: Bot) -> None:
                 BotCommand(command="ai", description="Задать вопрос Жаботу"),
                 BotCommand(command="21", description="Играть в блэкджек"),
                 BotCommand(command="score", description="Мои монеты"),
-                BotCommand(command="what_you_know", description="Что бот знает обо мне"),
-                BotCommand(command="forget_me", description="Удалить мои данные"),
             ],
         )
     # Сброс кэшей при старте, чтобы не использовать устаревшие данные

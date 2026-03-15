@@ -40,36 +40,11 @@ _QUESTION_PATTERNS = [
     re.compile(r"\bсколько\s+стоит\b", re.IGNORECASE),
 ]
 
-# Слова, указывающие на приветствие нового жителя
-_NEWCOMER_PATTERNS = [
-    re.compile(r"\bтолько\s+(?:переехал|заехал|заселил|въехал)", re.IGNORECASE),
-    re.compile(r"\bновый\s+(?:жилец|сосед|житель)", re.IGNORECASE),
-    re.compile(r"\bновая\s+(?:жилица|соседка|жительница)", re.IGNORECASE),
-    re.compile(r"\bпервый\s+(?:раз|день)\s+(?:тут|здесь|в|у)", re.IGNORECASE),
-    re.compile(r"\bнедавно\s+(?:переехал|заехал|заселил|въехал)", re.IGNORECASE),
-]
-
-# Приветствия новичкам
-_NEWCOMER_GREETINGS = [
-    "Добро пожаловать, новый сосед! Я Жабот — местный помощник. "
-    "Если будут вопросы по дому, упомяни меня или напиши /help — подскажу куда обратиться 🏠",
-    "О, новенький! Рад видеть! Я Жабот, тут всё знаю. "
-    "Упомяни меня, если нужна помощь с чем-то по дому или району. Добро пожаловать!",
-    "Привет-привет! Добро пожаловать в наш ЖК! Я Жабот — бот-помощник. "
-    "Знаю где что находится, помогаю с вопросами. Обращайся! 🐸",
-]
-
-
 def _is_question(text: str) -> bool:
     """Определяет, содержит ли сообщение вопрос, на который бот может ответить."""
     if "?" in text:
         return True
     return any(p.search(text) for p in _QUESTION_PATTERNS)
-
-
-def _is_newcomer_message(text: str) -> bool:
-    """Определяет, представляется ли человек новым жителем."""
-    return any(p.search(text) for p in _NEWCOMER_PATTERNS)
 
 
 def _is_topic_active(chat_id: int, topic_id: int | None) -> bool:
@@ -137,15 +112,6 @@ async def maybe_proactive_reply(message: Message, bot: Bot) -> bool:
     # Не вмешиваемся в горячие дискуссии
     if _is_topic_active(chat_id, topic_id):
         return False
-
-    # Приветствие нового жителя
-    if _is_newcomer_message(text):
-        import random
-        greeting = random.choice(_NEWCOMER_GREETINGS)
-        await message.reply(greeting)
-        _mark_proactive_sent(chat_id, topic_id)
-        logger.info("PROACTIVE: newcomer greeting sent, topic=%s", topic_id)
-        return True
 
     # Вопросительное сообщение — пробуем ответить из базы знаний
     if _is_question(text):
