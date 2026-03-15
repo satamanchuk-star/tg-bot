@@ -242,6 +242,9 @@ async def init_db(async_engine: AsyncEngine) -> None:
                     )
                 )
 
+            # Миграция resident_profiles (создаётся через create_all,
+            # но проверяем на всякий случай)
+
 
         await conn.run_sync(_ensure_columns)
 
@@ -594,6 +597,17 @@ async def on_startup(bot: Bot) -> None:
                 ),
             ],
             scope=BotCommandScopeChatAdministrators(chat_id=settings.forum_chat_id),
+        )
+        # Публичные команды для всех пользователей
+        await bot.set_my_commands(
+            [
+                BotCommand(command="help", description="Справка и навигация по форуму"),
+                BotCommand(command="ai", description="Задать вопрос Жаботу"),
+                BotCommand(command="21", description="Играть в блэкджек"),
+                BotCommand(command="score", description="Мои монеты"),
+                BotCommand(command="what_you_know", description="Что бот знает обо мне"),
+                BotCommand(command="forget_me", description="Удалить мои данные"),
+            ],
         )
     # Сброс кэшей при старте, чтобы не использовать устаревшие данные
     cleared = clear_assistant_cache()

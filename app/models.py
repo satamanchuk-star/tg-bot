@@ -306,6 +306,19 @@ class ModerationTraining(Base):
     )
 
 
+class ResidentProfile(Base):
+    """Почему: бот запоминает факты о жителях для персонализированных ответов."""
+    __tablename__ = "resident_profiles"
+
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    facts_json: Mapped[str] = mapped_column(Text, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+    )
+
+
 class Place(Base):
     """Почему: справочник инфраструктуры нужен для быстрых ответов бота без внешних API."""
 

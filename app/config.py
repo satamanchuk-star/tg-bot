@@ -196,6 +196,12 @@ class Settings(BaseSettings):
     ai_feature_quiz: bool = True
     ai_feature_web_search: bool = True
     ai_feature_daily_summary: bool = True
+    # Проактивный режим: бот сам подсказывает, когда может помочь
+    ai_feature_proactive: bool = True
+    # Профили жителей: бот запоминает факты о пользователях из диалогов
+    ai_feature_profiles: bool = True
+    # Адаптация тона под настроение чата
+    ai_feature_mood: bool = True
     # Тихое обучение модерации: бот НЕ модерирует, а отправляет подозрительные
     # сообщения в лог-чат для разметки участниками (реакции 👍/👎).
     moderation_training_mode: bool = False

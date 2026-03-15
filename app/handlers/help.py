@@ -32,6 +32,13 @@ from app.services.chat_history import (
 )
 from app.services.faq import get_faq_answer, track_question, update_faq_rating
 from app.services.feedback import save_feedback
+from app.services.resident_profile import (
+    delete_profile,
+    format_profile_for_user,
+    get_profile,
+    parse_extracted_facts,
+    update_profile,
+)
 from app.utils.admin import is_admin
 from app.utils.admin_help import ADMIN_HELP
 
@@ -893,6 +900,8 @@ async def ai_command(message: Message) -> None:
         context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
         reply = await get_ai_client().assistant_reply(
             prompt, context, chat_id=message.chat.id,
+            user_id=message.from_user.id,
+            topic_id=message.message_thread_id,
         )
 
         # Защита от пустого ответа (think-теги, whitespace и т.д.)
@@ -907,6 +916,14 @@ async def ai_command(message: Message) -> None:
 
         # Помечаем запрос как отвеченный для дедупликации
         _mark_prompt_answered(message.chat.id, prompt)
+
+        # Извлечение фактов о пользователе (фоново, не блокирует ответ)
+        asyncio.create_task(
+            _extract_and_save_profile(
+                message.chat.id, message.from_user.id, prompt, reply,
+                message.from_user.full_name,
+            )
+        )
 
         # Трекаем вопрос в FAQ (не блокируем ответ при ошибке)
         try:
@@ -1011,7 +1028,11 @@ async def mention_help(message: Message, bot: Bot) -> None:
             question_key = _normalize_cache_key(prompt)
 
             context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
-            reply = await get_ai_client().assistant_reply(prompt, context, chat_id=message.chat.id)
+            reply = await get_ai_client().assistant_reply(
+                prompt, context, chat_id=message.chat.id,
+                user_id=message.from_user.id,
+                topic_id=message.message_thread_id,
+            )
 
             # Защита от пустого ответа (think-теги, whitespace и т.д.)
             if not reply or not reply.strip():
@@ -1025,6 +1046,14 @@ async def mention_help(message: Message, bot: Bot) -> None:
 
             # Помечаем запрос как отвеченный для дедупликации
             _mark_prompt_answered(message.chat.id, prompt)
+
+            # Извлечение фактов о пользователе (фоново)
+            asyncio.create_task(
+                _extract_and_save_profile(
+                    message.chat.id, message.from_user.id, prompt, reply,
+                    message.from_user.full_name,
+                )
+            )
 
             # Трекаем вопрос в FAQ (не блокируем ответ при ошибке)
             try:
@@ -1144,6 +1173,60 @@ async def _track_faq(chat_id: int, question_key: str, answer: str) -> None:
             await session.commit()
     except Exception:
         logger.warning("Не удалось обновить FAQ-трекинг.")
+
+
+async def _extract_and_save_profile(
+    chat_id: int, user_id: int, prompt: str, reply: str, display_name: str | None,
+) -> None:
+    """Фоново извлекает факты о пользователе из диалога и сохраняет в профиль."""
+    if not settings.ai_feature_profiles:
+        return
+    try:
+        dialog = f"user: {prompt[:500]}\nassistant: {reply[:300]}"
+        raw_json = await get_ai_client().extract_user_facts(dialog, chat_id=chat_id)
+        facts = parse_extracted_facts(raw_json)
+        if not facts:
+            return
+        async for session in get_session():
+            await update_profile(session, user_id, chat_id, facts, display_name)
+            break
+        logger.info("Профиль обновлён: user_id=%s, facts=%s", user_id, list(facts.keys()))
+    except Exception:
+        logger.warning("Не удалось извлечь/сохранить факты профиля для user_id=%s", user_id)
+
+
+@router.message(Command("forget_me"))
+async def forget_me_command(message: Message) -> None:
+    """Удаляет профиль пользователя (право на забвение)."""
+    if message.from_user is None:
+        return
+    try:
+        async for session in get_session():
+            deleted = await delete_profile(session, message.from_user.id, message.chat.id)
+            break
+        if deleted:
+            await message.reply("Готово! Я забыл всё, что знал о тебе. Начнём с чистого листа 🐸")
+        else:
+            await message.reply("У меня и так ничего на тебя нет. Чист как стёклышко!")
+    except Exception:
+        logger.exception("Ошибка при удалении профиля")
+        await message.reply("Что-то пошло не так. Попробуй позже.")
+
+
+@router.message(Command("what_you_know"))
+async def what_you_know_command(message: Message) -> None:
+    """Показывает, что бот знает о пользователе."""
+    if message.from_user is None:
+        return
+    try:
+        async for session in get_session():
+            profile = await get_profile(session, message.from_user.id, message.chat.id)
+            break
+        text = format_profile_for_user(profile)
+        await message.reply(text)
+    except Exception:
+        logger.exception("Ошибка при показе профиля")
+        await message.reply("Не удалось загрузить данные. Попробуй позже.")
 
 
 @router.message(HelpRoutingActiveFilter(), flags={"block": False})

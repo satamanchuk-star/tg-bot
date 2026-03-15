@@ -476,6 +476,8 @@ class AiProvider(Protocol):
 
     async def summarize_conversation(self, conversation: str, *, chat_id: int) -> str: ...
 
+    async def extract_user_facts(self, dialog: str, *, chat_id: int) -> str: ...
+
 
 class StubAiProvider:
     """Почему: стабильно возвращает локальное поведение до реального подключения ИИ."""
@@ -530,6 +532,9 @@ class StubAiProvider:
         lines = conversation.strip().split("\n")
         user_lines = [l for l in lines if l.startswith("user:")]
         return "Ранее обсуждали: " + "; ".join(l[6:].strip()[:80] for l in user_lines)[:500]
+
+    async def extract_user_facts(self, dialog: str, *, chat_id: int) -> str:
+        return "{}"
 
 
 class OpenRouterProvider:
@@ -868,6 +873,59 @@ class OpenRouterProvider:
             user_lines = [l for l in lines if l.startswith("user:")]
             return "Ранее обсуждали: " + "; ".join(l[6:].strip()[:80] for l in user_lines)[:500]
 
+    async def extract_user_facts(self, dialog: str, *, chat_id: int) -> str:
+        """Извлекает факты о пользователе из диалога через AI."""
+        from app.services.resident_profile import EXTRACT_FACTS_PROMPT
+        try:
+            content, _ = await self._chat_completion(
+                [
+                    {"role": "system", "content": EXTRACT_FACTS_PROMPT},
+                    {"role": "user", "content": dialog[:2000]},
+                ],
+                chat_id=chat_id,
+            )
+            return content[:500]
+        except RuntimeError as exc:
+            self._record_runtime_error(exc)
+            return "{}"
+
+
+async def _enrich_context(
+    context: list[str],
+    chat_id: int,
+    user_id: int,
+    topic_id: int | None,
+) -> list[str]:
+    """Обогащает контекст профилем жителя и настроением чата."""
+    enriched = list(context)
+
+    # Профиль жителя
+    if settings.ai_feature_profiles:
+        try:
+            from app.services.resident_profile import format_profile_for_prompt, get_profile
+            async for session in get_session():
+                profile = await get_profile(session, user_id, chat_id)
+                if profile:
+                    profile_text = format_profile_for_prompt(profile)
+                    if profile_text:
+                        enriched.insert(0, f"summary: {profile_text}")
+                break
+        except Exception:
+            logger.warning("Не удалось загрузить профиль жителя для контекста.")
+
+    # Настроение чата
+    if settings.ai_feature_mood:
+        try:
+            from app.services.mood import get_mood, get_mood_style_hint
+            snapshot = get_mood(chat_id, topic_id)
+            hint = get_mood_style_hint(snapshot.mood)
+            if hint:
+                enriched.insert(0, f"summary: {hint}")
+        except Exception:
+            logger.warning("Не удалось определить настроение чата.")
+
+    return enriched
+
 
 class AiModuleClient:
     """Почему: фасад для будущего ИИ, чтобы точки интеграции не трогать повторно."""
@@ -898,10 +956,22 @@ class AiModuleClient:
             decision.used_fallback = True
             return decision
 
-    async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int) -> str:
+    async def assistant_reply(
+        self,
+        prompt: str,
+        context: list[str],
+        *,
+        chat_id: int,
+        user_id: int | None = None,
+        topic_id: int | None = None,
+    ) -> str:
+        # Инъекция профиля жителя и настроения чата в контекст
+        enriched_context = list(context)
+        if user_id is not None:
+            enriched_context = await _enrich_context(enriched_context, chat_id, user_id, topic_id)
         try:
             return await asyncio.wait_for(
-                self._provider.assistant_reply(prompt, context, chat_id=chat_id),
+                self._provider.assistant_reply(prompt, enriched_context, chat_id=chat_id),
                 timeout=_ASSISTANT_SOFT_TIMEOUT_SECONDS,
             )
         except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
@@ -992,6 +1062,17 @@ class AiModuleClient:
             lines = conversation.strip().split("\n")
             user_lines = [l for l in lines if l.startswith("user:")]
             return "Ранее обсуждали: " + "; ".join(l[6:].strip()[:80] for l in user_lines)[:500]
+
+    async def extract_user_facts(self, dialog: str, *, chat_id: int) -> str:
+        """Извлекает факты о пользователе из диалога (с таймаутом)."""
+        try:
+            return await asyncio.wait_for(
+                self._provider.extract_user_facts(dialog, chat_id=chat_id),
+                timeout=_SUMMARY_SOFT_TIMEOUT_SECONDS,
+            )
+        except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
+            logger.warning("AI extract_user_facts timeout.")
+            return "{}"
 
 
 def _has_aggressive_target(text: str) -> bool:
