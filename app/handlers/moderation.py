@@ -197,6 +197,14 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
 
     await _store_message_log(message, severity, sentiment=sentiment)
 
+    # Записываем sentiment в буфер настроения чата
+    if sentiment:
+        try:
+            from app.services.mood import record_sentiment
+            record_sentiment(chat_id, message.message_thread_id, sentiment)
+        except Exception:
+            pass
+
     # Режим тихого обучения: не модерируем, а отправляем в лог-чат для разметки
     if settings.moderation_training_mode:
         if severity >= 1:
@@ -439,4 +447,20 @@ async def handle_training_reaction(event: MessageReactionUpdated) -> None:
 @router.message(StateFilter(None), flags={"block": False})
 async def moderate_message(message: Message, bot: Bot) -> None:
     """Модерация сообщений. Пропускает пользователей в FSM-состоянии (заполняют форму)."""
-    await run_moderation(message, bot)
+    moderated = await run_moderation(message, bot)
+
+    # Регистрируем активность топика для проактивного сервиса
+    if message.chat.id == settings.forum_chat_id:
+        try:
+            from app.services.proactive import register_message_activity
+            register_message_activity(message.chat.id, message.message_thread_id)
+        except Exception:
+            pass
+
+    # Проактивная подсказка: только если сообщение не модерировано
+    if not moderated and message.chat.id == settings.forum_chat_id:
+        try:
+            from app.services.proactive import maybe_proactive_reply
+            await maybe_proactive_reply(message, bot)
+        except Exception:
+            logger.warning("Ошибка проактивной подсказки")
