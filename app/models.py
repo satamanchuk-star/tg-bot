@@ -286,6 +286,26 @@ class AiUsage(Base):
     )
 
 
+class ModerationTraining(Base):
+    """Почему: тихое обучение — сбор обратной связи от участников лог-чата."""
+    __tablename__ = "moderation_training"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    message_text: Mapped[str] = mapped_column(Text)
+    ai_severity: Mapped[int] = mapped_column(Integer, default=0)
+    ai_violation_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    ai_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    log_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    vote_yes: Mapped[int] = mapped_column(Integer, default=0)
+    vote_no: Mapped[int] = mapped_column(Integer, default=0)
+    voted_user_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
 class Place(Base):
     """Почему: справочник инфраструктуры нужен для быстрых ответов бота без внешних API."""
 

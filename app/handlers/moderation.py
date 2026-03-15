@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 from datetime import datetime, timedelta
 
-from aiogram import Bot, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
-from aiogram.types import ChatPermissions, Message
+from aiogram.types import ChatPermissions, Message, MessageReactionUpdated
 
 from sqlalchemy import and_, select
 
 from app.config import settings
 from app.db import get_session
-from app.models import FloodRecord, MessageLog, ModerationEvent
+from app.models import FloodRecord, MessageLog, ModerationEvent, ModerationTraining
 from app.services.ai_module import get_ai_client
 from app.services.flood import FloodTracker
 from app.services.strikes import add_strike, clear_strikes
@@ -196,6 +197,12 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
 
     await _store_message_log(message, severity, sentiment=sentiment)
 
+    # Режим тихого обучения: не модерируем, а отправляем в лог-чат для разметки
+    if settings.moderation_training_mode:
+        if severity >= 1:
+            await _send_training_sample(message, bot, severity, violation_type, confidence)
+        return False
+
     # L0: ничего
     if severity == 0:
         # Flood-проверка (не связана с AI severity)
@@ -311,6 +318,122 @@ async def _check_flood(message: Message, bot: Bot) -> bool:
     await _warn_user(message, f"слишком частые сообщения. Мут на {mute_minutes} минут.", bot)
     await _store_mod_event(message.chat.id, message.from_user.id, "mute", 2)
     return True
+
+
+# ---------------------------------------------------------------------------
+# Тихое обучение: отправка подозрительных сообщений в лог-чат для разметки
+# ---------------------------------------------------------------------------
+
+_TRAINING_VIOLATION_LABELS = {
+    "profanity": "мат",
+    "rude": "грубость",
+    "aggression": "агрессия",
+}
+
+
+async def _send_training_sample(
+    message: Message,
+    bot: Bot,
+    severity: int,
+    violation_type: str | None,
+    confidence: float | None,
+) -> None:
+    """Отправляет сообщение в лог-чат с вопросом для разметки реакциями."""
+    if message.from_user is None or message.text is None:
+        return
+
+    vtype_label = _TRAINING_VIOLATION_LABELS.get(violation_type or "", violation_type or "н/д")
+    conf_pct = f"{confidence * 100:.0f}%" if confidence is not None else "н/д"
+
+    log_text = (
+        f"🔍 <b>Обучение модерации</b>\n\n"
+        f"<b>Текст:</b> {message.text[:500]}\n\n"
+        f"<b>AI считает:</b> {vtype_label} (severity {severity}, уверенность {conf_pct})\n\n"
+        f"Это нарушение? Поставьте реакцию:\n"
+        f"👍 — да, это грубость/мат\n"
+        f"👎 — нет, всё нормально"
+    )
+    try:
+        sent = await bot.send_message(
+            settings.admin_log_chat_id,
+            log_text,
+            parse_mode="HTML",
+        )
+        # Сохраняем образец в БД
+        async for session in get_session():
+            session.add(
+                ModerationTraining(
+                    chat_id=message.chat.id,
+                    user_id=message.from_user.id,
+                    message_text=message.text[:2000],
+                    ai_severity=severity,
+                    ai_violation_type=violation_type,
+                    ai_confidence=confidence,
+                    log_message_id=sent.message_id,
+                )
+            )
+            await session.commit()
+    except Exception:
+        logger.exception("Не удалось отправить обучающий образец в лог-чат")
+
+
+@router.message_reaction(F.chat.id == settings.admin_log_chat_id)
+async def handle_training_reaction(event: MessageReactionUpdated) -> None:
+    """Обрабатывает реакции на обучающие сообщения в лог-чате."""
+    if not settings.moderation_training_mode:
+        return
+    if event.user is None:
+        return
+
+    log_msg_id = event.message_id
+    voter_id = event.user.id
+
+    # Определяем какая реакция поставлена
+    new_emojis: set[str] = set()
+    for reaction in event.new_reaction or []:
+        emoji = getattr(reaction, "emoji", None)
+        if emoji:
+            new_emojis.add(emoji)
+
+    is_yes = "👍" in new_emojis
+    is_no = "👎" in new_emojis
+    if not is_yes and not is_no:
+        return
+
+    try:
+        async for session in get_session():
+            result = await session.execute(
+                select(ModerationTraining).where(
+                    ModerationTraining.log_message_id == log_msg_id,
+                )
+            )
+            sample = result.scalar_one_or_none()
+            if sample is None:
+                return
+
+            # Проверяем, не голосовал ли уже этот пользователь
+            voted_ids: list[int] = []
+            if sample.voted_user_ids:
+                try:
+                    voted_ids = json.loads(sample.voted_user_ids)
+                except (json.JSONDecodeError, TypeError):
+                    voted_ids = []
+            if voter_id in voted_ids:
+                return
+
+            voted_ids.append(voter_id)
+            sample.voted_user_ids = json.dumps(voted_ids)
+            if is_yes:
+                sample.vote_yes += 1
+            if is_no:
+                sample.vote_no += 1
+            await session.commit()
+            logger.info(
+                "Обучение: msg_id=%d, voter=%d, yes=%d, no=%d",
+                log_msg_id, voter_id, sample.vote_yes, sample.vote_no,
+            )
+    except Exception:
+        logger.exception("Ошибка при обработке реакции на обучающее сообщение")
 
 
 @router.message(StateFilter(None), flags={"block": False})

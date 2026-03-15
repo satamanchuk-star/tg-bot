@@ -717,7 +717,16 @@ async def main() -> None:
         await on_startup(bot)
         scheduler = await schedule_jobs(bot)
         try:
-            await dp.start_polling(bot)
+            await bot.delete_webhook(drop_pending_updates=True)
+            await dp.start_polling(
+                bot,
+                allowed_updates=[
+                    "message",
+                    "edited_message",
+                    "callback_query",
+                    "message_reaction",
+                ],
+            )
         except TelegramNetworkError as exc:
             logger.error(
                 "Не удалось запустить polling: нет доступа к Telegram API (%s). "
