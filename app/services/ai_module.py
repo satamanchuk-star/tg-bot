@@ -197,7 +197,8 @@ _MODERATION_SYSTEM_PROMPT = (
 )
 
 _ASSISTANT_SYSTEM_PROMPT = (
-    "Ты — Жабот, душа компании и неофициальный старожил чата жилого комплекса. "
+    "Ты — Жабот, душа компании и неофициальный старожил чата ЖК «Живописный» "
+    "(Ленинский городской округ, Московская область). "
     "Ты не просто помощник — ты тот самый сосед, который всё знает, всех знает, "
     "и к которому идут за советом, шуткой и поддержкой. "
     "Твоё имя — Жабот, и ты его обожаешь. Можешь обыгрывать его (жаба, квакать, болото, "
@@ -258,10 +259,14 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "медицинскими назначениями, юридическими консультациями, финансовыми советами, "
     "сбором персональных данных. Отказывай с юмором: "
     "«Это за пределами моей кувшинки, тут нужен специалист!».\n\n"
-    "ТОЧНОСТЬ ДАННЫХ: отвечай ТОЛЬКО на основе предоставленного контекста "
+    "ТОЧНОСТЬ ДАННЫХ (ВЫСШИЙ ПРИОРИТЕТ): отвечай СТРОГО на основе предоставленного контекста "
     "(«Справочник инфраструктуры ЖК», «Каноническая база знаний ЖК», «База знаний ЖК»). "
-    "НИКОГДА не выдумывай названия, адреса, телефоны, сайты. "
-    "Если информации нет — честно скажи. Если есть FAQ — передай суть своими словами. "
+    "НИКОГДА не выдумывай названия улиц, станций метро, номера маршрутов, адреса, телефоны, "
+    "сайты, расстояния и время в пути. Не дополняй данные из базы своими предположениями. "
+    "Если в контексте нет точной информации — честно скажи, что не знаешь, "
+    "и предложи спросить в чате или у соседей. "
+    "ЛУЧШЕ признать незнание, чем дать неверную информацию. "
+    "Если есть FAQ — передай суть своими словами. "
     "Если пользователь резок — мягко и с юмором напомни о дружелюбной атмосфере.\n\n"
     "СТРУКТУРА ОТВЕТА:\n"
     "- На практический вопрос давай ПОШАГОВЫЙ ответ: что делать первым, вторым, третьим.\n"
@@ -594,7 +599,7 @@ class OpenRouterProvider:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def _chat_completion(self, messages: list[dict[str, str]], *, chat_id: int) -> tuple[str, int]:
+    async def _chat_completion(self, messages: list[dict[str, str]], *, chat_id: int, temperature: float = 0.8) -> tuple[str, int]:
         if not settings.ai_key:
             raise RuntimeError("AI_KEY не задан")
         allowed, reason = await _can_use_remote_ai(chat_id)
@@ -602,7 +607,7 @@ class OpenRouterProvider:
             raise RuntimeError(f"AI лимит: {reason or 'превышен'}")
 
         payload = {
-            "temperature": 0.8,
+            "temperature": temperature,
             "max_tokens": settings.ai_max_tokens,
             "messages": messages,
         }
@@ -779,6 +784,7 @@ class OpenRouterProvider:
                 logger.warning("Веб-поиск при ответе ассистента не удался.")
 
         # Логируем какие контексты были найдены
+        has_factual_context = bool(resident_context) or bool(rag_text) or bool(faq_answer) or bool(places_context)
         logger.info(
             "AI assistant context: resident_kb=%s rag=%s faq=%s places=%s web=%s prompt=%r",
             bool(resident_context), bool(rag_text), bool(faq_answer), bool(places_context),
@@ -799,6 +805,29 @@ class OpenRouterProvider:
         if web_context:
             system_prompt += f"\n\n{web_context}"
 
+        # Усиление инструкции по точности при наличии фактического контекста
+        if has_factual_context:
+            system_prompt += (
+                "\n\n⚠️ КРИТИЧЕСКИ ВАЖНО: выше приведены РЕАЛЬНЫЕ данные из базы знаний "
+                "ЖК «Живописный» (Ленинский городской округ, Московская область). "
+                "Используй ТОЛЬКО эти данные для ответа. "
+                "ЗАПРЕЩЕНО:\n"
+                "- Придумывать названия улиц, станций метро, маршрутов, номеров автобусов\n"
+                "- Выдумывать адреса, телефоны, расстояния и время в пути\n"
+                "- Дополнять данные из базы своими предположениями или «общими знаниями»\n"
+                "- Путать наш ЖК с другими жилыми комплексами\n"
+                "Если в базе знаний нет конкретной информации по вопросу — честно скажи, "
+                "что точных данных у тебя нет, и предложи спросить в чате у соседей."
+            )
+        else:
+            # Даже без контекста — не выдумывать факты о ЖК
+            system_prompt += (
+                "\n\n⚠️ ВАЖНО: ты живёшь в ЖК «Живописный» (Ленинский городской округ, "
+                "Московская область). Если у тебя нет точных данных по вопросу — "
+                "НЕ выдумывай. Лучше честно скажи, что не знаешь, "
+                "и предложи спросить в чате у соседей."
+            )
+
         # Формируем историю как отдельные user/assistant сообщения
         messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
         for line in context[-20:]:
@@ -808,8 +837,10 @@ class OpenRouterProvider:
                 messages.append({"role": "assistant", "content": line[10:].strip()[:500]})
         messages.append({"role": "user", "content": safe_prompt})
 
+        # Снижаем температуру при наличии фактического контекста для точности
+        temperature = 0.6 if has_factual_context else 0.8
         try:
-            content, _ = await self._chat_completion(messages, chat_id=chat_id)
+            content, _ = await self._chat_completion(messages, chat_id=chat_id, temperature=temperature)
             reply = content[:800]
             return reply
         except RuntimeError as exc:

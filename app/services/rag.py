@@ -57,6 +57,7 @@ _STOP_WORDS = {
 _NORMALIZED_STOP_WORDS = {word.replace("ё", "е") for word in _STOP_WORDS}
 
 _CATEGORY_RULES: list[tuple[str, tuple[str, ...]]] = [
+    ("транспорт", ("метро", "автобус", "маршрут", "электричк", "остановк", "станци", "доехат", "добрат", "пешком", "транспорт")),
     ("парковка", ("парков", "шлагбаум", "машин", "мест", "паркинг")),
     ("безопасность_и_доступ", ("домофон", "код", "доступ", "замок", "сигнализац", "подъезд")),
     ("лифт", ("лифт", "этаж")),
@@ -342,7 +343,9 @@ def rank_rag_messages(
             -(item[0].created_at.timestamp() if item[0].created_at else 0),
         )
     )
-    ranked = [msg for msg, _ in scored]
+    # Отсекаем записи с очень низкой релевантностью, чтобы не загрязнять контекст
+    _MIN_RELEVANCE_SCORE = 0.05
+    ranked = [msg for msg, score in scored if score >= _MIN_RELEVANCE_SCORE]
     return ranked[:top_k] if top_k is not None else ranked
 
 
