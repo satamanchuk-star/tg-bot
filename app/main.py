@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from app.config import settings
 from app.db import Base, engine, get_session
 from app.handlers import admin, forms, games, help as help_handler, moderation, quiz, roulette
-from app.models import MigrationFlag, UserStat
+from app.models import MigrationFlag, RagMessage, UserStat
 from app.services.topic_stats import bump_topic_stat
 from app.services.games import (
     clear_game_command_messages,
@@ -258,6 +258,22 @@ async def apply_v11_stats_reset(session: AsyncSession) -> None:
     session.add(MigrationFlag(key="v11_stats_reset"))
     await session.commit()
     logger.info("v1.1: статистика сброшена")
+
+
+async def apply_rag_cleanup_v2(session: AsyncSession) -> None:
+    """Единоразовая очистка старых RAG-записей после перехода на каноническую KB."""
+    flag = await session.get(MigrationFlag, "rag_cleanup_v2_kb_migration")
+    if flag:
+        return
+
+    from sqlalchemy import delete, func, select
+    count_result = await session.execute(select(func.count()).select_from(RagMessage))
+    total = count_result.scalar() or 0
+    if total > 0:
+        await session.execute(delete(RagMessage))
+        logger.info("RAG cleanup v2: удалено %s старых записей (переход на KB).", total)
+    session.add(MigrationFlag(key="rag_cleanup_v2_kb_migration"))
+    await session.commit()
 
 
 async def send_daily_summary(bot: Bot) -> None:
@@ -570,6 +586,8 @@ async def on_startup(bot: Bot) -> None:
     # Применяем миграции
     async for session in get_session():
         await apply_v11_stats_reset(session)
+    async for session in get_session():
+        await apply_rag_cleanup_v2(session)
     await heartbeat_job(bot)
     if telegram_available:
         # Публичные команды для всех пользователей
