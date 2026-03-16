@@ -183,7 +183,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("AI_KEY", "OPENROUTER_API_KEY", "AI_API_KEY"),
     )
     ai_model: str = Field(
-        default="deepseek/deepseek-chat",
+        default="deepseek/deepseek-v3.2",
         validation_alias=AliasChoices("AI_MODEL", "ai_model"),
     )
     ai_max_tokens: int = 800
