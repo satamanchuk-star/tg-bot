@@ -19,8 +19,14 @@ _STOP_WORDS = {
 
 _STRONG_KEYWORDS = {
     "шлагбаум", "дворецкий", "пропуск", "гостевой", "лифт", "лифте", "лифту",
-    "аварийка", "аварийную", "ук", "век", "видеонаблюдение", "камер", "гранлайн",
-    "мособлеирц", "показания", "перерасчет", "перерасчёт", "лифтек",
+    "аварийка", "аварийную", "авария", "затопило", "протечка",
+    "ук", "век", "управляющая",
+    "видеонаблюдение", "камер", "крепость24",
+    "гранлайн", "интернет", "провайдер",
+    "мособлеирц", "показания", "перерасчет", "перерасчёт", "счётчик", "счетчик",
+    "лифтек", "мосэнергосбыт", "электричество",
+    "участковый", "полиция",
+    "правила", "правил",
 }
 
 
@@ -184,15 +190,12 @@ def search_resident_kb(query: str, *, context: list[str] | None = None, top_k: i
 
 
 def _style_answer(base: str, *, category: str) -> str:
-    if category == "лифт":
-        return f"По лифту лучше сразу так: {base}"
-    if category == "аварийка":
-        return f"Если ситуация срочная, лучше не ждать: {base}"
+    # Ответы из KB уже содержат структуру и эмодзи, не добавляем лишнее
     return base
 
 
 def build_resident_answer(query: str, *, context: list[str] | None = None) -> str | None:
-    result = search_resident_kb(query, context=context, top_k=3)
+    result = search_resident_kb(query, context=context, top_k=4)
     if not result.matches:
         return None
 
@@ -200,16 +203,26 @@ def build_resident_answer(query: str, *, context: list[str] | None = None) -> st
     if best.score < 0.6:
         return None
 
-    # Если есть несколько близких ответов, объединяем короткой выжимкой.
+    # Если есть несколько близких ответов из разных категорий — объединяем.
     close_matches = [m for m in result.matches if m.score >= best.score - 0.15]
     if len(close_matches) == 1:
         return _style_answer(close_matches[0].entry.answer, category=close_matches[0].entry.category)
 
+    # Объединяем ответы из разных категорий, убирая дубли
+    seen_categories: set[str] = set()
     unique_answers: list[str] = []
     for item in close_matches:
-        if item.entry.answer not in unique_answers:
-            unique_answers.append(item.entry.answer)
-    return " ".join(unique_answers[:2])[:800]
+        # Не дублируем ответы из одной категории
+        if item.entry.category in seen_categories:
+            continue
+        seen_categories.add(item.entry.category)
+        unique_answers.append(item.entry.answer)
+
+    if len(unique_answers) == 1:
+        return unique_answers[0]
+
+    # Разделяем ответы визуально для читаемости
+    return "\n\n".join(unique_answers[:2])[:1200]
 
 
 def build_resident_context(query: str, *, context: list[str] | None = None, top_k: int = 6) -> str:
@@ -217,6 +230,15 @@ def build_resident_context(query: str, *, context: list[str] | None = None, top_
     if not result.matches:
         return ""
     parts: list[str] = []
+    seen_ids: set[str] = set()
     for idx, match in enumerate(result.matches, start=1):
-        parts.append(f"[{idx}] ({match.entry.category}) {match.entry.answer}")
-    return "\n".join(parts)
+        # Не дублируем записи
+        if match.entry.id in seen_ids:
+            continue
+        seen_ids.add(match.entry.id)
+        relevance = "высокая" if match.score >= 0.8 else "средняя"
+        parts.append(
+            f"[{idx}] Категория: {match.entry.category} | Релевантность: {relevance}\n"
+            f"{match.entry.answer}"
+        )
+    return "\n\n".join(parts)
