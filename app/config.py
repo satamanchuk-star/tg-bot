@@ -183,7 +183,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("AI_KEY", "OPENROUTER_API_KEY", "AI_API_KEY"),
     )
     ai_model: str = Field(
-        default="qwen/qwen3.5-flash-02-23",
+        default="deepseek/deepseek-chat",
         validation_alias=AliasChoices("AI_MODEL", "ai_model"),
     )
     ai_max_tokens: int = 800
