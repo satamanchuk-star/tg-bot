@@ -343,9 +343,7 @@ def rank_rag_messages(
             -(item[0].created_at.timestamp() if item[0].created_at else 0),
         )
     )
-    # Отсекаем записи с очень низкой релевантностью, чтобы не загрязнять контекст
-    _MIN_RELEVANCE_SCORE = 0.05
-    ranked = [msg for msg, score in scored if score >= _MIN_RELEVANCE_SCORE]
+    ranked = [msg for msg, _score in scored]
     return ranked[:top_k] if top_k is not None else ranked
 
 

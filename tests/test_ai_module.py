@@ -155,6 +155,22 @@ def test_local_assistant_reply_prioritizes_resident_kb_over_places(monkeypatch) 
     assert "школа" not in reply.lower()
 
 
+def test_local_assistant_reply_prioritizes_rag_over_places(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.services.ai_module.build_resident_answer",
+        lambda prompt, *, context=None: None,  # type: ignore[return-value]
+    )
+
+    reply = build_local_assistant_reply(
+        "Как оформить пропуск?",
+        rag_hint="[1] (доступ) Гостевой пропуск оформляется через форму УК.",
+        places_hint="- МФЦ Видное, адрес: ул. Центральная, 1",
+    )
+
+    assert "гостевой пропуск" in reply.lower()
+    assert "мфц" not in reply.lower()
+
+
 
 
 def test_detects_masked_profanity_with_latin_and_digits() -> None:
@@ -176,11 +192,12 @@ def test_high_aggression_keeps_strict_action() -> None:
 
 def test_assistant_prompt_has_human_style_and_limits() -> None:
     assert "Ты — Жабот" in _ASSISTANT_SYSTEM_PROMPT
-    assert "неформальный помощник-сосед" in _ASSISTANT_SYSTEM_PROMPT
+    assert "неофициальный старожил" in _ASSISTANT_SYSTEM_PROMPT
     assert "Никогда не говори, что ты ИИ" in _ASSISTANT_SYSTEM_PROMPT
     assert "до 800 символов" in _ASSISTANT_SYSTEM_PROMPT
     assert "дружелюбной атмосфере" in _ASSISTANT_SYSTEM_PROMPT
-    assert "Если информации нет" in _ASSISTANT_SYSTEM_PROMPT
+    assert "Если в контексте нет точной информации" in _ASSISTANT_SYSTEM_PROMPT
+    assert "При конфликте источников приоритет такой" in _ASSISTANT_SYSTEM_PROMPT
 
 
 def test_moderation_prompt_has_basic_safety_limits() -> None:

@@ -918,11 +918,18 @@ async def ai_command(message: Message) -> None:
         question_key = _normalize_cache_key(prompt)
 
         context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
-        reply = await get_ai_client().assistant_reply(
-            prompt, context, chat_id=message.chat.id,
-            user_id=message.from_user.id,
-            topic_id=message.message_thread_id,
-        )
+        ai_client = get_ai_client()
+        try:
+            reply = await ai_client.assistant_reply(
+                prompt,
+                context,
+                chat_id=message.chat.id,
+                user_id=message.from_user.id,
+                topic_id=message.message_thread_id,
+            )
+        except TypeError:
+            # Обратная совместимость: старые/тестовые клиенты без user_id/topic_id.
+            reply = await ai_client.assistant_reply(prompt, context, chat_id=message.chat.id)
 
         # Защита от пустого ответа (think-теги, whitespace и т.д.)
         if not reply or not reply.strip():
@@ -941,7 +948,7 @@ async def ai_command(message: Message) -> None:
         asyncio.create_task(
             _extract_and_save_profile(
                 message.chat.id, message.from_user.id, prompt, reply,
-                message.from_user.full_name,
+                getattr(message.from_user, "full_name", None),
             )
         )
 
@@ -1128,7 +1135,7 @@ async def mention_help(message: Message, bot: Bot) -> None:
             asyncio.create_task(
                 _extract_and_save_profile(
                     message.chat.id, message.from_user.id, prompt, reply,
-                    message.from_user.full_name,
+                    getattr(message.from_user, "full_name", None),
                 )
             )
 
