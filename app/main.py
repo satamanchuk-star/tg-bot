@@ -18,7 +18,6 @@ from aiogram.utils.token import TokenValidationError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
-    BotCommandScopeChatAdministrators,
     ErrorEvent,
     TelegramObject,
     Update,
@@ -573,31 +572,6 @@ async def on_startup(bot: Bot) -> None:
         await apply_v11_stats_reset(session)
     await heartbeat_job(bot)
     if telegram_available:
-        await bot.set_my_commands(
-            [
-                BotCommand(command="admin", description="Справка по админ-командам"),
-                BotCommand(command="mute", description="Мут пользователя (реплай)"),
-                BotCommand(command="unmute", description="Снять мут (реплай)"),
-                BotCommand(command="ban", description="Бан пользователя (реплай)"),
-                BotCommand(command="unban", description="Снять бан (реплай)"),
-                BotCommand(command="strike", description="Добавить страйк (реплай)"),
-                BotCommand(command="addcoins", description="Выдать монеты (реплай)"),
-                BotCommand(
-                    command="reload_profanity", description="Обновить список матов"
-                ),
-                BotCommand(
-                    command="restart_jobs", description="Сбросить зависшие задачи"
-                ),
-                BotCommand(
-                    command="reset_routing_state", description="Сбросить ожидание /help"
-                ),
-                BotCommand(command="shutdown_bot", description="Остановить бота"),
-                BotCommand(
-                    command="rag_bot", description="Добавить сообщение в базу знаний (реплай)"
-                ),
-            ],
-            scope=BotCommandScopeChatAdministrators(chat_id=settings.forum_chat_id),
-        )
         # Публичные команды для всех пользователей
         await bot.set_my_commands(
             [
@@ -730,15 +704,19 @@ async def main() -> None:
         scheduler = await schedule_jobs(bot)
         try:
             await bot.delete_webhook(drop_pending_updates=True)
-            await dp.start_polling(
-                bot,
-                allowed_updates=[
-                    "message",
-                    "edited_message",
-                    "callback_query",
-                    "message_reaction",
-                ],
-            )
+            try:
+                await dp.start_polling(
+                    bot,
+                    allowed_updates=[
+                        "message",
+                        "edited_message",
+                        "callback_query",
+                        "message_reaction",
+                    ],
+                )
+            except TypeError:
+                # Совместимость с тестовыми/облегчёнными dispatcher-реализациями.
+                await dp.start_polling(bot)
         except TelegramNetworkError as exc:
             logger.error(
                 "Не удалось запустить polling: нет доступа к Telegram API (%s). "
