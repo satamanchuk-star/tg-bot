@@ -229,9 +229,14 @@ def build_resident_context(query: str, *, context: list[str] | None = None, top_
     result = search_resident_kb(query, context=context, top_k=top_k)
     if not result.matches:
         return ""
+    # Отсекаем записи с низкой релевантностью, чтобы не загрязнять контекст ИИ
+    _MIN_CONTEXT_SCORE = 0.35
+    relevant = [m for m in result.matches if m.score >= _MIN_CONTEXT_SCORE]
+    if not relevant:
+        return ""
     parts: list[str] = []
     seen_ids: set[str] = set()
-    for idx, match in enumerate(result.matches, start=1):
+    for idx, match in enumerate(relevant, start=1):
         # Не дублируем записи
         if match.entry.id in seen_ids:
             continue
