@@ -464,3 +464,10 @@ async def moderate_message(message: Message, bot: Bot) -> None:
             await maybe_proactive_reply(message, bot)
         except Exception:
             logger.warning("Ошибка проактивной подсказки")
+
+        # Контекстный комментарий: бот вклинивается в активные обсуждения
+        try:
+            from app.services.proactive import maybe_topic_comment
+            await maybe_topic_comment(message, bot)
+        except Exception:
+            logger.warning("Ошибка контекстного комментария")

@@ -32,6 +32,7 @@ from app.services.ai_module import (
 )
 from app.services.ai_usage import next_reset_delta, reset_ai_usage
 from app.services.rag import add_rag_message, build_canonical_text, get_rag_count, systematize_rag
+from app.services.resident_services import add_service, get_services_count
 from app.services.admin_stats_reset import reset_runtime_statistics
 from app.utils.profanity import load_profanity, load_profanity_exceptions
 
@@ -403,6 +404,105 @@ async def restart_jobs(message: Message, bot: Bot, state: FSMContext) -> None:
         await message.reply(f"Очищено: {', '.join(cleared)}")
     else:
         await message.reply("Нет зависших задач.")
+
+
+_SERVICES_TOPIC_ID = 3240
+
+
+@router.message(Command("usluga"))
+async def usluga_command(message: Message, bot: Bot) -> None:
+    """Добавляет услугу от жителя в каталог. Только для админов, только в топике услуг."""
+    if not await _ensure_admin(message, bot):
+        return
+
+    # Проверяем, что команда вызвана в топике услуг
+    services_topic = getattr(settings, "topic_services", None) or _SERVICES_TOPIC_ID
+    if message.message_thread_id != services_topic:
+        await message.reply(
+            "Команда /usluga работает только в топике «Услуги от жителей ЖК»."
+        )
+        return
+
+    if message.reply_to_message is None:
+        await message.reply(
+            "Используйте /usluga как реплай на сообщение жителя с описанием услуги."
+        )
+        return
+
+    target_msg = message.reply_to_message
+    text = target_msg.text or target_msg.caption
+    if not text or len(text.strip()) < 5:
+        await message.reply("Сообщение слишком короткое для добавления в каталог услуг.")
+        return
+
+    admin_id = int(_admin_id(message))
+    provider_user_id = target_msg.from_user.id if target_msg.from_user else 0
+    provider_name = target_msg.from_user.full_name if target_msg.from_user else None
+
+    # AI-категоризация услуги
+    ai_description = None
+    ai_keywords = None
+    ai_category = None
+    ai_client = get_ai_client()
+    try:
+        from app.services.ai_module import _strip_think_tags
+        provider = ai_client._provider
+        if hasattr(provider, "_chat_completion"):
+            import json as _json
+            content, _ = await provider._chat_completion(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Ты систематизируешь услуги от жителей ЖК. Верни только JSON:\n"
+                            '{"description":"краткое описание услуги до 200 символов",'
+                            '"keywords":"ключевые слова через запятую для поиска",'
+                            '"category":"кондитерская|красота|ремонт|обучение|дети|авто|здоровье|уборка|доставка|фото_видео|IT|юридические|рукоделие|общее"}\n'
+                            "Description — перефразируй суть услуги кратко и понятно.\n"
+                            "Keywords — слова, по которым житель мог бы найти эту услугу.\n"
+                            "Category — одна из перечисленных категорий."
+                        ),
+                    },
+                    {"role": "user", "content": text.strip()[:2000]},
+                ],
+                chat_id=settings.forum_chat_id,
+            )
+            data = _json.loads(_strip_think_tags(content))
+            ai_description = str(data.get("description", ""))[:500] or None
+            ai_keywords = str(data.get("keywords", ""))[:1000] or None
+            ai_category = str(data.get("category", ""))[:100] or None
+    except Exception:
+        logger.warning("AI-категоризация услуги не удалась, используем локальный fallback.")
+
+    async for session in get_session():
+        record = await add_service(
+            session,
+            chat_id=settings.forum_chat_id,
+            message_text=text.strip(),
+            provider_user_id=provider_user_id,
+            provider_name=provider_name,
+            source_message_id=target_msg.message_id,
+            added_by_user_id=admin_id,
+            ai_description=ai_description,
+            ai_keywords=ai_keywords,
+            ai_category=ai_category,
+        )
+        await session.commit()
+        count = await get_services_count(session, settings.forum_chat_id)
+
+    cat_label = record.category
+    if ai_description:
+        cat_label += " (AI)"
+    await message.reply(
+        f"✅ Услуга добавлена в каталог!\n"
+        f"Категория: {cat_label}\n"
+        f"Описание: {record.description[:200]}\n"
+        f"Всего услуг в каталоге: {count}"
+    )
+    logger.info(
+        "USLUGA: админ %s добавил услугу от %s (msg=%s, категория=%s)",
+        admin_id, provider_user_id, target_msg.message_id, record.category,
+    )
 
 
 @router.message(Command("rag_bot"))
