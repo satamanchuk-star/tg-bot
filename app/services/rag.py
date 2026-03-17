@@ -334,12 +334,15 @@ def rank_rag_messages(
         # Итоговый score: tfidf + мягкое совпадение токенов, затем time_decay
         lexical_score = 0.75 * tfidf_score + 0.25 * overlap_score
         final_score = lexical_score * (0.7 + 0.3 * decay)
+        # Админские записи важны, но не должны подавлять релевантность запроса.
+        if msg.is_admin:
+            final_score += 0.08
         scored.append((msg, final_score))
 
     scored.sort(
         key=lambda item: (
-            not bool(item[0].is_admin),
             -item[1],
+            not bool(item[0].is_admin),
             -(item[0].created_at.timestamp() if item[0].created_at else 0),
         )
     )

@@ -194,9 +194,9 @@ async def _prepare_admin_priority_messages() -> list[str]:
     return [msg.message_text for msg in ranked]
 
 
-def test_rag_admin_messages_have_max_priority() -> None:
+def test_rag_prefers_relevant_messages_over_admin_flag() -> None:
     messages = asyncio.run(_prepare_admin_priority_messages())
-    assert messages[0] == "Лифт временно отключат сегодня с 14 до 16."
+    assert messages[0] == "Шлагбаум снова завис, как открыть?"
 
 
 def test_rag_classification_supports_new_categories() -> None:
