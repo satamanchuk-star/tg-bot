@@ -729,6 +729,13 @@ class OpenRouterProvider:
         if not is_assistant_topic_allowed(safe_prompt):
             return random.choice(_FORBIDDEN_TOPIC_REPLIES)
 
+        # Жёсткий приоритет канонической KB: если есть уверенный ответ,
+        # возвращаем его сразу и не даём LLM смешивать источники.
+        resident_answer = build_resident_answer(safe_prompt, context=context)
+        if resident_answer:
+            logger.info("AI assistant source=resident_kb prompt=%r", safe_prompt[:100])
+            return resident_answer
+
         rag_text = await _get_rag_context(chat_id, safe_prompt)
         faq_answer = await _get_faq_answer(chat_id, safe_prompt)
         places_context = await _get_places_context(safe_prompt)
