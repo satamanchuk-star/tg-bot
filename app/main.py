@@ -29,7 +29,16 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.config import settings
 from app.db import Base, engine, get_session
-from app.handlers import admin, forms, games, help as help_handler, moderation, quiz, roulette
+from app.handlers import (
+    admin,
+    forms,
+    games,
+    help as help_handler,
+    moderation,
+    quiz,
+    roulette,
+    text_publish,
+)
 from app.models import MigrationFlag, RagMessage, UserStat
 from app.services.topic_stats import bump_topic_stat
 from app.services.games import (
@@ -713,6 +722,7 @@ async def main() -> None:
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     dp.include_router(quiz.router)  # викторина (команды /umnij_start, /bal, /topumnij)
     dp.include_router(roulette.router)  # рулетка (команда /bet)
+    dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     # stats.router убран — статистика через middleware
 
