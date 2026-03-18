@@ -374,3 +374,16 @@ class Place(Base):
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
     )
+
+
+class ModerationCalibration(Base):
+    """Почему: хранит историю автокалибровки модерации на основе feedback."""
+    __tablename__ = "moderation_calibrations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    violation_type: Mapped[str] = mapped_column(String(50))
+    original_severity: Mapped[int] = mapped_column(Integer)
+    adjusted_severity: Mapped[int] = mapped_column(Integer)
+    reason: Mapped[str] = mapped_column(Text)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -1062,6 +1062,37 @@ async def mention_help(message: Message, bot: Bot) -> None:
         await message.reply(AI_RATE_LIMIT_TEXT)
         return
 
+    # Проверка автокоррекции: если пользователь поправил бота в реплае
+    if (
+        prompt
+        and message.reply_to_message
+        and message.reply_to_message.from_user
+        and message.reply_to_message.from_user.id == me.id
+    ):
+        bot_reply_text = (
+            message.reply_to_message.text
+            or message.reply_to_message.caption
+            or ""
+        ).strip()
+        if bot_reply_text:
+            from app.services.learning import is_likely_correction, detect_and_apply_correction
+            if is_likely_correction(prompt, bot_reply_text):
+                try:
+                    async for session in get_session():
+                        applied = await detect_and_apply_correction(
+                            session,
+                            chat_id=message.chat.id,
+                            user_id=message.from_user.id,
+                            user_text=prompt,
+                            bot_reply=bot_reply_text,
+                        )
+                        if applied:
+                            await message.reply("Спасибо за поправку! Записал, в следующий раз не ошибусь 📝")
+                            return
+                        break
+                except Exception:
+                    logger.warning("Не удалось обработать коррекцию.")
+
     if prompt:
         context: list[str] = []
         # Дедупликация: проверяем, не отвечали ли недавно на такой же запрос

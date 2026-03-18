@@ -148,6 +148,63 @@ def clear_assistant_cache() -> int:
     _ASSISTANT_CACHE.clear()
     return count
 
+
+# ---------------------------------------------------------------------------
+# Topic-aware контекст: маппинг topic_id → подсказка для промпта
+# ---------------------------------------------------------------------------
+_TOPIC_CONTEXT_MAP: dict[int, tuple[str, str]] = {}
+
+
+def _build_topic_context_map() -> dict[int, tuple[str, str]]:
+    """Строит маппинг topic_id → (название_топика, подсказка для промпта)."""
+    mapping: dict[int, tuple[str, str]] = {}
+    topic_data = [
+        (settings.topic_gate, "Шлагбаум",
+         "Пользователь пишет в топике про шлагбаум, въезд/выезд, пропуска. "
+         "Отвечай про шлагбаум, «Дворецкий», пропуска, диспетчера."),
+        (settings.topic_repair, "Ремонт",
+         "Пользователь в топике ремонта. Контекст: отделка квартир, мастера, материалы."),
+        (settings.topic_complaints, "Жалобы",
+         "Пользователь в топике жалоб. Помоги оформить обращение в УК или на портал."),
+        (settings.topic_pets, "Питомцы",
+         "Пользователь в топике о питомцах. Контекст: животные, ветклиники, правила выгула."),
+        (settings.topic_parents, "Мамы и папы",
+         "Пользователь в родительском топике. Контекст: дети, школы, садики, площадки."),
+        (settings.topic_realty, "Недвижимость",
+         "Пользователь в топике недвижимости. Контекст: аренда, продажа, покупка квартир."),
+        (settings.topic_rides, "Попутчики",
+         "Пользователь ищет попутчика или спрашивает про транспорт."),
+        (settings.topic_services, "Услуги",
+         "Пользователь в топике услуг. Предлагай релевантных специалистов из каталога."),
+        (settings.topic_uk, "УК",
+         "Пользователь в топике УК. Контекст: управляющая компания, заявки, жалобы на УК."),
+        (settings.topic_smoke, "Курилка",
+         "Неформальное обсуждение. Можно свободнее с юмором, но оставайся полезным."),
+        (settings.topic_market, "Барахолка",
+         "Пользователь в барахолке. Контекст: продажа/покупка/обмен вещей."),
+        (settings.topic_neighbors, "Соседи",
+         "Топик знакомств. Будь особенно приветлив и дружелюбен."),
+    ]
+    for topic_id, name, hint in topic_data:
+        if topic_id is not None:
+            mapping[topic_id] = (name, hint)
+    return mapping
+
+
+def get_topic_hint(topic_id: int | None) -> str:
+    """Возвращает контекстную подсказку по topic_id для system prompt."""
+    global _TOPIC_CONTEXT_MAP
+    if not _TOPIC_CONTEXT_MAP:
+        _TOPIC_CONTEXT_MAP = _build_topic_context_map()
+    if topic_id is None:
+        return ""
+    entry = _TOPIC_CONTEXT_MAP.get(topic_id)
+    if entry is None:
+        return ""
+    name, hint = entry
+    return f"\n[Контекст топика «{name}»: {hint}]"
+
+
 _MODERATION_SYSTEM_PROMPT = (
     "Ты — модератор чата жилого комплекса (ЖК). Участники — соседи, общение неформальное.\n"
     "Верни только JSON без дополнительного текста:\n"
@@ -491,7 +548,10 @@ class AiProvider(Protocol):
 
     async def moderate(self, text: str, *, chat_id: int, context: list[str] | None = None) -> ModerationDecision: ...
 
-    async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int) -> str: ...
+    async def assistant_reply(
+        self, prompt: str, context: list[str], *, chat_id: int,
+        user_id: int | None = None, topic_id: int | None = None,
+    ) -> str: ...
 
     async def evaluate_quiz_answer(
         self,
@@ -522,7 +582,10 @@ class StubAiProvider:
         decision.used_fallback = True
         return decision
 
-    async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int) -> str:
+    async def assistant_reply(
+        self, prompt: str, context: list[str], *, chat_id: int,
+        user_id: int | None = None, topic_id: int | None = None,
+    ) -> str:
         safe_prompt = mask_personal_data(prompt)[:1000]
         if not is_assistant_topic_allowed(safe_prompt):
             return random.choice(_FORBIDDEN_TOPIC_REPLIES)
@@ -724,7 +787,10 @@ class OpenRouterProvider:
             decision.used_fallback = True
             return decision
 
-    async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int) -> str:
+    async def assistant_reply(
+        self, prompt: str, context: list[str], *, chat_id: int,
+        user_id: int | None = None, topic_id: int | None = None,
+    ) -> str:
         safe_prompt = mask_personal_data(prompt)[:1000]
         if not is_assistant_topic_allowed(safe_prompt):
             return random.choice(_FORBIDDEN_TOPIC_REPLIES)
@@ -733,7 +799,10 @@ class OpenRouterProvider:
         # возвращаем его сразу и не даём LLM смешивать источники.
         resident_answer = build_resident_answer(safe_prompt, context=context)
         if resident_answer:
-            logger.info("AI assistant source=resident_kb prompt=%r", safe_prompt[:100])
+            logger.info(
+                "ANSWER_SOURCE: source=resident_kb prompt=%r user_id=%s topic_id=%s",
+                safe_prompt[:80], user_id, topic_id,
+            )
             return resident_answer
 
         rag_text = await _get_rag_context(chat_id, safe_prompt)
@@ -742,6 +811,11 @@ class OpenRouterProvider:
         services_context = await _get_services_context(chat_id, safe_prompt)
 
         system_prompt = _ASSISTANT_SYSTEM_PROMPT
+
+        # Добавляем контекст топика
+        topic_hint = get_topic_hint(topic_id)
+        if topic_hint:
+            system_prompt += topic_hint
 
         # Рандомный hint стиля для вариативности ответов
         style_hints = (
@@ -784,12 +858,27 @@ class OpenRouterProvider:
             except Exception:
                 logger.warning("Веб-поиск при ответе ассистента не удался.")
 
-        # Логируем какие контексты были найдены
+        # Логируем какие контексты были найдены и источник ответа
         has_factual_context = bool(resident_context) or bool(rag_text) or bool(faq_answer) or bool(places_context) or bool(services_context)
+        if resident_context:
+            _answer_source = "resident_kb_context"
+        elif rag_text:
+            _answer_source = "rag"
+        elif faq_answer:
+            _answer_source = "faq"
+        elif places_context:
+            _answer_source = "places"
+        elif services_context:
+            _answer_source = "services"
+        elif web_context:
+            _answer_source = "web"
+        else:
+            _answer_source = "fallback"
         logger.info(
-            "AI assistant context: resident_kb=%s rag=%s faq=%s places=%s services=%s web=%s prompt=%r",
-            bool(resident_context), bool(rag_text), bool(faq_answer), bool(places_context),
-            bool(services_context), bool(web_context), safe_prompt[:100],
+            "ANSWER_SOURCE: source=%s resident_ctx=%s rag=%s faq=%s places=%s services=%s web=%s prompt=%r user_id=%s topic_id=%s",
+            _answer_source, bool(resident_context), bool(rag_text), bool(faq_answer),
+            bool(places_context), bool(services_context), bool(web_context),
+            safe_prompt[:80], user_id, topic_id,
         )
 
         if resident_context:
@@ -1055,7 +1144,10 @@ class AiModuleClient:
             enriched_context = await _enrich_context(enriched_context, chat_id, user_id, topic_id)
         try:
             return await asyncio.wait_for(
-                self._provider.assistant_reply(prompt, enriched_context, chat_id=chat_id),
+                self._provider.assistant_reply(
+                    prompt, enriched_context, chat_id=chat_id,
+                    user_id=user_id, topic_id=topic_id,
+                ),
                 timeout=_ASSISTANT_SOFT_TIMEOUT_SECONDS,
             )
         except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
@@ -1579,6 +1671,7 @@ def build_local_assistant_reply(
     # 1. Каноническая база знаний ЖК — ГЛАВНЫЙ источник (из resident_kb.json)
     resident_answer = build_resident_answer(normalized_prompt, context=context)
     if resident_answer:
+        logger.info("ANSWER_SOURCE: source=resident_kb prompt=%r", normalized_prompt[:80])
         return resident_answer
 
     # 2. RAG — записи, добавленные админами через /rag_bot
@@ -1589,10 +1682,12 @@ def build_local_assistant_reply(
             "Нашёл в наших записях:",
             "Есть данные по этой теме:",
         )
+        logger.info("ANSWER_SOURCE: source=rag prompt=%r", normalized_prompt[:80])
         return f"{random.choice(intros)}\n{rag_hint.strip()[:700]}"
 
     # 3. FAQ-ответ (закреплённый ответ, набравший положительные оценки)
     if faq_hint and faq_hint.strip():
+        logger.info("ANSWER_SOURCE: source=faq prompt=%r", normalized_prompt[:80])
         return faq_hint.strip()[:800]
 
     # 4. Услуги от жителей ЖК
@@ -1603,6 +1698,7 @@ def build_local_assistant_reply(
             "Нашёл среди услуг жителей:",
             "У нас в доме есть кто занимается этим:",
         )
+        logger.info("ANSWER_SOURCE: source=services prompt=%r", normalized_prompt[:80])
         return f"{random.choice(intros)}\n{services_hint.strip()[:700]}"
 
     # 5. Данные из БД инфраструктуры
@@ -1613,6 +1709,7 @@ def build_local_assistant_reply(
             "Есть информация:",
             "Нашёл кое-что полезное:",
         )
+        logger.info("ANSWER_SOURCE: source=places prompt=%r", normalized_prompt[:80])
         return f"{random.choice(intros)}\n{places_hint.strip()[:700]}"
 
     # 6. Результаты веб-поиска
@@ -1622,14 +1719,17 @@ def build_local_assistant_reply(
             "По результатам поиска:",
             "Нашёл в сети по запросу:",
         )
+        logger.info("ANSWER_SOURCE: source=web prompt=%r", normalized_prompt[:80])
         return f"{random.choice(intros)}\n{web_hint.strip()[:700]}"
 
     # 7. Локальные правила-подсказки (шлагбаум, лифт, шум и т.д.)
     rule_reply = _assistant_rule_reply(normalized_prompt)
     if rule_reply:
+        logger.info("ANSWER_SOURCE: source=rule prompt=%r", normalized_prompt[:80])
         return rule_reply
 
     # 8. Не знаю — честно говорю
+    logger.info("ANSWER_SOURCE: source=fallback prompt=%r", normalized_prompt[:80])
     return _pick_fallback_variant(normalized_prompt)
 
 
