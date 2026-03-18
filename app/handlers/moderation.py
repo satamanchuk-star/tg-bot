@@ -457,17 +457,7 @@ async def moderate_message(message: Message, bot: Bot) -> None:
         except Exception:
             pass
 
-    # Проактивная подсказка: только если сообщение не модерировано
-    if not moderated and message.chat.id == settings.forum_chat_id:
-        try:
-            from app.services.proactive import maybe_proactive_reply
-            await maybe_proactive_reply(message, bot)
-        except Exception:
-            logger.warning("Ошибка проактивной подсказки")
-
-        # Контекстный комментарий: бот вклинивается в активные обсуждения
-        try:
-            from app.services.proactive import maybe_topic_comment
-            await maybe_topic_comment(message, bot)
-        except Exception:
-            logger.warning("Ошибка контекстного комментария")
+    # Проактивные ответы и комментарии отключены:
+    # maybe_proactive_reply — бот отвечал на вопросы, которые ему не задавали
+    # maybe_topic_comment — бот вклинивался в обсуждения без приглашения
+    # Пользователи могут @-упомянуть бота, когда хотят его помощи
