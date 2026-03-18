@@ -83,8 +83,8 @@ class BotMentionFilter(BaseFilter):
 
         has_direct_mention = _is_bot_mentioned(message, me) or _is_bot_name_called(text, me)
 
-        # Реплай на бота: только если есть содержательный текст (≥ 5 символов без пробелов)
-        # и это не просто цитирование бота
+        # Реплай на бота: только если содержательный вопрос (≥ 15 символов + знак вопроса)
+        # Короткие реплаи типа "ахах точно" или "согласен" — это обсуждение между людьми, не обращение к боту
         is_reply_to_bot = False
         if (
             not has_direct_mention
@@ -93,8 +93,11 @@ class BotMentionFilter(BaseFilter):
             and message.reply_to_message.from_user.id == me.id
         ):
             stripped = text.strip()
-            # Минимум 5 символов реального текста и не начинается с команды
-            if len(stripped) >= 5 and not stripped.startswith("/"):
+            if (
+                len(stripped) >= 15
+                and not stripped.startswith("/")
+                and "?" in stripped
+            ):
                 is_reply_to_bot = True
 
         return has_direct_mention or is_reply_to_bot
@@ -681,7 +684,14 @@ def _extract_ai_prompt(message: Message) -> str:
         parts = text.split(maxsplit=1)
         text = parts[1] if len(parts) > 1 else ""
 
-    text = re.sub(r"@\w+", " ", text)
+    # Удаляем только @username самого бота, сохраняя остальные упоминания как контекст
+    if _BOT_PROFILE_CACHE and _BOT_PROFILE_CACHE.username:
+        text = re.sub(
+            rf"@{re.escape(_BOT_PROFILE_CACHE.username)}\b", " ", text, flags=re.IGNORECASE,
+        )
+    else:
+        # Fallback: если кэш ещё не заполнен, удаляем все @-упоминания (старое поведение)
+        text = re.sub(r"@\w+", " ", text)
     text = re.sub(r"^(бот|bot|помощник|ассистент)[,:\s-]*", "", text, flags=re.IGNORECASE)
     text = " ".join(text.split())
     return text[:1000]
@@ -790,17 +800,23 @@ def _is_bot_mentioned(message: Message, bot_user: object) -> bool:
 
 
 def _is_bot_name_called(text: str | None, bot_user: object) -> bool:
-    """Проверяет обращение к боту по имени без @."""
+    """Проверяет обращение к боту по имени без @.
+
+    Имя должно быть В НАЧАЛЕ сообщения (позиция обращения), чтобы
+    не срабатывать на упоминания вроде "спроси у Жабота" в середине предложения.
+    """
     if text is None:
         return False
-    lowered = text.casefold()
+    # Берём только начало сообщения — позиция обращения
+    first_part = text[:40].casefold()
     first_name = getattr(bot_user, "first_name", None)
-    full_name = getattr(bot_user, "full_name", None)
-    candidates = [name for name in (first_name, full_name) if name]
-    for name in candidates:
-        pattern = rf"(?<!\w){re.escape(str(name).casefold())}(?!\w)"
-        if re.search(pattern, lowered):
-            return True
+    if not first_name:
+        return False
+    name_lower = str(first_name).casefold()
+    # Имя должно быть в самом начале, возможно после пробелов, перед запятой/двоеточием/пробелом
+    pattern = rf"^\s*{re.escape(name_lower)}(?:\s*[,!:\s])"
+    if re.match(pattern, first_part):
+        return True
     return False
 
 
@@ -978,78 +994,6 @@ async def ai_command(message: Message) -> None:
         await message.reply("Произошла ошибка при обработке запроса. Попробуйте позже.")
 
 
-_CONTEXTUAL_REMARK_SYSTEM_PROMPT = (
-    "Ты — весёлый и компанейский помощник в чате жилого комплекса. "
-    "Тебя упомянули в чате без конкретного вопроса. "
-    "Ниже — последние сообщения из текущей темы. "
-    "Твоя задача: вставить короткую остроумную реплику по теме обсуждения. "
-    "Это должен быть лёгкий комментарий от «своего парня», который следит за разговором.\n\n"
-    "ПРАВИЛА:\n"
-    "- 1-2 предложения максимум, без лишних вступлений.\n"
-    "- Шути, подкалывай ситуацию (НЕ конкретных людей), высказывай мнение.\n"
-    "- Если обсуждение серьёзное (авария, конфликт, проблема) — будь кратким и по делу, "
-    "поддержи или предложи помощь.\n"
-    "- Можешь ссылаться на конкретные детали из контекста.\n"
-    "- НЕ отвечай на вопросы из контекста — они не тебе адресованы. "
-    "Просто вставь свою реплику как наблюдатель.\n"
-    "- Допустим 1 эмодзи, разговорный русский.\n"
-    "- НИКОГДА не выдумывай факты, адреса, телефоны.\n"
-    "- Меняй стиль шуток: иногда ирония, иногда абсурд, иногда наблюдение, "
-    "иногда мудрость старожила. НЕ ПОВТОРЯЙСЯ."
-)
-
-# Рандомные стилевые подсказки для контекстных реплик
-_CONTEXTUAL_REMARK_STYLES = (
-    "\n[Стиль: ироничный комментатор]",
-    "\n[Стиль: мудрый старожил, который всё видел]",
-    "\n[Стиль: подшучивай над ситуацией с теплотой]",
-    "\n[Стиль: как ведущий новостей ЖК — с драмой]",
-    "\n[Стиль: философское наблюдение о жизни в ЖК]",
-    "\n[Стиль: быстрый остроумный комментарий]",
-    "\n[Стиль: сочувственный, но с юмором]",
-    "\n[Стиль: как спортивный комментатор]",
-)
-
-
-async def _try_contextual_remark(message: Message) -> str | None:
-    """Пытается сгенерировать контекстную реплику на основе обсуждения в топике.
-
-    Возвращает None, если AI недоступен или топик неактивен.
-    """
-    if not settings.ai_feature_assistant:
-        return None
-    topic_id = message.message_thread_id
-    if topic_id is None:
-        return None
-
-    try:
-        from app.handlers.moderation import _get_topic_context
-        topic_context = await _get_topic_context(message.chat.id, topic_id, limit=8)
-        # Нужно хотя бы 3 сообщения для контекстной реплики
-        if len(topic_context) < 3:
-            return None
-
-        context_text = "\n".join(topic_context[-8:])
-        ai_client = get_ai_client()
-        remark_prompt = _CONTEXTUAL_REMARK_SYSTEM_PROMPT + random.choice(_CONTEXTUAL_REMARK_STYLES)
-        messages = [
-            {"role": "system", "content": remark_prompt},
-            {"role": "user", "content": f"Последние сообщения в теме:\n{context_text}"},
-        ]
-        # Используем _chat_completion напрямую через провайдер
-        provider = ai_client._provider
-        if not hasattr(provider, "_chat_completion"):
-            return None
-        content, _ = await provider._chat_completion(
-            messages, chat_id=message.chat.id,
-        )
-        if content and content.strip():
-            return content.strip()[:800]
-    except Exception:
-        logger.debug("Контекстная реплика не сгенерирована, используем обычный ответ.")
-    return None
-
-
 @router.message(BotMentionFilter(), flags={"block": False})
 async def mention_help(message: Message, bot: Bot) -> None:
     logger.info(f"HANDLER: mention_help called, text={message.text!r}")
@@ -1128,12 +1072,31 @@ async def mention_help(message: Message, bot: Bot) -> None:
             )
             return
 
+        # Добавляем контекст цитируемого сообщения, если реплай на другого пользователя
+        full_prompt = prompt
+        if (
+            message.reply_to_message
+            and message.reply_to_message.from_user
+            and not message.reply_to_message.from_user.is_bot
+        ):
+            reply_text = (
+                message.reply_to_message.text
+                or message.reply_to_message.caption
+                or ""
+            ).strip()
+            if reply_text:
+                reply_author = message.reply_to_message.from_user.full_name or "Сосед"
+                full_prompt = (
+                    f"[Сообщение, на которое отвечают ({reply_author}): "
+                    f"{reply_text[:500]}]\n\n{prompt}"
+                )
+
         try:
             question_key = _normalize_cache_key(prompt)
 
             context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
             reply = await get_ai_client().assistant_reply(
-                prompt, context, chat_id=message.chat.id,
+                full_prompt, context, chat_id=message.chat.id,
                 user_id=message.from_user.id,
                 topic_id=message.message_thread_id,
             )
@@ -1183,11 +1146,11 @@ async def mention_help(message: Message, bot: Bot) -> None:
             except Exception:
                 logger.exception("Не удалось отправить даже fallback-ответ на упоминание.")
     else:
-        # Если в топике есть активность — пробуем сделать контекстную реплику через AI
-        reply = await _try_contextual_remark(message)
-        if not reply:
-            reply = _next_mention_reply()
-        await message.reply(reply)
+        # Упомянули без вопроса — подсказываем, как пользоваться
+        await message.reply(
+            "Привет! Задай вопрос — и я постараюсь помочь 😊\n"
+            "Например: «@бот где ближайшая аптека?»"
+        )
     logger.info("OUT: MENTION_REPLY")
 
 
