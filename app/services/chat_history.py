@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta
 
@@ -11,6 +12,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import ChatHistory
 
 logger = logging.getLogger(__name__)
+
+# Промпт для структурированного сжатия истории
+STRUCTURED_SUMMARY_PROMPT = (
+    "Проанализируй диалог и верни JSON:\n"
+    "{\n"
+    '  "resolved": ["тема1: краткое решение", "тема2: что выяснили"],\n'
+    '  "pending": ["вопрос, на который не ответили"],\n'
+    '  "user_style": "краткое описание стиля общения пользователя",\n'
+    '  "key_facts": ["важный факт из диалога"]\n'
+    "}\n"
+    "Максимум 3 элемента в каждом массиве. Только факты из диалога."
+)
 
 # Сколько записей на пару (chat_id, user_id) держим в БД
 HISTORY_LIMIT = 20
@@ -38,7 +51,23 @@ async def load_context(
     )
     result = await session.execute(stmt)
     rows = result.scalars().all()
-    return [f"{r.role}: {r.text}" for r in rows]
+    lines: list[str] = []
+    for r in rows:
+        if r.role == "structured_summary" and r.message:
+            # Разворачиваем структурированный summary в читаемые подсказки
+            try:
+                data = json.loads(r.message)
+                resolved = data.get("resolved", [])
+                pending = data.get("pending", [])
+                if resolved:
+                    lines.append(f"summary: Уже обсуждали: {'; '.join(resolved[:3])}")
+                if pending:
+                    lines.append(f"summary: Нерешённый вопрос: {'; '.join(pending[:3])}")
+            except (json.JSONDecodeError, AttributeError):
+                lines.append(f"{r.role}: {r.text}")
+        else:
+            lines.append(f"{r.role}: {r.text}")
+    return lines
 
 
 async def save_exchange(
@@ -142,6 +171,49 @@ async def replace_with_summary(
         role="summary",
         text=summary_text[:800], message=summary_text[:800],
         is_summary=True,
+    ))
+    await session.commit()
+
+
+async def replace_with_structured_summary(
+    session: AsyncSession,
+    chat_id: int,
+    user_id: int,
+    old_ids: list[int],
+    summary_json: str,
+) -> None:
+    """Заменяет старые записи структурированным JSON-саммари.
+
+    Fallback на обычный текстовый summary при невалидном JSON.
+    """
+    if old_ids:
+        await session.execute(
+            delete(ChatHistory).where(ChatHistory.id.in_(old_ids))
+        )
+    # Проверяем, что JSON валидный — если нет, сохраняем как обычный summary
+    try:
+        json.loads(summary_json)
+        role = "structured_summary"
+        is_summary = True
+    except (json.JSONDecodeError, ValueError):
+        role = "summary"
+        is_summary = True
+
+    # Текстовое поле — краткая версия для обратной совместимости
+    try:
+        data = json.loads(summary_json)
+        resolved = data.get("resolved", [])
+        text_preview = "Обсуждали: " + "; ".join(resolved[:2]) if resolved else summary_json[:200]
+    except Exception:
+        text_preview = summary_json[:800]
+
+    session.add(ChatHistory(
+        chat_id=chat_id,
+        user_id=user_id,
+        role=role,
+        text=text_preview[:800],
+        message=summary_json[:2000],
+        is_summary=is_summary,
     ))
     await session.commit()
 

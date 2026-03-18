@@ -17,27 +17,35 @@ _STOP_WORDS = {
     "нужно", "можно", "чтобы", "только", "кто", "куда", "по", "ли", "а",
 }
 
+_CRITICAL_KEYWORDS = {
+    "шлагбаум", "дворецкий", "пропуск", "гостевой",
+    "аварийка", "аварийную", "затопило", "протечка",
+    "лифт", "лифте", "застрял",
+    "едс", "112",
+}  # +0.3
+
 _STRONG_KEYWORDS = {
-    "шлагбаум", "дворецкий", "пропуск", "гостевой", "лифт", "лифте", "лифту",
-    "аварийка", "аварийную", "авария", "затопило", "протечка",
     "ук", "век", "управляющая",
     "видеонаблюдение", "камер", "крепость24",
-    "гранлайн", "интернет", "провайдер",
-    "мособлеирц", "показания", "перерасчет", "перерасчёт", "счётчик", "счетчик",
-    "лифтек", "мосэнергосбыт", "электричество",
+    "гранлайн", "интернет",
+    "мособлеирц", "показания", "счётчик",
     "участковый", "полиция",
-    "правила", "правил",
-    "поликлиника", "больница", "травмпункт", "врач", "скорая", "стоматология",
-    "школа", "садик", "детский",
-    "метро", "автобус", "электричка", "мцд", "транспорт",
+    "правила", "поликлиника",
+    "школа", "садик", "метро",
+    "парковка", "мусор", "домофон",
+    "отопление", "вода", "батарея",
+    "лифтек", "мосэнергосбыт", "электричество",
+    "перерасчет", "перерасчёт", "счетчик",
+    "провайдер", "авария",
+    "травмпункт", "врач", "скорая", "стоматология",
+    "садик", "детский",
+    "автобус", "электричка", "мцд", "транспорт",
     "тишина", "шум", "ремонт",
     "мфц", "администрация",
     "аптека", "почта",
-    "парковка", "газон",
-    "мусор", "тко",
-    "добродел", "жалоба", "гжи",
-    "едс", "экстренные", "112",
-}
+    "газон", "тко",
+    "добродел", "жалоба", "гжи", "экстренные",
+}  # +0.15
 
 
 @dataclass(slots=True)
@@ -117,11 +125,22 @@ def _entry_tokens(entry: ResidentKbEntry) -> set[str]:
     return _content_tokens(" ".join(chunks))
 
 
+# Кэш предрассчитанных токенов записей KB — заполняется при первом обращении
+_ENTRY_TOKEN_CACHE: dict[str, set[str]] = {}
+
+
+def _get_cached_entry_tokens(entry: ResidentKbEntry) -> set[str]:
+    """Возвращает токены записи KB из кэша или вычисляет и кэширует."""
+    if entry.id not in _ENTRY_TOKEN_CACHE:
+        _ENTRY_TOKEN_CACHE[entry.id] = _entry_tokens(entry)
+    return _ENTRY_TOKEN_CACHE[entry.id]
+
+
 def _score_entry(query_tokens: set[str], entry: ResidentKbEntry) -> float:
     if not query_tokens:
         return 0.0
 
-    entry_tokens = _entry_tokens(entry)
+    entry_tokens = _get_cached_entry_tokens(entry)
     overlap = query_tokens & entry_tokens
     overlap_count = len(overlap)
     if overlap_count == 0:
@@ -141,11 +160,17 @@ def _score_entry(query_tokens: set[str], entry: ResidentKbEntry) -> float:
         return 0.0
 
     overlap_ratio = overlap_count / max(len(query_tokens), 1)
+
+    # Двухуровневые keyword бонусы
     keyword_bonus = 0.0
-    if any(keyword in query_tokens for keyword in _STRONG_KEYWORDS) and any(
-        keyword in entry_tokens for keyword in _STRONG_KEYWORDS
+    if any(kw in query_tokens for kw in _CRITICAL_KEYWORDS) and any(
+        kw in entry_tokens for kw in _CRITICAL_KEYWORDS
     ):
-        keyword_bonus = 0.2
+        keyword_bonus = 0.3
+    elif any(kw in query_tokens for kw in _STRONG_KEYWORDS) and any(
+        kw in entry_tokens for kw in _STRONG_KEYWORDS
+    ):
+        keyword_bonus = 0.15
 
     category_bonus = 0.08 if entry.category in {"шлагбаум", "ук", "аварийка"} else 0.0
     # Приоритет влияет меньше, чтобы не вытягивать нерелевантные записи
@@ -153,14 +178,40 @@ def _score_entry(query_tokens: set[str], entry: ResidentKbEntry) -> float:
     return overlap_ratio + keyword_bonus + category_bonus + priority_bonus
 
 
+def _bounded_levenshtein(a: str, b: str, max_dist: int = 2) -> int:
+    """Ограниченное расстояние Левенштейна: если dist > max_dist — возвращает max_dist+1."""
+    if abs(len(a) - len(b)) > max_dist:
+        return max_dist + 1
+    dp = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        new_dp = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            new_dp[j] = min(dp[j] + 1, new_dp[j - 1] + 1, dp[j - 1] + (0 if ca == cb else 1))
+        dp = new_dp
+        if min(dp) > max_dist:
+            return max_dist + 1
+    return dp[len(b)]
+
+
 def _is_exact_match(normalized_query: str, entry: ResidentKbEntry) -> bool:
     lowered = normalized_query.lower()
     patterns = [*entry.question_patterns, *entry.aliases, *entry.search_tags]
-    return any(pattern.lower() in lowered for pattern in patterns)
+    for pattern in patterns:
+        pattern_lower = pattern.lower()
+        # Точное вхождение
+        if pattern_lower in lowered:
+            return True
+        # Fuzzy: Левенштейн ≤ 2 для длинных слов (≥ 6 символов)
+        if len(pattern_lower) >= 6:
+            for word in _tokenize(normalized_query):
+                if len(word) >= 5 and _bounded_levenshtein(word, pattern_lower) <= 2:
+                    return True
+    return False
 
 
 @lru_cache(maxsize=1)
 def load_resident_kb() -> tuple[ResidentKbEntry, ...]:
+    _ENTRY_TOKEN_CACHE.clear()
     project_root = Path(__file__).resolve().parents[2]
     kb_path = project_root / "data" / "resident_kb.json"
     if not kb_path.exists():

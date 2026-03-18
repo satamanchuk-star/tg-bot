@@ -127,7 +127,13 @@ async def cleanup_stale_faq(session: AsyncSession, *, stale_days: int = 90) -> i
 
 
 def _is_answer_locked(fq: FrequentQuestion) -> bool:
-    """Ответ «закреплён», если вопрос задавали достаточно часто и оценки положительные."""
+    """Ответ «закреплён», если вопрос задавали достаточно часто, оценки положительные
+    и вопрос задавался в последние 30 дней (чтобы устаревшие ответы не блокировались)."""
+    from datetime import timedelta
+    now = datetime.utcnow()
+    # Ответ не может быть «залочен», если не спрашивали > 30 дней
+    if fq.last_asked_at and now - fq.last_asked_at > timedelta(days=30):
+        return False
     return (
         fq.ask_count >= MIN_ASK_COUNT
         and fq.positive_ratings >= MIN_POSITIVE_RATINGS
