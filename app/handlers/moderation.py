@@ -452,12 +452,9 @@ async def moderate_message(message: Message, bot: Bot) -> None:
     # Регистрируем активность топика для проактивного сервиса
     if message.chat.id == settings.forum_chat_id:
         try:
-            from app.services.proactive import register_message_activity
+            from app.services.proactive import register_message_activity, maybe_topic_comment
             register_message_activity(message.chat.id, message.message_thread_id)
+            # Подключаемся к активным дискуссиям (≥15 сообщений за минуту)
+            await maybe_topic_comment(message, bot)
         except Exception:
             pass
-
-    # Проактивные ответы и комментарии отключены:
-    # maybe_proactive_reply — бот отвечал на вопросы, которые ему не задавали
-    # maybe_topic_comment — бот вклинивался в обсуждения без приглашения
-    # Пользователи могут @-упомянуть бота, когда хотят его помощи
