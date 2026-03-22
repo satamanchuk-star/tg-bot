@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete
 from sqlalchemy.exc import OperationalError
@@ -73,7 +73,7 @@ async def add_usage(
         usage = await get_or_create_usage(session, date_key=date_key, chat_id=chat_id)
         usage.request_count += 1
         usage.tokens_used += max(0, tokens_used)
-        usage.updated_at = datetime.utcnow()
+        usage.updated_at = datetime.now(timezone.utc)
         await session.commit()
         return AiUsageStats(requests_used=usage.request_count, tokens_used=usage.tokens_used)
     except OperationalError as exc:

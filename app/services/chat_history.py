@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -220,7 +220,7 @@ async def replace_with_structured_summary(
 
 async def cleanup_old_history(session: AsyncSession, *, retention_days: int = 30) -> int:
     """Удаляет историю старше retention_days дней."""
-    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
     result = await session.execute(
         delete(ChatHistory).where(ChatHistory.created_at < cutoff)
     )

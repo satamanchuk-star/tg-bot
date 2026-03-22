@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 
@@ -224,7 +224,7 @@ def load_resident_kb() -> tuple[ResidentKbEntry, ...]:
     entries: list[ResidentKbEntry] = []
     for item in raw:
         entries.append(ResidentKbEntry(**item))
-    logger.info("Resident KB loaded: %s entries, updated_at=%s", len(entries), datetime.utcnow().isoformat())
+    logger.info("Resident KB loaded: %s entries, updated_at=%s", len(entries), datetime.now(timezone.utc).isoformat())
     return tuple(entries)
 
 

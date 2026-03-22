@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +22,7 @@ async def add_strike(session: AsyncSession, user_id: int, chat_id: int) -> int:
             Strike.chat_id == chat_id,
         )
     )
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if oldest and now - oldest > timedelta(days=STRIKE_RESET_DAYS):
         await session.execute(
             delete(Strike).where(Strike.user_id == user_id, Strike.chat_id == chat_id)

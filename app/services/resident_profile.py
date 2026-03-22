@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -74,7 +74,7 @@ async def update_profile(
     row.facts_json = json.dumps(existing, ensure_ascii=False)
     if display_name:
         row.display_name = display_name
-    row.updated_at = datetime.utcnow()
+    row.updated_at = datetime.now(timezone.utc)
     await session.commit()
     return existing
 

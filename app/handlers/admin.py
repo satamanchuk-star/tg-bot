@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import signal
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
@@ -107,7 +107,7 @@ async def mute_user(message: Message, bot: Bot) -> None:
     if target_id is None:
         await message.reply("Нужен реплай на сообщение пользователя.")
         return
-    until = datetime.utcnow() + timedelta(minutes=minutes)
+    until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
     permissions = ChatPermissions(can_send_messages=False)
     await bot.restrict_chat_member(
         settings.forum_chat_id,
@@ -150,7 +150,7 @@ async def ban_user(message: Message, bot: Bot) -> None:
     if target_id is None:
         await message.reply("Нужен реплай на сообщение пользователя.")
         return
-    until = datetime.utcnow() + timedelta(days=days)
+    until = datetime.now(timezone.utc) + timedelta(days=days)
     await bot.ban_chat_member(settings.forum_chat_id, target_id, until_date=until)
     await message.reply(f"Бан на {days} дней выдан.")
 
@@ -179,7 +179,7 @@ async def strike_user(message: Message, bot: Bot) -> None:
         count = await add_strike(session, target_id, settings.forum_chat_id)
         await session.commit()
     if count >= 3:
-        until = datetime.utcnow() + timedelta(hours=24)
+        until = datetime.now(timezone.utc) + timedelta(hours=24)
         permissions = ChatPermissions(can_send_messages=False)
         await bot.restrict_chat_member(
             settings.forum_chat_id,
@@ -219,7 +219,7 @@ async def grant_coins(message: Message, bot: Bot) -> None:
             settings.forum_chat_id,
             display_name=display_name,
         )
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if not can_grant_coins(stats, now, amount):
             await message.reply("Нельзя выдать больше 10 монет за раз/сутки.")
             return

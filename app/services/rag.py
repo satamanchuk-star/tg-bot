@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -241,7 +241,7 @@ def _time_decay_factor(created_at: datetime | None) -> float:
     """Экспоненциальное затухание: 1.0 для свежих, ~0.5 через half_life дней."""
     if created_at is None:
         return 0.5
-    age_days = (datetime.utcnow() - created_at).total_seconds() / 86400
+    age_days = (datetime.now(timezone.utc) - created_at).total_seconds() / 86400
     if age_days <= 0:
         return 1.0
     return math.exp(-0.693 * age_days / _TIME_DECAY_HALF_LIFE_DAYS)
@@ -262,7 +262,7 @@ async def add_rag_message(
     cleaned = _normalize_text(message_text)
     category = classify_rag_message(cleaned)
     semantic_key = build_semantic_key(cleaned, category)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     expires_at = now + timedelta(days=ttl_days or _DEFAULT_RAG_TTL_DAYS)
     record = RagMessage(
         chat_id=chat_id,
@@ -284,7 +284,7 @@ async def add_rag_message(
 
 async def get_all_rag_messages(session: AsyncSession, chat_id: int) -> list[RagMessage]:
     """Возвращает актуальные (не истёкшие) сообщения RAG для чата."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     result = await session.execute(
         select(RagMessage)
         .where(
@@ -454,7 +454,7 @@ async def cleanup_expired_rag(session: AsyncSession) -> int:
     """Удаляет истёкшие RAG-записи."""
     from sqlalchemy import delete
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     result = await session.execute(
         delete(RagMessage).where(
             and_(
@@ -476,6 +476,6 @@ async def extend_rag_ttl(
     msg = await session.get(RagMessage, message_id)
     if msg is None:
         return False
-    msg.expires_at = datetime.utcnow() + timedelta(days=extra_days)
+    msg.expires_at = datetime.now(timezone.utc) + timedelta(days=extra_days)
     await session.flush()
     return True
