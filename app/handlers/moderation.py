@@ -15,7 +15,6 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
-    MessageReactionUpdated,
 )
 
 from sqlalchemy import and_, select

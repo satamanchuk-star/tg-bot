@@ -258,12 +258,33 @@ async def add_rag_message(
     ttl_days: int | None = None,
     is_admin: bool = False,
 ) -> RagMessage:
-    """Добавляет сообщение в RAG-базу и сразу классифицирует его."""
+    """Добавляет сообщение в RAG-базу и сразу классифицирует его.
+
+    Админские записи (is_admin=True) хранятся бессрочно (expires_at=None).
+    При добавлении новой админской записи старые с тем же semantic_key удаляются
+    как противоречащие (более новая запись имеет приоритет).
+    """
+    from sqlalchemy import delete as sa_delete
+
     cleaned = _normalize_text(message_text)
     category = classify_rag_message(cleaned)
     semantic_key = build_semantic_key(cleaned, category)
     now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(days=ttl_days or _DEFAULT_RAG_TTL_DAYS)
+
+    # Админские записи хранятся бессрочно; обычные — с TTL
+    if is_admin:
+        expires_at = None
+        # Удаляем старые записи с тем же смысловым ключом — новая запись их отменяет
+        await session.execute(
+            sa_delete(RagMessage).where(
+                RagMessage.chat_id == chat_id,
+                RagMessage.rag_semantic_key == semantic_key,
+                RagMessage.created_at < now,
+            )
+        )
+    else:
+        expires_at = now + timedelta(days=ttl_days or _DEFAULT_RAG_TTL_DAYS)
+
     record = RagMessage(
         chat_id=chat_id,
         message_text=cleaned,
@@ -381,8 +402,8 @@ async def systematize_rag(session: AsyncSession, chat_id: int) -> int:
         msg.message_text = normalized
         msg.rag_category = category
         msg.rag_semantic_key = semantic_key
-        # Проставляем TTL для старых записей без expires_at
-        if msg.expires_at is None and msg.created_at:
+        # Проставляем TTL для старых НЕ-админских записей без expires_at
+        if msg.expires_at is None and msg.created_at and not msg.is_admin:
             msg.expires_at = msg.created_at + timedelta(days=_DEFAULT_RAG_TTL_DAYS)
 
     grouped = _group_by_semantics(messages)
