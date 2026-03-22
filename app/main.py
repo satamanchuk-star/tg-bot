@@ -576,13 +576,20 @@ async def on_startup(bot: Bot) -> None:
 
     set_ai_admin_notifier(_admin_notifier)
     telegram_available = False
+    tg_probe_note = ""
+    import time as _time
     for attempt in range(1, 4):
         try:
+            _t0 = _time.monotonic()
             await bot.get_me()  # заполняет bot.me с информацией о боте
+            _tg_latency_ms = int((_time.monotonic() - _t0) * 1000)
             telegram_available = True
+            tg_probe_note = f"Telegram API: ✅ доступен ({_tg_latency_ms} ms)"
+            logger.info("Telegram API probe: ok=True latency_ms=%d", _tg_latency_ms)
             break
         except TelegramNetworkError:
             if attempt >= 3:
+                tg_probe_note = "Telegram API: ❌ недоступен (нет соединения)"
                 logger.warning(
                     "Нет соединения с Telegram API после 3 попыток. "
                     "Продолжаем запуск и передаём переподключение polling-циклу."
@@ -594,6 +601,7 @@ async def on_startup(bot: Bot) -> None:
             )
             await asyncio.sleep(5)
         except TelegramAPIError as exc:
+            tg_probe_note = f"Telegram API: ❌ ошибка — {exc}"
             logger.error(
                 "Не удалось получить данные бота из Telegram API: %s "
                 "(token=%s..., len=%d). Проверьте BOT_TOKEN и права доступа.",
@@ -671,6 +679,8 @@ async def on_startup(bot: Bot) -> None:
     logger.info("AI модуль: %s", ai_mode)
     if telegram_available:
         lines = [f"🟢 Бот запущен", f"Версия: {settings.build_version}", ai_mode]
+        if tg_probe_note:
+            lines.append(tg_probe_note)
         if ai_probe_note:
             lines.append(ai_probe_note)
         await bot.send_message(settings.admin_log_chat_id, "\n".join(lines))
