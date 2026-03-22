@@ -1174,7 +1174,7 @@ class AiModuleClient:
         base_context = context or []
         if history_summary:
             base_context = [history_summary, *base_context]
-        return await self.assistant_reply(prompt, base_context, chat_id=chat_id)
+        return await self.assistant_reply(prompt, base_context, chat_id=chat_id, user_id=user_id)
 
     async def evaluate_quiz_answer(
         self,
