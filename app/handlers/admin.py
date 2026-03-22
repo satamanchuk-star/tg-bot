@@ -30,6 +30,7 @@ from app.services.ai_module import (
     set_ai_runtime_enabled,
     resolve_provider_mode,
 )
+from app.handlers.moderation import is_training_mode, set_training_mode
 from app.services.ai_usage import next_reset_delta, reset_ai_usage
 from app.services.rag import add_rag_message, build_canonical_text, get_rag_count, systematize_rag
 from app.services.resident_services import add_service, get_services_count
@@ -258,10 +259,12 @@ async def ai_status(message: Message, bot: Bot) -> None:
         last_error = f"{last_error} ({runtime.last_error_at.isoformat(timespec='seconds')} UTC)"
 
     provider = "Remote API" if resolve_provider_mode() == "remote" else "STUB"
+    training_status = "вкл 🔍" if is_training_mode() else "выкл"
     await message.reply(
         "Статус AI:\n"
         f"• Провайдер: {provider}\n"
         f"• Runtime флаг: {status}\n"
+        f"• Режим обучения: {training_status}\n"
         f"• Usage сегодня: запросы={req_used}, токены={tok_used}\n"
         f"• До сброса лимитов: {next_reset_delta()}\n"
         f"• Последний статус: {last_error}"
@@ -299,6 +302,27 @@ async def ai_reset(message: Message, bot: Bot) -> None:
     async for session in get_session():
         deleted = await reset_ai_usage(session)
     await message.reply(f"Счётчики AI usage очищены (на будущее). Удалено записей: {deleted}.")
+
+
+@router.message(Command("training_on"))
+async def training_on(message: Message, bot: Bot) -> None:
+    if not await _ensure_admin(message, bot):
+        return
+    set_training_mode(True)
+    await message.reply(
+        "🔍 Режим обучения включён.\n"
+        "Бот НЕ будет модерировать — только отправлять подозрительные сообщения "
+        "в лог-чат с кнопками для подтверждения действия."
+    )
+
+
+@router.message(Command("training_off"))
+async def training_off(message: Message, bot: Bot) -> None:
+    if not await _ensure_admin(message, bot):
+        return
+    set_training_mode(False)
+    await message.reply("✅ Режим обучения выключен. Модерация работает в штатном режиме.")
+
 
 @router.message(Command("reload_profanity"))
 async def reload_profanity(message: Message, bot: Bot) -> None:

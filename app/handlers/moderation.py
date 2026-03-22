@@ -9,7 +9,14 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
-from aiogram.types import ChatPermissions, Message, MessageReactionUpdated
+from aiogram.types import (
+    CallbackQuery,
+    ChatPermissions,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    MessageReactionUpdated,
+)
 
 from sqlalchemy import and_, select
 
@@ -25,6 +32,24 @@ from app.utils.text import contains_forbidden_link
 logger = logging.getLogger(__name__)
 router = Router()
 FLOOD_TRACKER = FloodTracker(limit=10, window_seconds=120)
+
+# Runtime-флаг режима обучения (переопределяет settings.moderation_training_mode)
+_TRAINING_MODE_OVERRIDE: bool | None = None
+
+
+def set_training_mode(enabled: bool) -> None:
+    """Включает/выключает режим обучения без перезапуска бота."""
+    global _TRAINING_MODE_OVERRIDE
+    _TRAINING_MODE_OVERRIDE = enabled
+    logger.info("Training mode runtime: %s", "вкл" if enabled else "выкл")
+
+
+def is_training_mode() -> bool:
+    """Возвращает текущий статус режима обучения."""
+    if _TRAINING_MODE_OVERRIDE is not None:
+        return _TRAINING_MODE_OVERRIDE
+    return settings.moderation_training_mode
+
 
 # Множество message_id, уже прошедших модерацию (предотвращает двойной вызов)
 _MODERATED_MSG_IDS: set[int] = set()
@@ -206,7 +231,7 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
             pass
 
     # Режим тихого обучения: не модерируем, а отправляем в лог-чат для разметки
-    if settings.moderation_training_mode:
+    if is_training_mode():
         if severity >= 1:
             await _send_training_sample(message, bot, severity, violation_type, confidence)
         return False
@@ -338,6 +363,24 @@ _TRAINING_VIOLATION_LABELS = {
     "aggression": "агрессия",
 }
 
+_TRAINING_ACTION_LABELS = {
+    1: "предупреждение",
+    2: "предупреждение + страйк",
+    3: "удаление + мут 24ч",
+}
+
+
+def _build_training_keyboard(sample_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⚠️ Предупредить", callback_data=f"train:warn:{sample_id}"),
+            InlineKeyboardButton(text="🗑 Удалить + мут", callback_data=f"train:delete:{sample_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="✅ Всё нормально", callback_data=f"train:ok:{sample_id}"),
+        ],
+    ])
+
 
 async def _send_training_sample(
     message: Message,
@@ -346,80 +389,94 @@ async def _send_training_sample(
     violation_type: str | None,
     confidence: float | None,
 ) -> None:
-    """Отправляет сообщение в лог-чат с вопросом для разметки реакциями."""
+    """Отправляет сообщение в лог-чат с inline-кнопками для подтверждения действия."""
     if message.from_user is None or message.text is None:
         return
 
     vtype_label = _TRAINING_VIOLATION_LABELS.get(violation_type or "", violation_type or "н/д")
     conf_pct = f"{confidence * 100:.0f}%" if confidence is not None else "н/д"
+    action_label = _TRAINING_ACTION_LABELS.get(severity, f"severity {severity}")
+    mention = message.from_user.mention_html()
 
     log_text = (
         f"🔍 <b>Обучение модерации</b>\n\n"
+        f"<b>Пользователь:</b> {mention} (id={message.from_user.id})\n"
         f"<b>Текст:</b> {message.text[:500]}\n\n"
-        f"<b>AI считает:</b> {vtype_label} (severity {severity}, уверенность {conf_pct})\n\n"
-        f"Это нарушение? Поставьте реакцию:\n"
-        f"👍 — да, это грубость/мат\n"
-        f"👎 — нет, всё нормально"
+        f"🤖 <b>AI решение:</b> {vtype_label} (severity {severity}, уверенность {conf_pct})\n"
+        f"<b>Я бы сделал:</b> {action_label}\n\n"
+        f"Что сделать?"
     )
     try:
+        # Сохраняем образец в БД (без keyboard — нужен ID)
+        sample_id: int | None = None
+        async for session in get_session():
+            sample = ModerationTraining(
+                chat_id=message.chat.id,
+                user_id=message.from_user.id,
+                message_text=message.text[:2000],
+                ai_severity=severity,
+                ai_violation_type=violation_type,
+                ai_confidence=confidence,
+                original_message_id=message.message_id,
+            )
+            session.add(sample)
+            await session.commit()
+            await session.refresh(sample)
+            sample_id = sample.id
+
+        if sample_id is None:
+            logger.error("Не удалось сохранить обучающий образец в БД")
+            return
+
         sent = await bot.send_message(
             settings.admin_log_chat_id,
             log_text,
             parse_mode="HTML",
+            reply_markup=_build_training_keyboard(sample_id),
         )
-        # Сохраняем образец в БД
+        # Сохраняем message_id лог-сообщения
         async for session in get_session():
-            session.add(
-                ModerationTraining(
-                    chat_id=message.chat.id,
-                    user_id=message.from_user.id,
-                    message_text=message.text[:2000],
-                    ai_severity=severity,
-                    ai_violation_type=violation_type,
-                    ai_confidence=confidence,
-                    log_message_id=sent.message_id,
-                )
+            result = await session.execute(
+                select(ModerationTraining).where(ModerationTraining.id == sample_id)
             )
-            await session.commit()
+            sample = result.scalar_one_or_none()
+            if sample:
+                sample.log_message_id = sent.message_id
+                await session.commit()
     except Exception:
         logger.exception("Не удалось отправить обучающий образец в лог-чат")
 
 
-@router.message_reaction(F.chat.id == settings.admin_log_chat_id)
-async def handle_training_reaction(event: MessageReactionUpdated) -> None:
-    """Обрабатывает реакции на обучающие сообщения в лог-чате."""
-    if not settings.moderation_training_mode:
+@router.callback_query(F.data.startswith("train:"))
+async def handle_training_action(callback: CallbackQuery, bot: Bot) -> None:
+    """Обрабатывает нажатие inline-кнопок на обучающих сообщениях."""
+    if not is_training_mode():
+        await callback.answer("Режим обучения выключен.", show_alert=False)
         return
-    if event.user is None:
+    if callback.from_user is None or callback.data is None:
         return
 
-    log_msg_id = event.message_id
-    voter_id = event.user.id
-
-    # Определяем какая реакция поставлена
-    new_emojis: set[str] = set()
-    for reaction in event.new_reaction or []:
-        emoji = getattr(reaction, "emoji", None)
-        if emoji:
-            new_emojis.add(emoji)
-
-    is_yes = "👍" in new_emojis
-    is_no = "👎" in new_emojis
-    if not is_yes and not is_no:
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        return
+    _, action, sample_id_str = parts
+    try:
+        sample_id = int(sample_id_str)
+    except ValueError:
         return
 
     try:
         async for session in get_session():
             result = await session.execute(
-                select(ModerationTraining).where(
-                    ModerationTraining.log_message_id == log_msg_id,
-                )
+                select(ModerationTraining).where(ModerationTraining.id == sample_id)
             )
             sample = result.scalar_one_or_none()
             if sample is None:
+                await callback.answer("Образец не найден в БД.", show_alert=True)
                 return
 
-            # Проверяем, не голосовал ли уже этот пользователь
+            # Записываем фидбек
+            voter_id = callback.from_user.id
             voted_ids: list[int] = []
             if sample.voted_user_ids:
                 try:
@@ -427,21 +484,81 @@ async def handle_training_reaction(event: MessageReactionUpdated) -> None:
                 except (json.JSONDecodeError, TypeError):
                     voted_ids = []
             if voter_id in voted_ids:
+                await callback.answer("Вы уже проголосовали.", show_alert=False)
                 return
-
             voted_ids.append(voter_id)
             sample.voted_user_ids = json.dumps(voted_ids)
-            if is_yes:
-                sample.vote_yes += 1
-            if is_no:
+
+            if action == "ok":
                 sample.vote_no += 1
-            await session.commit()
+                await session.commit()
+                await callback.answer("Записано: не нарушение ✅")
+                result_label = "✅ Отклонено (не нарушение)"
+            elif action == "warn":
+                sample.vote_yes += 1
+                await session.commit()
+                # Отправляем предупреждение в форум
+                try:
+                    warn_text = random.choice(_HARD_WARNINGS).format(count="?")
+                    await bot.send_message(
+                        sample.chat_id,
+                        f"<a href='tg://user?id={sample.user_id}'>Пользователь</a>, {warn_text}",
+                        parse_mode="HTML",
+                    )
+                    await callback.answer("Предупреждение отправлено ⚠️")
+                except Exception:
+                    await callback.answer("Ошибка при отправке предупреждения", show_alert=True)
+                    logger.exception("Ошибка retroactive warn")
+                result_label = "⚠️ Предупреждение выдано"
+            elif action == "delete":
+                sample.vote_yes += 1
+                await session.commit()
+                # Удаляем сообщение из форума (если ещё есть)
+                deleted = False
+                if sample.original_message_id:
+                    try:
+                        await bot.delete_message(sample.chat_id, sample.original_message_id)
+                        deleted = True
+                    except Exception:
+                        logger.info("Сообщение уже удалено или недоступно")
+                # Мут 24ч
+                try:
+                    until = datetime.now(timezone.utc) + timedelta(hours=24)
+                    permissions = ChatPermissions(can_send_messages=False)
+                    await bot.restrict_chat_member(
+                        sample.chat_id,
+                        sample.user_id,
+                        permissions=permissions,
+                        until_date=until,
+                    )
+                    del_label = "удалено + " if deleted else ""
+                    await callback.answer(f"Сообщение {del_label}мут 24ч 🗑")
+                except Exception:
+                    await callback.answer("Ошибка при муте пользователя", show_alert=True)
+                    logger.exception("Ошибка retroactive delete/mute")
+                result_label = "🗑 Удалено и мут"
+            else:
+                return
+
             logger.info(
-                "Обучение: msg_id=%d, voter=%d, yes=%d, no=%d",
-                log_msg_id, voter_id, sample.vote_yes, sample.vote_no,
+                "Обучение: sample_id=%d, action=%s, voter=%d",
+                sample_id, action, voter_id,
             )
+
+        # Обновляем сообщение в лог-чате — убираем кнопки, добавляем итог
+        if callback.message:
+            try:
+                original_text = callback.message.html_text or ""
+                await callback.message.edit_text(
+                    original_text + f"\n\n<b>Решение:</b> {result_label}",
+                    parse_mode="HTML",
+                    reply_markup=None,
+                )
+            except Exception:
+                pass
+
     except Exception:
-        logger.exception("Ошибка при обработке реакции на обучающее сообщение")
+        logger.exception("Ошибка при обработке тренировочного callback")
 
 
 @router.message(StateFilter(None), flags={"block": False})
@@ -452,9 +569,20 @@ async def moderate_message(message: Message, bot: Bot) -> None:
     # Регистрируем активность топика для проактивного сервиса
     if message.chat.id == settings.forum_chat_id:
         try:
-            from app.services.proactive import register_message_activity, maybe_topic_comment
+            from app.services.proactive import (
+                maybe_topic_comment,
+                maybe_proactive_reply,
+                maybe_welcome_newcomer,
+                register_message_activity,
+            )
             register_message_activity(message.chat.id, message.message_thread_id)
-            # Подключаемся к активным дискуссиям (≥15 сообщений за минуту)
+            # Приветствие новичков (первые сообщения в форуме)
+            if not moderated:
+                await maybe_welcome_newcomer(message, bot)
+            # Подключаемся к активным дискуссиям
             await maybe_topic_comment(message, bot)
+            # Проактивный ответ на вопросы (когда топик не активен)
+            if not moderated:
+                await maybe_proactive_reply(message, bot)
         except Exception:
             pass

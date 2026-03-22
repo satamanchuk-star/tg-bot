@@ -11,8 +11,11 @@ from datetime import datetime, timedelta, timezone
 from aiogram import Bot
 from aiogram.types import Message
 
+from sqlalchemy import func, select
+
 from app.config import settings
 from app.db import get_session
+from app.models import MessageLog
 from app.services.ai_module import get_ai_client
 from app.services.resident_kb import build_resident_answer
 
@@ -28,11 +31,11 @@ _ACTIVITY_WINDOW = timedelta(minutes=10)
 _ACTIVITY_THRESHOLD = 5  # Если больше 5 сообщений за 10 минут — не вмешиваемся
 
 # --- Контекстные комментарии при высокой активности ---
-# Cooldown: максимум 1 комментарий в 40 минут на топик
+# Cooldown: максимум 1 комментарий в 25 минут на топик
 _LAST_TOPIC_COMMENT: dict[tuple[int, int | None], datetime] = {}
-_TOPIC_COMMENT_COOLDOWN = timedelta(minutes=40)
-# Порог: сколько сообщений за окно для срабатывания
-_COMMENT_ACTIVITY_THRESHOLD = 15
+_TOPIC_COMMENT_COOLDOWN = timedelta(minutes=25)
+# Порог: сколько сообщений за окно для срабатывания (снижено с 15 до 8)
+_COMMENT_ACTIVITY_THRESHOLD = 8
 _COMMENT_ACTIVITY_WINDOW = timedelta(minutes=5)
 
 # Топики, в которых бот НЕ комментирует
@@ -298,3 +301,157 @@ async def maybe_topic_comment(message: Message, bot: Bot) -> bool:
         logger.warning("Не удалось сгенерировать контекстный комментарий для топика %s", topic_id)
 
     return False
+
+
+# ---------------------------------------------------------------------------
+# Приветствие новичков
+# ---------------------------------------------------------------------------
+
+# In-memory кэш: user_id → уже приветствовали (сбрасывается при перезапуске бота)
+_WELCOMED_USERS: set[int] = set()
+
+# Системный промпт для приветствия новичка
+_WELCOME_SYSTEM_PROMPT = (
+    "Ты — дружелюбный бот-помощник жилого комплекса «Живописный». "
+    "Новый житель только что написал своё первое сообщение в форуме. "
+    "Напиши короткое тёплое приветствие (1-2 предложения). "
+    "Упомяни, что бот может помочь с вопросами о ЖК — достаточно написать или упомянуть его. "
+    "Разговорный русский, без формализма. Один эмодзи максимум. "
+    "НЕ представляйся как ИИ."
+)
+
+
+async def maybe_welcome_newcomer(message: Message, bot: Bot) -> bool:
+    """Приветствует нового жителя при первых сообщениях в форуме.
+
+    Условия:
+    1. Проактивный режим включён
+    2. Это форум ЖК
+    3. Не служебный топик (правила, объявления, игры)
+    4. Пользователь ещё не приветствовался в этой сессии
+    5. Менее 3 сообщений в MessageLog от этого пользователя
+    """
+    if not settings.ai_feature_proactive:
+        return False
+    if message.chat.id != settings.forum_chat_id:
+        return False
+    if message.from_user is None or message.from_user.is_bot:
+        return False
+
+    user_id = message.from_user.id
+
+    # Быстрая проверка по кэшу
+    if user_id in _WELCOMED_USERS:
+        return False
+
+    # Не приветствуем в служебных топиках
+    _init_excluded_topics()
+    topic_id = message.message_thread_id
+    if topic_id is not None and topic_id in _EXCLUDED_TOPIC_IDS:
+        return False
+
+    # Считаем количество сообщений пользователя в форуме
+    try:
+        async for session in get_session():
+            result = await session.execute(
+                select(func.count()).select_from(MessageLog).where(
+                    MessageLog.chat_id == message.chat.id,
+                    MessageLog.user_id == user_id,
+                )
+            )
+            msg_count = result.scalar() or 0
+            break
+        else:
+            return False
+    except Exception:
+        logger.warning("Не удалось проверить количество сообщений пользователя %s", user_id)
+        return False
+
+    # Приветствуем только при 1-2 сообщениях (учитываем текущее, ещё не записано)
+    if msg_count > 2:
+        _WELCOMED_USERS.add(user_id)  # Помечаем чтобы больше не проверять
+        return False
+
+    # Генерируем приветствие
+    try:
+        ai_client = get_ai_client()
+        provider = ai_client._provider
+        if not hasattr(provider, "_chat_completion"):
+            return False
+        content, _ = await provider._chat_completion(
+            [
+                {"role": "system", "content": _WELCOME_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Новый житель написал: {message.text or ''}"},
+            ],
+            chat_id=message.chat.id,
+        )
+        if content and content.strip():
+            await message.reply(content.strip()[:500])
+            _WELCOMED_USERS.add(user_id)
+            logger.info("WELCOME: new user %s greeted in topic=%s", user_id, topic_id)
+            return True
+    except Exception:
+        logger.warning("Не удалось сгенерировать приветствие для нового пользователя %s", user_id)
+
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Плановые приветствия (утро / вечер)
+# ---------------------------------------------------------------------------
+
+_MORNING_SYSTEM_PROMPT = (
+    "Ты — дружелюбный бот жилого комплекса «Живописный». "
+    "Напиши короткое доброе утреннее приветствие для жителей форума (1-2 предложения). "
+    "Упомяни день недели или что-то приятное про начало дня. "
+    "Разговорный стиль, живо и тепло. Один эмодзи. НЕ пиши длинных текстов."
+)
+
+_EVENING_SYSTEM_PROMPT = (
+    "Ты — дружелюбный бот жилого комплекса «Живописный». "
+    "Напиши короткое доброе вечернее пожелание для жителей форума (1-2 предложения). "
+    "Пожелай хорошего вечера или спокойной ночи. "
+    "Разговорный стиль, тепло и уютно. Один эмодзи. НЕ пиши длинных текстов."
+)
+
+
+async def send_scheduled_greeting(bot: Bot, period: str) -> None:
+    """Отправляет плановое приветствие в форум (утро/вечер).
+
+    period: 'morning' или 'evening'
+    """
+    if not settings.ai_feature_proactive:
+        return
+
+    target_topic = getattr(settings, "ai_greeting_topic_id", None)
+    if target_topic is None:
+        # Фоллбек на topic_important
+        target_topic = settings.topic_important
+    if target_topic is None:
+        logger.info("Плановое приветствие пропущено: ai_greeting_topic_id не задан.")
+        return
+
+    system_prompt = _MORNING_SYSTEM_PROMPT if period == "morning" else _EVENING_SYSTEM_PROMPT
+
+    try:
+        ai_client = get_ai_client()
+        provider = ai_client._provider
+        if not hasattr(provider, "_chat_completion"):
+            logger.info("Плановое приветствие пропущено: нет remote AI провайдера.")
+            return
+        content, _ = await provider._chat_completion(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "Напиши приветствие"},
+            ],
+            chat_id=settings.forum_chat_id,
+        )
+        if content and content.strip():
+            await bot.send_message(
+                settings.forum_chat_id,
+                content.strip()[:500],
+                message_thread_id=target_topic,
+            )
+            logger.info("GREETING: %s greeting sent to topic=%s", period, target_topic)
+    except Exception:
+        logger.warning("Не удалось отправить плановое приветствие (%s)", period)

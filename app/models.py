@@ -298,6 +298,7 @@ class ModerationTraining(Base):
     ai_violation_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     ai_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     log_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    original_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     vote_yes: Mapped[int] = mapped_column(Integer, default=0)
     vote_no: Mapped[int] = mapped_column(Integer, default=0)
     voted_user_ids: Mapped[str | None] = mapped_column(Text, nullable=True)

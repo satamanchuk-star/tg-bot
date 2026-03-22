@@ -54,6 +54,7 @@ from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
 from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, set_ai_admin_notifier
 from app.services.daily_summary import build_daily_summary, render_daily_summary
+from app.services.proactive import send_scheduled_greeting
 from app.services.resident_kb import load_resident_kb
 
 logging.basicConfig(
@@ -229,6 +230,18 @@ async def init_db(async_engine: AsyncEngine) -> None:
                 if "is_admin" not in columns:
                     sync_conn.execute(
                         text("ALTER TABLE rag_messages ADD COLUMN is_admin BOOLEAN DEFAULT 0 NOT NULL")
+                    )
+
+            # Миграция moderation_training: original_message_id
+            if inspector.has_table("moderation_training"):
+                columns = {
+                    column["name"] for column in inspector.get_columns("moderation_training")
+                }
+                if "original_message_id" not in columns:
+                    sync_conn.execute(
+                        text(
+                            "ALTER TABLE moderation_training ADD COLUMN original_message_id INTEGER"
+                        )
                     )
 
             # Миграция message_logs: sentiment
@@ -551,6 +564,23 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         minute=59,
         args=[bot],
     )
+    # Плановые приветствия жителей
+    if settings.ai_morning_greeting:
+        scheduler.add_job(
+            send_scheduled_greeting,
+            "cron",
+            hour=9,
+            minute=0,
+            args=[bot, "morning"],
+        )
+    if settings.ai_evening_greeting:
+        scheduler.add_job(
+            send_scheduled_greeting,
+            "cron",
+            hour=20,
+            minute=0,
+            args=[bot, "evening"],
+        )
     scheduler.start()
     return scheduler
 
