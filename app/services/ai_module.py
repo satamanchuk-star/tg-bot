@@ -9,7 +9,7 @@ import random
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Awaitable, Callable, Literal, Protocol
 
 import httpx
@@ -748,7 +748,7 @@ class OpenRouterProvider:
     def _record_runtime_error(self, error: Exception) -> None:
         global _LAST_ERROR, _LAST_ERROR_AT
         _LAST_ERROR = str(error)
-        _LAST_ERROR_AT = datetime.utcnow()
+        _LAST_ERROR_AT = datetime.now(timezone.utc)
         logger.warning("AI provider error: %s", error)
 
     async def moderate(self, text: str, *, chat_id: int, context: list[str] | None = None) -> ModerationDecision:
@@ -2054,7 +2054,7 @@ def set_ai_runtime_enabled(value: bool) -> None:
         logger.info("AI runtime flag enabled.")
     else:
         _LAST_ERROR = "runtime_disabled"
-        _LAST_ERROR_AT = datetime.utcnow()
+        _LAST_ERROR_AT = datetime.now(timezone.utc)
         logger.info("AI runtime flag disabled; forcing stub mode.")
 
 
@@ -2072,7 +2072,7 @@ def get_ai_client() -> AiModuleClient:
                 _LAST_ERROR = "runtime_disabled"
             else:
                 _LAST_ERROR = "stub_mode"
-            _LAST_ERROR_AT = datetime.utcnow()
+            _LAST_ERROR_AT = datetime.now(timezone.utc)
     return _AI_CLIENT
 
 

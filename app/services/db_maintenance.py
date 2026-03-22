@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, text
 from sqlalchemy.sql.dml import Delete
@@ -18,7 +18,7 @@ async def cleanup_old_data(session: AsyncSession, *, now_utc: datetime | None = 
 
     Храним только окна, реально нужные для ежедневной аналитики и диагностики.
     """
-    now = now_utc or datetime.utcnow()
+    now = now_utc or datetime.now(timezone.utc)
     logs_cutoff = now - timedelta(days=max(1, settings.db_logs_retention_days))
     stats_cutoff = now - timedelta(days=max(1, settings.db_stats_retention_days))
     stats_cutoff_key = stats_cutoff.date().isoformat()

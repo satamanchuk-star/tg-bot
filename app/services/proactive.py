@@ -33,7 +33,7 @@ _LAST_TOPIC_COMMENT: dict[tuple[int, int | None], datetime] = {}
 _TOPIC_COMMENT_COOLDOWN = timedelta(minutes=40)
 # Порог: сколько сообщений за окно для срабатывания
 _COMMENT_ACTIVITY_THRESHOLD = 15
-_COMMENT_ACTIVITY_WINDOW = timedelta(minutes=1)
+_COMMENT_ACTIVITY_WINDOW = timedelta(minutes=5)
 
 # Топики, в которых бот НЕ комментирует
 _EXCLUDED_TOPIC_IDS: set[int] = set()
@@ -260,11 +260,11 @@ async def maybe_topic_comment(message: Message, bot: Bot) -> bool:
     # Активность достаточная — генерируем комментарий
     try:
         from app.handlers.moderation import _get_topic_context
-        topic_context = await _get_topic_context(chat_id, topic_id, limit=100)
+        topic_context = await _get_topic_context(chat_id, topic_id, limit=20)
         if len(topic_context) < 5:
             return False
 
-        context_text = "\n".join(topic_context[-100:])
+        context_text = "\n".join(topic_context[-20:])
         ai_client = get_ai_client()
         provider = ai_client._provider
         if not hasattr(provider, "_chat_completion"):

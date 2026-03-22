@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,7 +51,7 @@ async def track_question(
         session.add(fq)
     else:
         fq.ask_count += 1
-        fq.last_asked_at = datetime.utcnow()
+        fq.last_asked_at = datetime.now(timezone.utc)
         # Обновляем ответ, если ещё нет закреплённого лучшего
         if not _is_answer_locked(fq):
             fq.best_answer = answer[:800]
@@ -118,7 +118,7 @@ async def update_faq_rating(
 
 async def cleanup_stale_faq(session: AsyncSession, *, stale_days: int = 90) -> int:
     """Удаляет FAQ-записи, не спрашиваемые более stale_days дней."""
-    cutoff = datetime.utcnow() - timedelta(days=stale_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=stale_days)
     result = await session.execute(
         delete(FrequentQuestion).where(FrequentQuestion.last_asked_at < cutoff)
     )
@@ -130,7 +130,7 @@ def _is_answer_locked(fq: FrequentQuestion) -> bool:
     """Ответ «закреплён», если вопрос задавали достаточно часто, оценки положительные
     и вопрос задавался в последние 30 дней (чтобы устаревшие ответы не блокировались)."""
     from datetime import timedelta
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     # Ответ не может быть «залочен», если не спрашивали > 30 дней
     if fq.last_asked_at and now - fq.last_asked_at > timedelta(days=30):
         return False

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,7 +61,7 @@ class DailySummary:
 
 
 async def build_daily_summary(session: AsyncSession, chat_id: int) -> DailySummary:
-    since = datetime.utcnow() - timedelta(days=1)
+    since = datetime.now(timezone.utc) - timedelta(days=1)
     msg_count = int(
         await session.scalar(
             select(func.count()).select_from(MessageLog).where(

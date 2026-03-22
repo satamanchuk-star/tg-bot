@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
@@ -246,7 +246,7 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
             message_id=message.message_id, reason=violation_type, confidence=confidence,
         )
         # Немедленный мут 24ч
-        until = datetime.utcnow() + timedelta(hours=24)
+        until = datetime.now(timezone.utc) + timedelta(hours=24)
         permissions = ChatPermissions(can_send_messages=False)
         await bot.restrict_chat_member(
             settings.forum_chat_id,
@@ -282,7 +282,7 @@ async def _apply_strike_threshold(bot: Bot, message: Message, user_id: int, stri
         await _warn_user(message, "слишком много нарушений — бан.", bot)
     elif strike_count >= 3:
         # Мут 24ч
-        until = datetime.utcnow() + timedelta(hours=24)
+        until = datetime.now(timezone.utc) + timedelta(hours=24)
         permissions = ChatPermissions(can_send_messages=False)
         await bot.restrict_chat_member(
             settings.forum_chat_id,
@@ -297,7 +297,7 @@ async def _check_flood(message: Message, bot: Bot) -> bool:
     """Flood-проверка (не связана с AI severity)."""
     if message.from_user is None:
         return False
-    count = FLOOD_TRACKER.register(message.from_user.id, settings.forum_chat_id, datetime.utcnow())
+    count = FLOOD_TRACKER.register(message.from_user.id, settings.forum_chat_id, datetime.now(timezone.utc))
     if count <= 10:
         return False
 
@@ -306,7 +306,7 @@ async def _check_flood(message: Message, bot: Bot) -> bool:
             FloodRecord,
             {"user_id": message.from_user.id, "chat_id": settings.forum_chat_id},
         )
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if record is None:
             record = FloodRecord(user_id=message.from_user.id, chat_id=settings.forum_chat_id)
             session.add(record)
@@ -315,7 +315,7 @@ async def _check_flood(message: Message, bot: Bot) -> bool:
         await session.commit()
 
     mute_minutes = 60 if repeat_within_hour else 15
-    until = datetime.utcnow() + timedelta(minutes=mute_minutes)
+    until = datetime.now(timezone.utc) + timedelta(minutes=mute_minutes)
     permissions = ChatPermissions(can_send_messages=False)
     await bot.restrict_chat_member(
         settings.forum_chat_id,

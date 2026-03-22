@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,7 +73,7 @@ async def cleanup_old_feedback(session: AsyncSession, *, retention_days: int = 9
     from datetime import timedelta
     from sqlalchemy import delete
 
-    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
     result = await session.execute(
         delete(AiFeedback).where(AiFeedback.created_at < cutoff)
     )

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -17,7 +17,7 @@ class Strike(Base):
     user_id: Mapped[int] = mapped_column(Integer, index=True)
     chat_id: Mapped[int] = mapped_column(Integer, index=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, index=True
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
 
 
@@ -73,7 +73,7 @@ class MigrationFlag(Base):
     __tablename__ = "migration_flags"
 
     key: Mapped[str] = mapped_column(String(50), primary_key=True)
-    applied_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    applied_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class QuizQuestion(Base):
@@ -88,7 +88,7 @@ class QuizUsedQuestion(Base):
     __tablename__ = "quiz_used_questions"
 
     question_normalized: Mapped[str] = mapped_column(Text, primary_key=True)
-    used_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    used_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class QuizSession(Base):
@@ -129,7 +129,7 @@ class GameCommandMessage(Base):
     chat_id: Mapped[int] = mapped_column(Integer, index=True)
     message_id: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, index=True
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
 
 
@@ -142,7 +142,7 @@ class RouletteRound(Base):
     topic_id: Mapped[int] = mapped_column(Integer)
     result_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class RouletteBet(Base):
@@ -180,7 +180,7 @@ class MessageLog(Base):
     severity: Mapped[int] = mapped_column(Integer, default=0)
     sentiment: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, index=True
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
 
 
@@ -196,7 +196,7 @@ class ModerationEvent(Base):
     reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, index=True
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
 
 
@@ -219,7 +219,7 @@ class RagMessage(Base):
     rag_canonical_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, index=True
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
 
 
@@ -235,7 +235,7 @@ class ChatHistory(Base):
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_summary: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, index=True
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
 
 
@@ -251,7 +251,7 @@ class AiFeedback(Base):
     reply_text: Mapped[str] = mapped_column(Text)
     rating: Mapped[int] = mapped_column(Integer)  # +1 / -1
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, index=True
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
 
 
@@ -266,9 +266,9 @@ class FrequentQuestion(Base):
     ask_count: Mapped[int] = mapped_column(Integer, default=1)
     positive_ratings: Mapped[int] = mapped_column(Integer, default=0)
     negative_ratings: Mapped[int] = mapped_column(Integer, default=0)
-    last_asked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_asked_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, index=True
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
 
 
@@ -281,8 +281,8 @@ class AiUsage(Base):
     tokens_used: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
 
 
@@ -302,7 +302,7 @@ class ModerationTraining(Base):
     vote_no: Mapped[int] = mapped_column(Integer, default=0)
     voted_user_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, index=True
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
 
 
@@ -315,7 +315,7 @@ class ResidentProfile(Base):
     display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     facts_json: Mapped[str] = mapped_column(Text, default="{}")
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+        DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc),
     )
 
 
@@ -342,7 +342,7 @@ class ResidentService(Base):
     added_by_user_id: Mapped[int] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, index=True
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
 
 
@@ -368,11 +368,11 @@ class Place(Base):
     work_time: Mapped[str | None] = mapped_column(String(255), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
 
 
@@ -386,4 +386,4 @@ class ModerationCalibration(Base):
     adjusted_severity: Mapped[int] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(Text)
     sample_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
