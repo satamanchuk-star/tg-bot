@@ -730,18 +730,24 @@ class OpenRouterProvider:
         raise RuntimeError("AI API недоступен")
 
     async def probe(self) -> AiProbeResult:
+        """Лёгкая проверка доступности API: GET /models без расхода токенов."""
+        if not settings.ai_key:
+            return AiProbeResult(False, "AI_KEY не задан", 0)
         started = time.perf_counter()
         try:
-            _, _ = await self._chat_completion(
-                [
-                    {"role": "system", "content": "Ответь одним словом: ok"},
-                    {"role": "user", "content": "ping"},
-                ],
-                chat_id=settings.forum_chat_id,
+            response = await self._client.get(
+                "/models",
+                headers={"Authorization": f"Bearer {settings.ai_key}"},
             )
             latency = int((time.perf_counter() - started) * 1000)
-            return AiProbeResult(True, "AI API доступен.", latency)
-        except RuntimeError as exc:
+            if response.status_code == 200:
+                return AiProbeResult(True, "AI API доступен.", latency)
+            return AiProbeResult(
+                False,
+                f"AI API вернул HTTP {response.status_code}",
+                latency,
+            )
+        except Exception as exc:  # noqa: BLE001
             latency = int((time.perf_counter() - started) * 1000)
             return AiProbeResult(False, str(exc), latency)
 

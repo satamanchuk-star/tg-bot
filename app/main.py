@@ -656,16 +656,24 @@ async def on_startup(bot: Bot) -> None:
     if settings.ai_enabled and settings.ai_key:
         source_note = " (по умолчанию, AI_MODEL не задан)" if settings.ai_model_is_default else ""
         ai_mode = f"AI: OpenRouter ({settings.ai_model}){source_note}"
+        probe = await get_ai_client().probe()
+        if probe.ok:
+            ai_probe_note = f"API: ✅ доступен ({probe.latency_ms} ms)"
+        else:
+            ai_probe_note = f"API: ❌ недоступен — {probe.details}"
+        logger.info("AI probe: ok=%s details=%s latency_ms=%s", probe.ok, probe.details, probe.latency_ms)
     elif not settings.ai_enabled:
         ai_mode = "AI: отключен (AI_ENABLED=false)"
+        ai_probe_note = ""
     else:
         ai_mode = "AI: отключен (AI_KEY не задан)"
+        ai_probe_note = ""
     logger.info("AI модуль: %s", ai_mode)
     if telegram_available:
-        await bot.send_message(
-            settings.admin_log_chat_id,
-            f"🟢 Бот запущен\nВерсия: {settings.build_version}\n{ai_mode}",
-        )
+        lines = [f"🟢 Бот запущен", f"Версия: {settings.build_version}", ai_mode]
+        if ai_probe_note:
+            lines.append(ai_probe_note)
+        await bot.send_message(settings.admin_log_chat_id, "\n".join(lines))
 
 
 async def error_handler(event: ErrorEvent) -> bool:

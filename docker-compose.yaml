@@ -7,6 +7,11 @@ services:
       - ./data:/app/data
     env_file:
       - .env
+    environment:
+      - AI_ENABLED=${AI_ENABLED:-true}
+      - AI_API_URL=${AI_API_URL:-https://openrouter.ai/api/v1}
+      - AI_KEY=${AI_KEY:-}
+      - AI_MODEL=${AI_MODEL:-deepseek/deepseek-v3.2}
 
   watchtower:
     image: containrrr/watchtower
