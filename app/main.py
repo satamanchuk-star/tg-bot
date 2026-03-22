@@ -714,7 +714,11 @@ async def main() -> None:
         raise SystemExit(1)
 
     try:
-        bot = Bot(token=settings.bot_token, session=RetryOnFloodSession())
+        session_kwargs: dict[str, Any] = {}
+        if settings.telegram_proxy:
+            session_kwargs["proxy"] = settings.telegram_proxy
+            logger.info("Используется прокси для Telegram: %s", settings.telegram_proxy)
+        bot = Bot(token=settings.bot_token, session=RetryOnFloodSession(**session_kwargs))
     except TokenValidationError:
         token_preview = settings.bot_token[:10] + "..." if len(settings.bot_token) > 10 else settings.bot_token
         logger.error(

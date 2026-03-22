@@ -218,6 +218,13 @@ class Settings(BaseSettings):
     google_sheets_worksheet_name: str = "Objects"
     google_service_account_file: str | None = None
 
+    # Прокси для подключения к Telegram API (нужен если api.telegram.org недоступен напрямую)
+    # Формат: http://user:pass@host:port  или  socks5://host:port
+    telegram_proxy: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("TELEGRAM_PROXY", "HTTPS_PROXY", "https_proxy"),
+    )
+
     topic_rules: int | None = None
     topic_important: int | None = None
     topic_buildings_41_42: int | None = None
