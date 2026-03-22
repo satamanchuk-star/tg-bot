@@ -761,6 +761,7 @@ async def help_command(message: Message, bot: Bot) -> None:
     response = await message.answer(
         menu_text,
         reply_markup=_menu_keyboard(),
+        parse_mode="HTML",
     )
     schedule_help_delete(message.bot, response.chat.id, response.message_id)
     logger.info("OUT: HELP_MENU")
@@ -831,6 +832,7 @@ async def help_back(callback: CallbackQuery) -> None:
     await callback.message.edit_text(
         menu_text,
         reply_markup=_menu_keyboard(),
+        parse_mode="HTML",
     )
     schedule_help_delete(
         callback.message.bot,
