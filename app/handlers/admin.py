@@ -31,7 +31,7 @@ from app.services.ai_module import (
     resolve_provider_mode,
 )
 from app.handlers.moderation import is_training_mode, set_training_mode
-from app.services.ai_usage import next_reset_delta, reset_ai_usage
+from app.services.ai_usage import next_reset_delta
 from app.services.rag import add_rag_message, build_canonical_text, get_rag_count, systematize_rag
 from app.services.resident_services import add_service, get_services_count
 from app.services.admin_stats_reset import reset_runtime_statistics
@@ -84,11 +84,11 @@ async def _ensure_admin(message: Message, bot: Bot) -> bool:
 async def admin_help(message: Message, bot: Bot) -> None:
     if message.from_user is None:
         if message.sender_chat:
-            await message.reply(ADMIN_HELP)
+            await message.reply(ADMIN_HELP, parse_mode="HTML")
         return
     if not await _ensure_admin(message, bot):
         return
-    await message.reply(ADMIN_HELP)
+    await message.reply(ADMIN_HELP, parse_mode="HTML")
 
 
 @router.message(Command("mute"))
@@ -271,14 +271,6 @@ async def ai_status(message: Message, bot: Bot) -> None:
     )
 
 
-@router.message(Command("ai_ping"))
-async def ai_ping(message: Message, bot: Bot) -> None:
-    if not await _ensure_admin(message, bot):
-        return
-    result = await get_ai_client().probe()
-    status = "✅" if result.ok else "⚠️"
-    await message.reply(f"{status} {result.details}\nLatency: {result.latency_ms} ms")
-
 
 @router.message(Command("ai_probe"))
 async def ai_probe(message: Message, bot: Bot) -> None:
@@ -294,14 +286,6 @@ async def ai_probe(message: Message, bot: Bot) -> None:
         f"3) Учёт usage сегодня: requests={report.requests_used_today}, tokens={report.tokens_used_today}"
     )
 
-
-@router.message(Command("ai_reset"))
-async def ai_reset(message: Message, bot: Bot) -> None:
-    if not await _ensure_admin(message, bot):
-        return
-    async for session in get_session():
-        deleted = await reset_ai_usage(session)
-    await message.reply(f"Счётчики AI usage очищены (на будущее). Удалено записей: {deleted}.")
 
 
 @router.message(Command("training_on"))
