@@ -1044,6 +1044,13 @@ async def mention_help(message: Message, bot: Bot) -> None:
     if not settings.ai_feature_assistant:
         await message.reply(_next_mention_reply())
         logger.info("OUT: MENTION_REPLY (ai_feature_assistant=off)")
+        from app.services.ai_module import _log_response_event
+        _log_response_event(
+            "mention_random",
+            _get_message_text(message) or "",
+            message.from_user.id if message.from_user else None,
+            message.message_thread_id,
+        )
         return
 
     # Проверяем модерацию перед ответом ассистента (только severity >= 2 блокирует)
@@ -1173,13 +1180,26 @@ async def mention_help(message: Message, bot: Bot) -> None:
         except Exception:
             logger.exception("Ошибка при генерации AI-ответа на упоминание.")
             try:
-                from app.services.ai_module import build_local_assistant_reply
+                from app.services.ai_module import build_local_assistant_reply, _log_response_event
+                _log_response_event(
+                    "mention_ai_error",
+                    prompt[:70],
+                    message.from_user.id if message.from_user else None,
+                    message.message_thread_id,
+                )
                 fallback_reply = build_local_assistant_reply(prompt, context=context)
                 await message.reply(fallback_reply)
             except Exception:
                 logger.exception("Не удалось отправить даже fallback-ответ на упоминание.")
     else:
         # Упомянули без вопроса — подсказываем, как пользоваться
+        from app.services.ai_module import _log_response_event
+        _log_response_event(
+            "mention_no_prompt",
+            _get_message_text(message) or "",
+            message.from_user.id if message.from_user else None,
+            message.message_thread_id,
+        )
         await message.reply(
             "Привет! Задай вопрос — и я постараюсь помочь 😊\n"
             "Например: «@бот где ближайшая аптека?»"

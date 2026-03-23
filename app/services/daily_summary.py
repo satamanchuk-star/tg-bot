@@ -189,6 +189,94 @@ def build_ai_summary_context(summary: DailySummary) -> str:
     )
 
 
+_RESPONSE_SOURCE_LABELS: dict[str, str] = {
+    "resident_kb": "База знаний ЖК (прямой ответ)",
+    "resident_kb_context_ai": "База знаний ЖК + ИИ",
+    "rag_ai": "RAG + ИИ",
+    "faq_ai": "FAQ + ИИ",
+    "places_ai": "Инфраструктура + ИИ",
+    "services_ai": "Услуги жителей + ИИ",
+    "web_ai": "Веб-поиск + ИИ",
+    "fallback_ai": "ИИ без контекста",
+    "rag": "RAG (локально)",
+    "faq": "FAQ (локально)",
+    "places": "Инфраструктура (локально)",
+    "services": "Услуги (локально)",
+    "web": "Веб-поиск (локально)",
+    "rule": "Тематическое правило",
+    "fallback": "Не знаю (fallback)",
+    "resident_kb_direct": "База знаний ЖК",
+    "greeting": "Приветствие",
+    "thanks": "Благодарность",
+    "empty_prompt": "Пустой запрос",
+    "forbidden_topic": "Запрещённая тема",
+    "mention_random": "Упоминание (случайная шутка)",
+    "mention_no_prompt": "Упоминание без вопроса",
+    "mention_ai_error": "Упоминание → ошибка ИИ",
+    "ai_error_local_fallback": "Ошибка ИИ → локальный fallback",
+}
+
+
+def build_response_report(response_log: list[dict]) -> str:
+    """Формирует текст ежедневного отчёта по логике ответов бота."""
+    if not response_log:
+        return "Отчёт по ответам бота: за сутки ни одного ответа не зафиксировано."
+
+    from collections import Counter
+    total = len(response_log)
+    ai_count = sum(1 for r in response_log if r.get("used_ai"))
+    source_counter: Counter[str] = Counter(r["source"] for r in response_log)
+
+    lines = [
+        f"Отчёт по логике ответов бота за сутки:",
+        f"• Всего ответов: {total} (из них через ИИ: {ai_count}, локально: {total - ai_count})",
+        "",
+        "Разбивка по источникам:",
+    ]
+
+    for source, count in source_counter.most_common():
+        label = _RESPONSE_SOURCE_LABELS.get(source, source)
+        pct = round(count / total * 100)
+        lines.append(f"  — {label}: {count} ({pct}%)")
+
+    # Примеры запросов по ключевым источникам
+    examples: dict[str, list[str]] = {}
+    for r in response_log:
+        src = r["source"]
+        p = r.get("prompt", "").strip()
+        if p and src not in ("greeting", "thanks", "empty_prompt", "mention_no_prompt", "mention_random"):
+            examples.setdefault(src, [])
+            if len(examples[src]) < 2:
+                examples[src].append(p[:60])
+
+    if examples:
+        lines.append("")
+        lines.append("Примеры вопросов по источникам:")
+        for src, prompts in list(examples.items())[:6]:
+            label = _RESPONSE_SOURCE_LABELS.get(src, src)
+            for p in prompts:
+                lines.append(f"  [{label}] «{p}»")
+
+    # Предупреждение о частом fallback
+    fallback_sources = {"fallback", "fallback_ai", "ai_error_local_fallback", "mention_ai_error"}
+    fallback_count = sum(source_counter.get(s, 0) for s in fallback_sources)
+    if fallback_count > 0 and total > 0:
+        fallback_pct = round(fallback_count / total * 100)
+        if fallback_pct >= 30:
+            lines.append("")
+            lines.append(
+                f"⚠️ Внимание: {fallback_pct}% ответов — fallback (бот не нашёл данных). "
+                "Рекомендую пополнить базу знаний или RAG."
+            )
+        elif fallback_pct >= 15:
+            lines.append("")
+            lines.append(
+                f"ℹ️ Fallback составил {fallback_pct}% ответов — база знаний может быть неполной."
+            )
+
+    return "\n".join(lines)
+
+
 def render_daily_summary(summary: DailySummary) -> str:
     topics = ", ".join(summary.topics) if summary.topics else "темы не выделились"
     heat = "Было пару горячих моментов, но всё спокойно." if summary.conflicts else "День прошёл ровно и спокойно."
