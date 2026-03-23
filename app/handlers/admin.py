@@ -7,10 +7,10 @@ import os
 import signal
 from datetime import datetime, timedelta, timezone
 
-from aiogram import Bot, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import ChatPermissions, Message
+from aiogram.types import CallbackQuery, ChatPermissions, Message
 from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
 
@@ -20,7 +20,11 @@ from app.models import GameState
 from app.services.games import can_grant_coins, get_or_create_stats, register_coin_grant
 from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import extract_target_user, is_admin
-from app.utils.admin_help import ADMIN_HELP
+from app.utils.admin_help import (
+    ADMIN_CATEGORIES,
+    admin_back_keyboard,
+    admin_menu_keyboard,
+)
 from app.handlers.help import clear_routing_state
 from app.services.ai_module import (
     get_ai_client,
@@ -85,15 +89,78 @@ async def _ensure_admin(message: Message, bot: Bot) -> bool:
     return False
 
 
+async def _ensure_admin_cb(callback: CallbackQuery, bot: Bot) -> bool:
+    """Проверка прав администратора для callback_query."""
+    if callback.from_user is None:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return False
+    for chat_id in (settings.forum_chat_id, settings.admin_log_chat_id):
+        try:
+            if await is_admin(bot, chat_id, callback.from_user.id):
+                return True
+        except Exception:  # noqa: BLE001
+            logger.exception("Не удалось проверить права в чате %s.", chat_id)
+    await callback.answer("Только для администраторов.", show_alert=True)
+    return False
+
+
+# ---------------------------------------------------------------------------
+#  /admin — интерактивное меню категорий
+# ---------------------------------------------------------------------------
+
+_ADM_MENU_TEXT = "⚙️ <b>Панель администратора</b>\nВыберите раздел:"
+
 @router.message(Command("admin"))
 async def admin_help(message: Message, bot: Bot) -> None:
     if message.from_user is None:
         if message.sender_chat:
-            await message.reply(ADMIN_HELP, parse_mode="HTML")
+            await message.reply(
+                _ADM_MENU_TEXT,
+                parse_mode="HTML",
+                reply_markup=admin_menu_keyboard(),
+            )
         return
     if not await _ensure_admin(message, bot):
         return
-    await message.reply(ADMIN_HELP, parse_mode="HTML")
+    await message.reply(
+        _ADM_MENU_TEXT,
+        parse_mode="HTML",
+        reply_markup=admin_menu_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("adm:"))
+async def admin_menu_cb(callback: CallbackQuery, bot: Bot) -> None:
+    """Обработка нажатий на кнопки админ-меню."""
+    if callback.message is None:
+        await callback.answer()
+        return
+    if not await _ensure_admin_cb(callback, bot):
+        return
+
+    key = (callback.data or "").split(":", 1)[1]
+
+    if key == "back":
+        await callback.message.edit_text(
+            _ADM_MENU_TEXT,
+            parse_mode="HTML",
+            reply_markup=admin_menu_keyboard(),
+        )
+        await callback.answer()
+        return
+
+    category = ADMIN_CATEGORIES.get(key)
+    if category is None:
+        await callback.answer("Неизвестный раздел.", show_alert=True)
+        return
+
+    _, text = category
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=admin_back_keyboard(),
+    )
+    await callback.answer()
 
 
 @router.message(Command("mute"))

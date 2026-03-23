@@ -18,6 +18,7 @@ from aiogram.utils.token import TokenValidationError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
+    BotCommandScopeChatAdministrators,
     ErrorEvent,
     TelegramObject,
     Update,
@@ -679,11 +680,42 @@ async def on_startup(bot: Bot) -> None:
         await bot.set_my_commands(
             [
                 BotCommand(command="help", description="Справка и навигация по форуму"),
+                BotCommand(command="rules", description="Правила нашего сообщества"),
                 BotCommand(command="ai", description="Задать вопрос Жаботу"),
                 BotCommand(command="21", description="Играть в блэкджек"),
-                BotCommand(command="score", description="Мои монеты"),
+                BotCommand(command="21top", description="Топ игроков недели"),
+                BotCommand(command="roulette", description="Играть в рулетку"),
+                BotCommand(command="bet", description="Сделать ставку в рулетке"),
+                BotCommand(command="score", description="Мои монеты и статистика"),
+                BotCommand(command="bal", description="Мой счёт в викторине"),
+                BotCommand(command="topumnij", description="Топ знатоков викторины"),
             ],
         )
+        # Команды для администраторов форума (видны только админам)
+        try:
+            await bot.set_my_commands(
+                [
+                    BotCommand(command="admin", description="📋 Меню всех админ-команд"),
+                    BotCommand(command="mute", description="Замьютить пользователя (реплай)"),
+                    BotCommand(command="unmute", description="Снять мут (реплай)"),
+                    BotCommand(command="ban", description="Забанить пользователя (реплай)"),
+                    BotCommand(command="unban", description="Снять бан (реплай)"),
+                    BotCommand(command="strike", description="Выдать страйк (реплай)"),
+                    BotCommand(command="addcoins", description="Начислить монеты (реплай)"),
+                    BotCommand(command="ai_status", description="Статус и диагностика ИИ"),
+                    BotCommand(command="usluga", description="Добавить услугу в каталог"),
+                    BotCommand(command="form", description="Форма для шлагбаума"),
+                    BotCommand(command="text", description="Текст от лица бота"),
+                    BotCommand(command="umnij_start", description="Запустить викторину"),
+                    BotCommand(command="restart_jobs", description="Перезапуск зависших задач"),
+                    BotCommand(command="shutdown_bot", description="⚠️ Остановить бота"),
+                ],
+                scope=BotCommandScopeChatAdministrators(
+                    chat_id=settings.forum_chat_id,
+                ),
+            )
+        except Exception:  # noqa: BLE001 - не блокируем старт, если не удалось зарегистрировать
+            logger.warning("Не удалось зарегистрировать админ-команды в Telegram меню.")
     # Сброс кэшей при старте, чтобы не использовать устаревшие данные
     cleared = clear_assistant_cache()
     if cleared:
