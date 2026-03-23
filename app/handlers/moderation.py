@@ -571,13 +571,9 @@ async def moderate_message(message: Message, bot: Bot) -> None:
             from app.services.proactive import (
                 maybe_topic_comment,
                 maybe_proactive_reply,
-                maybe_welcome_newcomer,
                 register_message_activity,
             )
             register_message_activity(message.chat.id, message.message_thread_id)
-            # Приветствие новичков (первые сообщения в форуме)
-            if not moderated:
-                await maybe_welcome_newcomer(message, bot)
             # Подключаемся к активным дискуссиям
             await maybe_topic_comment(message, bot)
             # Проактивный ответ на вопросы (когда топик не активен)
