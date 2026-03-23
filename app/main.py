@@ -52,8 +52,8 @@ from app.services.games import (
 from app.services.health import get_health_state, update_heartbeat, update_notice
 from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
-from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, set_ai_admin_notifier
-from app.services.daily_summary import build_daily_summary, render_daily_summary
+from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, get_and_clear_response_log, set_ai_admin_notifier
+from app.services.daily_summary import build_daily_summary, build_response_report, render_daily_summary
 from app.services.proactive import send_scheduled_greeting
 from app.services.resident_kb import load_resident_kb
 
@@ -318,6 +318,21 @@ async def send_daily_summary(bot: Bot) -> None:
 
 
 
+async def send_daily_response_report(bot: Bot) -> None:
+    """Отправляет в чат логов ежедневный отчёт по логике ответов бота."""
+    response_log = get_and_clear_response_log()
+    report_text = build_response_report(response_log)
+    for attempt in range(1, 4):
+        try:
+            await bot.send_message(settings.admin_log_chat_id, report_text)
+            return
+        except Exception:
+            if attempt >= 3:
+                logger.error("Не удалось отправить отчёт по ответам бота после 3 попыток.")
+                return
+            await asyncio.sleep(2)
+
+
 async def send_weekly_leaderboard(bot: Bot) -> None:
     if settings.topic_games is None:
         logger.info("Еженедельный рейтинг игр пропущен: topic_games не задан.")
@@ -464,6 +479,13 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         "cron",
         hour=settings.ai_summary_hour,
         minute=settings.ai_summary_minute,
+        args=[bot],
+    )
+    scheduler.add_job(
+        send_daily_response_report,
+        "cron",
+        hour=settings.ai_summary_hour,
+        minute=(settings.ai_summary_minute + 2) % 60,
         args=[bot],
     )
     scheduler.add_job(
