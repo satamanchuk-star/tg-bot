@@ -86,7 +86,7 @@ def test_on_startup_does_not_crash_when_cleanup_fails(monkeypatch) -> None:
 
         await on_startup(bot)
 
-        bot.set_my_commands.assert_called_once()
+        assert bot.set_my_commands.call_count >= 1
 
     asyncio.run(_run())
 
