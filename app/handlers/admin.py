@@ -12,6 +12,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import ChatPermissions, Message
 from sqlalchemy import delete
+from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.db import get_session
@@ -33,7 +34,11 @@ from app.services.ai_module import (
 from app.handlers.moderation import is_training_mode, set_training_mode
 from app.services.ai_usage import next_reset_delta
 from app.services.rag import add_rag_message, build_canonical_text, get_rag_count, systematize_rag
-from app.services.resident_services import add_service, get_services_count
+from app.services.resident_services import (
+    add_service,
+    get_service_by_source_message_id,
+    get_services_count,
+)
 from app.services.admin_stats_reset import reset_runtime_statistics
 from app.utils.profanity import load_profanity, load_profanity_exceptions
 
@@ -443,6 +448,20 @@ async def usluga_command(message: Message, bot: Bot) -> None:
         await message.reply("Сообщение слишком короткое для добавления в каталог услуг.")
         return
 
+    async for session in get_session():
+        existing = await get_service_by_source_message_id(
+            session,
+            chat_id=settings.forum_chat_id,
+            source_message_id=target_msg.message_id,
+        )
+        if existing is not None:
+            await message.reply(
+                "Эта услуга уже есть в каталоге.\n"
+                f"Категория: {existing.category}\n"
+                f"Описание: {existing.description[:200]}"
+            )
+            return
+
     admin_id = int(_admin_id(message))
     provider_user_id = target_msg.from_user.id if target_msg.from_user else 0
     provider_name = target_msg.from_user.full_name if target_msg.from_user else None
@@ -483,19 +502,35 @@ async def usluga_command(message: Message, bot: Bot) -> None:
         logger.warning("AI-категоризация услуги не удалась, используем локальный fallback.")
 
     async for session in get_session():
-        record = await add_service(
-            session,
-            chat_id=settings.forum_chat_id,
-            message_text=text.strip(),
-            provider_user_id=provider_user_id,
-            provider_name=provider_name,
-            source_message_id=target_msg.message_id,
-            added_by_user_id=admin_id,
-            ai_description=ai_description,
-            ai_keywords=ai_keywords,
-            ai_category=ai_category,
-        )
-        await session.commit()
+        try:
+            record = await add_service(
+                session,
+                chat_id=settings.forum_chat_id,
+                message_text=text.strip(),
+                provider_user_id=provider_user_id,
+                provider_name=provider_name,
+                source_message_id=target_msg.message_id,
+                added_by_user_id=admin_id,
+                ai_description=ai_description,
+                ai_keywords=ai_keywords,
+                ai_category=ai_category,
+            )
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            existing = await get_service_by_source_message_id(
+                session,
+                chat_id=settings.forum_chat_id,
+                source_message_id=target_msg.message_id,
+            )
+            if existing is not None:
+                await message.reply(
+                    "Эта услуга уже была добавлена параллельно другим админом.\n"
+                    f"Категория: {existing.category}\n"
+                    f"Описание: {existing.description[:200]}"
+                )
+                return
+            raise
         count = await get_services_count(session, settings.forum_chat_id)
 
     cat_label = record.category

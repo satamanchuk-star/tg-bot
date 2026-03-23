@@ -55,21 +55,44 @@ _SERVICE_CATEGORIES: list[tuple[str, tuple[str, ...]]] = [
                     "украшен", "букет", "цветы", "цветов", "флорист")),
 ]
 
+_KNOWN_CATEGORIES = {category.lower() for category, _markers in _SERVICE_CATEGORIES}
+
+
+def _normalize_service_text(text: str) -> str:
+    """Нормализует текст услуги для локального поиска и классификации."""
+    return text.lower().replace("ё", "е")
+
+
+def _extract_service_tokens(text: str) -> list[str]:
+    """Достаёт токены из описания услуги."""
+    return re.findall(r"[а-яёa-z0-9]+", _normalize_service_text(text))
+
 
 def classify_service(text: str) -> str:
-    """Определяет категорию услуги по тексту."""
-    lowered = text.lower().replace("ё", "е")
-    tokens = set(re.findall(r"[а-яёa-z0-9]+", lowered))
+    """Определяет категорию услуги по тексту через ранжирование маркеров."""
+    lowered = _normalize_service_text(text)
+    tokens = set(_extract_service_tokens(text))
+    best_category = "общее"
+    best_score = 0
+
     for category, markers in _SERVICE_CATEGORIES:
-        if any(any(token.startswith(m) for token in tokens) for m in markers):
-            return category
-    return "общее"
+        score = 0
+        for marker in markers:
+            if any(token.startswith(marker) for token in tokens):
+                score += 3
+                continue
+            if marker in lowered:
+                score += 1
+        if score > best_score:
+            best_category = category
+            best_score = score
+
+    return best_category
 
 
 def extract_keywords(text: str) -> str:
     """Извлекает ключевые слова из текста услуги для поиска."""
-    lowered = text.lower().replace("ё", "е")
-    tokens = re.findall(r"[а-яёa-z0-9]+", lowered)
+    tokens = _extract_service_tokens(text)
     meaningful = [t for t in tokens if len(t) >= 3 and t not in _STOP_WORDS]
     # Убираем дубли, сохраняя порядок
     seen: set[str] = set()
@@ -79,6 +102,41 @@ def extract_keywords(text: str) -> str:
             seen.add(t)
             unique.append(t)
     return ",".join(unique[:30])
+
+
+def normalize_service_category(category: str | None, fallback_text: str) -> str:
+    """Нормализует категорию от AI или локального классификатора."""
+    if category:
+        normalized = category.strip().lower().replace("ё", "е")
+        if normalized in _KNOWN_CATEGORIES:
+            return normalized
+    return classify_service(fallback_text)
+
+
+def normalize_service_keywords(keywords: str | None, fallback_text: str) -> str:
+    """Очищает AI-ключевые слова или строит их локально."""
+    if not keywords:
+        return extract_keywords(fallback_text)
+
+    tokens = re.findall(r"[а-яёa-z0-9]+", keywords.lower().replace("ё", "е"))
+    meaningful = [token for token in tokens if len(token) >= 3 and token not in _STOP_WORDS]
+    if not meaningful:
+        return extract_keywords(fallback_text)
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for token in meaningful:
+        if token in seen:
+            continue
+        seen.add(token)
+        unique.append(token)
+    return ",".join(unique[:30])
+
+
+def normalize_service_description(description: str | None, fallback_text: str) -> str:
+    """Очищает описание услуги и ограничивает его размер."""
+    candidate = (description or "").strip() or fallback_text.strip()
+    return candidate[:500]
 
 
 async def add_service(
@@ -95,13 +153,33 @@ async def add_service(
     ai_category: str | None = None,
 ) -> ResidentService:
     """Добавляет услугу в каталог."""
-    description = ai_description or message_text[:500]
-    keywords = ai_keywords or extract_keywords(message_text)
-    category = ai_category or classify_service(message_text)
+    description = normalize_service_description(ai_description, message_text)
+    keywords = normalize_service_keywords(ai_keywords, message_text)
+    category = normalize_service_category(ai_category, message_text)
+    normalized_message_text = message_text.strip()[:2000]
+
+    if source_message_id is not None:
+        existing = await get_service_by_source_message_id(
+            session,
+            chat_id=chat_id,
+            source_message_id=source_message_id,
+            is_active=None,
+        )
+        if existing is not None:
+            existing.message_text = normalized_message_text
+            existing.description = description.strip()[:500]
+            existing.keywords = keywords[:1000]
+            existing.category = category
+            existing.provider_user_id = provider_user_id
+            existing.provider_name = provider_name
+            existing.added_by_user_id = added_by_user_id
+            existing.is_active = True
+            await session.flush()
+            return existing
 
     record = ResidentService(
         chat_id=chat_id,
-        message_text=message_text.strip()[:2000],
+        message_text=normalized_message_text,
         description=description.strip()[:500],
         keywords=keywords[:1000],
         category=category,
@@ -210,6 +288,29 @@ def format_services_for_user(services: list[ResidentService]) -> str:
             line += f" — {svc.provider_name}"
         parts.append(line)
     return "\n".join(parts)
+
+
+async def get_service_by_source_message_id(
+    session: AsyncSession,
+    *,
+    chat_id: int,
+    source_message_id: int,
+    is_active: bool | None = True,
+) -> ResidentService | None:
+    """Возвращает услугу по исходному сообщению, при необходимости фильтруя по активности."""
+    conditions = [
+        ResidentService.chat_id == chat_id,
+        ResidentService.source_message_id == source_message_id,
+    ]
+    if is_active is not None:
+        conditions.append(ResidentService.is_active.is_(is_active))
+
+    result = await session.execute(
+        select(ResidentService)
+        .where(and_(*conditions))
+        .order_by(ResidentService.is_active.desc(), ResidentService.created_at.desc())
+    )
+    return result.scalar_one_or_none()
 
 
 async def get_services_count(session: AsyncSession, chat_id: int) -> int:

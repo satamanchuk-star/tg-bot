@@ -323,6 +323,13 @@ class ResidentProfile(Base):
 class ResidentService(Base):
     """Почему: каталог услуг от жителей ЖК — бот подсказывает соседей-специалистов."""
     __tablename__ = "resident_services"
+    __table_args__ = (
+        UniqueConstraint(
+            "chat_id",
+            "source_message_id",
+            name="uq_resident_services_chat_source_message",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     chat_id: Mapped[int] = mapped_column(Integer, index=True)
