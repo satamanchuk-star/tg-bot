@@ -263,6 +263,39 @@ async def init_db(async_engine: AsyncEngine) -> None:
                     )
                 )
 
+            if inspector.has_table("resident_services"):
+                duplicate_rows = sync_conn.execute(
+                    text(
+                        "SELECT chat_id, source_message_id, MAX(id) AS keep_id "
+                        "FROM resident_services "
+                        "WHERE source_message_id IS NOT NULL "
+                        "GROUP BY chat_id, source_message_id "
+                        "HAVING COUNT(*) > 1"
+                    )
+                ).fetchall()
+                for duplicate in duplicate_rows:
+                    sync_conn.execute(
+                        text(
+                            "UPDATE resident_services "
+                            "SET source_message_id = NULL "
+                            "WHERE chat_id = :chat_id "
+                            "AND source_message_id = :source_message_id "
+                            "AND id <> :keep_id"
+                        ),
+                        {
+                            "chat_id": duplicate.chat_id,
+                            "source_message_id": duplicate.source_message_id,
+                            "keep_id": duplicate.keep_id,
+                        },
+                    )
+                sync_conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS "
+                        "uq_resident_services_chat_source_message_idx "
+                        "ON resident_services(chat_id, source_message_id)"
+                    )
+                )
+
             # Миграция resident_profiles (создаётся через create_all,
             # но проверяем на всякий случай)
 
