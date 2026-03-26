@@ -291,7 +291,7 @@ def build_resident_context(query: str, *, context: list[str] | None = None, top_
     if not result.matches:
         return ""
     # Отсекаем записи с низкой релевантностью, чтобы не загрязнять контекст ИИ
-    _MIN_CONTEXT_SCORE = 0.35
+    _MIN_CONTEXT_SCORE = 0.45
     relevant = [m for m in result.matches if m.score >= _MIN_CONTEXT_SCORE]
     if not relevant:
         return ""
@@ -302,7 +302,12 @@ def build_resident_context(query: str, *, context: list[str] | None = None, top_
         if match.entry.id in seen_ids:
             continue
         seen_ids.add(match.entry.id)
-        relevance = "высокая" if match.score >= 0.8 else "средняя"
+        if match.score >= 0.8:
+            relevance = "высокая"
+        elif match.score >= 0.6:
+            relevance = "средняя"
+        else:
+            relevance = "низкая"
         parts.append(
             f"[{idx}] Категория: {match.entry.category} | Релевантность: {relevance}\n"
             f"{match.entry.answer}"
