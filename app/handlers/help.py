@@ -1094,6 +1094,7 @@ async def mention_help(message: Message, bot: Bot) -> None:
                             user_id=message.from_user.id,
                             user_text=prompt,
                             bot_reply=bot_reply_text,
+                            bot=bot,
                         )
                         if applied:
                             await message.reply("Спасибо за поправку! Записал, в следующий раз не ошибусь 📝")

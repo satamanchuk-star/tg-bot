@@ -54,7 +54,7 @@ from app.services.health import get_health_state, update_heartbeat, update_notic
 from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
 from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, get_and_clear_response_log, set_ai_admin_notifier
-from app.services.daily_summary import build_daily_summary, build_response_report, render_daily_summary
+from app.services.daily_summary import build_ai_summary_context, build_daily_summary, build_response_report, render_daily_summary
 from app.services.proactive import send_scheduled_greeting
 from app.services.resident_kb import load_resident_kb
 
@@ -333,11 +333,28 @@ async def send_daily_summary(bot: Bot) -> None:
         return
     stats_text = render_daily_summary(summary)
 
+    # Генерируем AI-сводку, если доступен провайдер
+    ai_summary_text = ""
+    if summary.messages > 0:
+        try:
+            from app.services.ai_module import get_ai_client
+            ai_client = get_ai_client()
+            ai_context = build_ai_summary_context(summary)
+            ai_summary = await ai_client.generate_daily_summary(
+                ai_context, chat_id=settings.forum_chat_id,
+            )
+            if ai_summary and ai_summary.strip():
+                ai_summary_text = f"\n\n🤖 Резюме от ИИ:\n{ai_summary.strip()}"
+        except Exception:
+            logger.warning("Не удалось сгенерировать AI-сводку, отправляем только статистику.")
+
+    full_text = stats_text + ai_summary_text
+
     for attempt in range(1, 4):
         try:
             await bot.send_message(
                 target_chat_id,
-                stats_text,
+                full_text,
                 message_thread_id=target_thread_id,
             )
             return

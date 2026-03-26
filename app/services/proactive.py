@@ -17,7 +17,7 @@ from app.config import settings
 from app.db import get_session
 from app.models import MessageLog
 from app.services.ai_module import get_ai_client
-from app.services.resident_kb import build_resident_answer
+from app.services.resident_kb import build_resident_answer, build_resident_context
 
 logger = logging.getLogger(__name__)
 
@@ -167,13 +167,17 @@ async def maybe_proactive_reply(message: Message, bot: Bot) -> bool:
     # Вопросительное сообщение — пробуем ответить из базы знаний
     if _is_question(text):
         # Проверяем, есть ли у нас релевантная информация
-        answer = build_resident_answer(text)
-        if answer:
-            # У нас есть точная информация — отвечаем
+        kb_answer = build_resident_answer(text)
+        if kb_answer:
+            # Есть точная информация — используем KB-ответ напрямую
+            # или обогащаем через AI, передавая KB-контекст
             try:
                 ai_client = get_ai_client()
+                kb_context = build_resident_context(text)
+                context_lines = [f"summary: Релевантная информация из базы знаний:\n{kb_context}"] if kb_context else []
                 reply = await ai_client.assistant_reply(
-                    text, context=[], chat_id=chat_id,
+                    text, context=context_lines, chat_id=chat_id,
+                    topic_id=topic_id,
                 )
                 if reply and reply.strip():
                     await message.reply(reply)
@@ -181,7 +185,14 @@ async def maybe_proactive_reply(message: Message, bot: Bot) -> bool:
                     logger.info("PROACTIVE: question hint sent, topic=%s", topic_id)
                     return True
             except Exception:
-                logger.warning("Не удалось сгенерировать проактивный ответ")
+                # Если AI недоступен — отвечаем напрямую из KB
+                try:
+                    await message.reply(kb_answer)
+                    _mark_proactive_sent(chat_id, topic_id)
+                    logger.info("PROACTIVE: KB direct answer sent, topic=%s", topic_id)
+                    return True
+                except Exception:
+                    logger.warning("Не удалось отправить проактивный ответ")
 
     return False
 
