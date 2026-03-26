@@ -1725,10 +1725,12 @@ def build_local_assistant_reply(
     # 2. RAG — записи, добавленные админами через /rag_bot
     if rag_hint and rag_hint.strip():
         intros = (
-            "Вот что нашёл в базе знаний:",
-            "По базе знаний есть такая информация:",
-            "Нашёл в наших записях:",
-            "Есть данные по этой теме:",
+            "О, тут я в теме!",
+            "Так, у меня есть инфа по этому вопросу.",
+            "Ага, знаю — вот что записано у нас:",
+            "Секунду... Точно, вот:",
+            "Этот вопрос мне знаком!",
+            "У меня как раз было про это в записях.",
         )
         logger.info("ANSWER_SOURCE: source=rag prompt=%r", normalized_prompt[:80])
         _log_response_event("rag", normalized_prompt, user_id, topic_id)
@@ -1743,10 +1745,11 @@ def build_local_assistant_reply(
     # 4. Услуги от жителей ЖК
     if services_hint and services_hint.strip():
         intros = (
-            "О, у нас в ЖК есть свои мастера! Вот что нашёл:",
-            "Среди соседей есть специалисты! Смотри:",
-            "Нашёл среди услуг жителей:",
-            "У нас в доме есть кто занимается этим:",
+            "О, у нас прямо в ЖК есть спецы по этому делу!",
+            "Тут даже далеко ходить не надо — есть свои мастера:",
+            "Среди соседей нашёлся специалист, смотри:",
+            "Есть проверенные ребята прямо в нашем доме:",
+            "Кстати, у нас соседи этим занимаются!",
         )
         logger.info("ANSWER_SOURCE: source=services prompt=%r", normalized_prompt[:80])
         _log_response_event("services", normalized_prompt, user_id, topic_id)
@@ -1755,10 +1758,11 @@ def build_local_assistant_reply(
     # 5. Данные из БД инфраструктуры
     if places_hint and places_hint.strip():
         intros = (
-            "Вот что нашёл:",
-            "Нашлось по запросу:",
-            "Есть информация:",
-            "Нашёл кое-что полезное:",
+            "Знаю такое место!",
+            "Ага, есть инфа:",
+            "По нашему району нашлось:",
+            "Вот что у меня есть по этому адресу:",
+            "Секунду... Точно, вот информация:",
         )
         logger.info("ANSWER_SOURCE: source=places prompt=%r", normalized_prompt[:80])
         _log_response_event("places", normalized_prompt, user_id, topic_id)
@@ -1767,9 +1771,9 @@ def build_local_assistant_reply(
     # 6. Результаты веб-поиска
     if web_hint and web_hint.strip():
         intros = (
-            "Вот что нашёл в интернете:",
-            "По результатам поиска:",
-            "Нашёл в сети по запросу:",
+            "В моих записях не было, но погуглил для тебя:",
+            "Покопался в интернете — вот что нашлось:",
+            "Этого в нашей базе нет, но вот что удалось найти:",
         )
         logger.info("ANSWER_SOURCE: source=web prompt=%r", normalized_prompt[:80])
         _log_response_event("web", normalized_prompt, user_id, topic_id)

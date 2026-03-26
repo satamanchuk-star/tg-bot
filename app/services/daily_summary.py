@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -9,7 +10,74 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models import MessageLog, ModerationEvent
+
+
+# Стоп-слова для фильтрации топ-слов (не несут смысловой нагрузки)
+_WORD_STOP_LIST = {
+    "тоже", "потом", "можно", "нужно", "через", "просто", "только", "очень",
+    "всем", "ещё", "будет", "была", "было", "были", "есть", "нету",
+    "такой", "такая", "такое", "такие", "этот", "этого", "этой", "этих",
+    "свой", "свою", "своё", "своего", "своей", "своих",
+    "который", "которая", "которое", "которые", "которого",
+    "когда", "тогда", "потому", "поэтому", "чтобы", "если",
+    "какой", "какая", "какое", "какие", "какого",
+    "ничего", "никто", "может", "могу", "могут",
+    "сейчас", "вообще", "кстати", "кажется", "наверное", "вроде",
+    "спасибо", "пожалуйста", "привет", "здравствуйте",
+    "написал", "написала", "написали", "пишет", "пишут",
+    "делать", "делает", "делают", "сделать", "сделал", "сделали",
+    "знает", "знаю", "знают", "думаю", "думает",
+    "хочу", "хочет", "хотел", "хотела", "хотели",
+    "говорит", "говорят", "сказал", "сказала",
+    "нормально", "хорошо", "плохо", "ладно",
+    "вопрос", "ответ", "тема", "чате", "чата", "форуме",
+    "соседи", "соседей", "человек",
+}
+
+
+def _build_topic_name_map() -> dict[int, str]:
+    """Строит маппинг topic_id → человекочитаемое название."""
+    mapping: dict[int, str] = {}
+    topic_data = [
+        (settings.topic_gate, "Шлагбаум"),
+        (settings.topic_repair, "Ремонт"),
+        (settings.topic_complaints, "Жалобы"),
+        (settings.topic_pets, "Питомцы"),
+        (settings.topic_parents, "Мамы и папы"),
+        (settings.topic_realty, "Недвижимость"),
+        (settings.topic_rides, "Попутчики"),
+        (settings.topic_services, "Услуги"),
+        (settings.topic_uk, "УК"),
+        (settings.topic_smoke, "Курилка"),
+        (settings.topic_market, "Барахолка"),
+        (settings.topic_neighbors, "Соседи"),
+        (settings.topic_games, "Игры"),
+        (settings.topic_rules, "Правила"),
+        (settings.topic_important, "Важное"),
+    ]
+    # Дополнительные топики зданий
+    for attr_name in ("topic_buildings_41_42", "topic_building_2", "topic_building_3", "topic_duplex"):
+        tid = getattr(settings, attr_name, None)
+        if tid is not None:
+            label = attr_name.replace("topic_", "").replace("_", " ").title()
+            mapping[tid] = label
+    for topic_id, name in topic_data:
+        if topic_id is not None:
+            mapping[topic_id] = name
+    return mapping
+
+
+_TOPIC_NAME_MAP: dict[int, str] | None = None
+
+
+def _get_topic_name(topic_id: int) -> str:
+    """Возвращает человекочитаемое название топика по ID."""
+    global _TOPIC_NAME_MAP
+    if _TOPIC_NAME_MAP is None:
+        _TOPIC_NAME_MAP = _build_topic_name_map()
+    return _TOPIC_NAME_MAP.get(topic_id, f"тема #{topic_id}")
 
 
 @dataclass(slots=True)
@@ -103,7 +171,11 @@ async def build_daily_summary(session: AsyncSession, chat_id: int) -> DailySumma
             .limit(3)
         )
     ).all()
-    topics = [f"тема {row[0]} ({row[1]} сообщений)" for row in topic_rows if row[0] is not None]
+    # Человекочитаемые названия топиков
+    topics = [
+        f"{_get_topic_name(row[0])} ({row[1]} сообщ.)"
+        for row in topic_rows if row[0] is not None
+    ]
 
     text_rows = (
         await session.execute(
@@ -128,10 +200,12 @@ async def build_daily_summary(session: AsyncSession, chat_id: int) -> DailySumma
         if not text:
             continue
         for word in text.lower().split():
-            cleaned = word.strip(".,!?()[]{}\"'`""«»")
+            cleaned = word.strip(".,!?()[]{}\"'`""«»—–-")
             if len(cleaned) < 4:
                 continue
             if cleaned.startswith("http"):
+                continue
+            if cleaned in _WORD_STOP_LIST:
                 continue
             word_counter[cleaned] += 1
 
@@ -146,7 +220,15 @@ async def build_daily_summary(session: AsyncSession, chat_id: int) -> DailySumma
     mood = sentiment_stats.mood_label
     if conflicts > 0 and mood == "спокойное":
         mood = "напряжённое"
-    positive_text = "Участники активно помогали друг другу в обсуждениях."
+
+    # Вариативный позитивный текст
+    positive_text = _pick_positive_comment(summary_stats={
+        "messages": msg_count,
+        "active_users": active_users,
+        "mood": mood,
+        "conflicts": conflicts,
+        "sentiment": sentiment_stats,
+    })
 
     return DailySummary(
         messages=msg_count,
@@ -162,6 +244,52 @@ async def build_daily_summary(session: AsyncSession, chat_id: int) -> DailySumma
         top_tagged_users=[uid for uid, _ in tagged_counter.most_common(5)],
         sentiment=sentiment_stats,
     )
+
+
+def _pick_positive_comment(summary_stats: dict) -> str:
+    """Выбирает контекстный комментарий на основе реальных данных дня."""
+    mood = summary_stats.get("mood", "спокойное")
+    messages = summary_stats.get("messages", 0)
+    active_users = summary_stats.get("active_users", 0)
+    conflicts = summary_stats.get("conflicts", 0)
+    sentiment: SentimentStats | None = summary_stats.get("sentiment")
+
+    if conflicts >= 3:
+        return random.choice([
+            "Горячий день: несколько конфликтных ситуаций, стоит обратить внимание.",
+            "День был напряжённым — много споров. Возможно, стоит напомнить о правилах общения.",
+            "Были конфликты в нескольких темах, ситуация требует мониторинга.",
+        ])
+    if conflicts == 1 or conflicts == 2:
+        return random.choice([
+            "Было пару горячих моментов, но в целом всё под контролем.",
+            "Небольшие трения в паре обсуждений, но без серьёзных последствий.",
+            "Пара конфликтных ситуаций, остальные темы шли спокойно.",
+        ])
+    if mood == "позитивное":
+        return random.choice([
+            "Настроение в чате отличное — соседи помогали друг другу и общались дружелюбно.",
+            "Позитивный день: много полезных обсуждений и взаимопомощи.",
+            "Хороший день — общение было дружелюбным и конструктивным.",
+        ])
+    if messages == 0:
+        return "Тихий день — сообщений не было."
+    if messages < 20:
+        return random.choice([
+            "Тихий день, мало активности в чате.",
+            "Спокойный день с небольшим количеством сообщений.",
+        ])
+    if active_users > 15:
+        return random.choice([
+            "Активный день — много соседей участвовало в обсуждениях.",
+            f"В обсуждениях участвовало {active_users} человек — хорошая вовлечённость.",
+        ])
+    return random.choice([
+        "День прошёл ровно и спокойно.",
+        "Обычный рабочий день без происшествий.",
+        "Штатный день, обсуждения шли в спокойном русле.",
+        "Ничего необычного — стандартный день в чате.",
+    ])
 
 
 def build_ai_summary_context(summary: DailySummary) -> str:
@@ -183,9 +311,12 @@ def build_ai_summary_context(summary: DailySummary) -> str:
         f"- Конфликтных часов: {summary.conflicts}\n"
         f"- Тональность сообщений: {sentiment_line}\n"
         f"- Основные темы: {topics}\n"
-        f"- Топ слов: {words}\n"
+        f"- Топ обсуждаемых слов: {words}\n"
         f"- Самые активные пользователи (id): {tagged}\n"
-        "Сформируй короткое резюме для админов, включая оценку настроения чата."
+        "Сформируй короткое резюме для админов (до 600 символов), включая:\n"
+        "- Оценку настроения чата\n"
+        "- Ключевые темы дня\n"
+        "- Рекомендации, если были конфликты или аномально мало/много активности"
     )
 
 
@@ -279,7 +410,7 @@ def build_response_report(response_log: list[dict]) -> str:
 
 def render_daily_summary(summary: DailySummary) -> str:
     topics = ", ".join(summary.topics) if summary.topics else "темы не выделились"
-    heat = "Было пару горячих моментов, но всё спокойно." if summary.conflicts else "День прошёл ровно и спокойно."
+    words_line = ", ".join(summary.top_words[:6]) if summary.top_words else "—"
 
     # Sentiment-строка
     s = summary.sentiment
@@ -290,13 +421,23 @@ def render_daily_summary(summary: DailySummary) -> str:
             f"(+{s.positive} / ~{s.neutral} / -{s.negative})"
         )
 
+    # Модерация: показываем только если были события
+    mod_parts = []
+    if summary.warnings:
+        mod_parts.append(f"предупреждений: {summary.warnings}")
+    if summary.deletions:
+        mod_parts.append(f"удалений: {summary.deletions}")
+    if summary.strikes:
+        mod_parts.append(f"страйков: {summary.strikes}")
+    mod_line = f"\n• Модерация: {', '.join(mod_parts)}" if mod_parts else ""
+
     return (
-        "Статистика за день:\n"
+        "📊 Статистика за день:\n"
         f"• Сообщений: {summary.messages}\n"
-        f"• Активных соседей: {summary.active_users}\n"
-        f"• Предупреждений: {summary.warnings}, удалений: {summary.deletions}, страйков: {summary.strikes}\n"
-        f"• Часто обсуждали: {topics}\n"
-        f"• Общий фон: {summary.mood}"
+        f"• Активных соседей: {summary.active_users}"
+        f"{mod_line}\n"
+        f"• Обсуждали: {topics}\n"
+        f"• Топ слов: {words_line}"
         f"{sentiment_line}\n"
-        f"• Комментарий: {heat}"
+        f"• {summary.positive}"
     )
