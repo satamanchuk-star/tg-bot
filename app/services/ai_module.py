@@ -21,7 +21,7 @@ from app.db import get_session
 from app.models import Place
 from app.services.ai_usage import add_usage, can_consume_ai, get_usage_stats
 from app.services.faq import get_faq_answer
-from app.services.resident_kb import build_resident_answer, build_resident_context
+from app.services.resident_kb import build_resident_answer, build_resident_context, search_resident_kb
 from app.services.web_search import format_search_context, search_duckduckgo, should_search_web
 from app.utils.time import now_tz
 
@@ -834,16 +834,10 @@ class OpenRouterProvider:
             _log_response_event("forbidden_topic", safe_prompt, user_id, topic_id)
             return random.choice(_FORBIDDEN_TOPIC_REPLIES)
 
-        # Жёсткий приоритет канонической KB: если есть уверенный ответ,
-        # возвращаем его сразу и не даём LLM смешивать источники.
-        resident_answer = build_resident_answer(safe_prompt, context=context)
-        if resident_answer:
-            logger.info(
-                "ANSWER_SOURCE: source=resident_kb prompt=%r user_id=%s topic_id=%s",
-                safe_prompt[:80], user_id, topic_id,
-            )
-            _log_response_event("resident_kb", safe_prompt, user_id, topic_id, used_ai=False)
-            return resident_answer
+        # KB используется как контекст для AI, а не как прямой ответ.
+        # Раньше при совпадении KB возвращался сырой текст из JSON без обработки AI,
+        # что приводило к шаблонным ответам без учёта контекста вопроса.
+        # Теперь AI всегда обрабатывает ответ, а KB предоставляет фактические данные.
 
         rag_text = await _get_rag_context(chat_id, safe_prompt)
         faq_answer = await _get_faq_answer(chat_id, safe_prompt)
@@ -1715,10 +1709,12 @@ def build_local_assistant_reply(
         _log_response_event("thanks", normalized_prompt, user_id, topic_id)
         return random.choice(_THANKS_REPLIES)
 
-    # 1. Каноническая база знаний ЖК — ГЛАВНЫЙ источник (из resident_kb.json)
-    resident_answer = build_resident_answer(normalized_prompt, context=context)
-    if resident_answer:
-        logger.info("ANSWER_SOURCE: source=resident_kb prompt=%r", normalized_prompt[:80])
+    # 1. Каноническая база знаний ЖК — используем только при очень точном совпадении
+    # (exact match в паттернах), чтобы не отвечать шаблонно на вопросы с другим контекстом
+    kb_result = search_resident_kb(normalized_prompt, context=context, top_k=1)
+    if kb_result.exact and kb_result.matches and kb_result.matches[0].score >= 0.9:
+        resident_answer = kb_result.matches[0].entry.answer
+        logger.info("ANSWER_SOURCE: source=resident_kb_exact prompt=%r", normalized_prompt[:80])
         _log_response_event("resident_kb", normalized_prompt, user_id, topic_id)
         return resident_answer
 
