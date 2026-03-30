@@ -14,8 +14,8 @@ from app.models import LotteryTicket, UserStat
 logger = logging.getLogger(__name__)
 
 # Стоимость одного лотерейного билета
-TICKET_COST = 50
-# Минимальное число участников для розыгрыша (иначе переносится)
+TICKET_COST = 10
+# Минимальное число участников для розыгрыша
 MIN_PARTICIPANTS = 2
 
 
@@ -33,23 +33,8 @@ async def buy_ticket(
     user_name: str | None,
 ) -> tuple[LotteryTicket, int] | tuple[None, str]:
     """Покупает лотерейный билет за TICKET_COST монет.
+    Один пользователь может купить несколько билетов в неделю — чем больше, тем выше шанс.
     Возвращает (ticket, new_balance) при успехе или (None, reason) при ошибке."""
-    from sqlalchemy.exc import IntegrityError
-
-    week_key = current_week_key()
-
-    # Проверяем существующий билет
-    existing = await session.execute(
-        select(LotteryTicket).where(
-            LotteryTicket.user_id == user_id,
-            LotteryTicket.chat_id == chat_id,
-            LotteryTicket.week_key == week_key,
-        )
-    )
-    if existing.scalars().first() is not None:
-        return None, "already_bought"
-
-    # Проверяем баланс
     stats = await session.get(UserStat, {"user_id": user_id, "chat_id": chat_id})
     if stats is None or stats.coins < TICKET_COST:
         balance = stats.coins if stats else 0
@@ -61,20 +46,15 @@ async def buy_ticket(
         chat_id=chat_id,
         user_name=user_name,
         coins_bet=TICKET_COST,
-        week_key=week_key,
+        week_key=current_week_key(),
     )
     session.add(ticket)
-    try:
-        await session.flush()
-    except IntegrityError:
-        await session.rollback()
-        return None, "already_bought"
-
+    await session.flush()
     return ticket, stats.coins
 
 
-async def get_current_pot(session: AsyncSession, chat_id: int) -> tuple[int, int]:
-    """Возвращает (сумма_банка, количество_участников) на текущей неделе."""
+async def get_current_pot(session: AsyncSession, chat_id: int) -> tuple[int, int, int]:
+    """Возвращает (сумма_банка, количество_участников, количество_билетов) на текущей неделе."""
     week_key = current_week_key()
     tickets = (
         await session.execute(
@@ -85,7 +65,8 @@ async def get_current_pot(session: AsyncSession, chat_id: int) -> tuple[int, int
         )
     ).scalars().all()
     total = sum(t.coins_bet for t in tickets)
-    return total, len(tickets)
+    unique_users = len({t.user_id for t in tickets})
+    return total, unique_users, len(tickets)
 
 
 async def draw_winner(
@@ -107,27 +88,24 @@ async def draw_winner(
         )
     ).scalars().all()
 
-    if len(tickets) < MIN_PARTICIPANTS:
-        logger.info("LOTTERY: недостаточно участников (%d) для розыгрыша недели %s", len(tickets), week_key)
+    unique_users = len({t.user_id for t in tickets})
+    if unique_users < MIN_PARTICIPANTS:
+        logger.info(
+            "LOTTERY: недостаточно участников (%d) для розыгрыша недели %s",
+            unique_users, week_key,
+        )
         return None
 
-    # Взвешенная выборка: больше монет = больше шансов
-    weights = [t.coins_bet for t in tickets]
-    winner_ticket = random.choices(tickets, weights=weights, k=1)[0]
+    # Взвешенная выборка: больше билетов = больше шансов
+    winner_ticket = random.choices(tickets, k=1)[0]
     prize = sum(t.coins_bet for t in tickets)
 
-    # Начисляем приз победителю
     winner_stats = await session.get(UserStat, {"user_id": winner_ticket.user_id, "chat_id": chat_id})
     if winner_stats is not None:
         winner_stats.coins += prize
     else:
-        from app.models import UserStat as US
-        winner_stats = US(
-            user_id=winner_ticket.user_id,
-            chat_id=chat_id,
-            coins=prize,
-        )
-        session.add(winner_stats)
+        new_stats = UserStat(user_id=winner_ticket.user_id, chat_id=chat_id, coins=prize)
+        session.add(new_stats)
 
     await session.flush()
     logger.info(
@@ -138,21 +116,7 @@ async def draw_winner(
         "winner_id": winner_ticket.user_id,
         "winner_name": winner_ticket.user_name,
         "prize": prize,
-        "participants": len(tickets),
+        "participants": unique_users,
+        "tickets": len(tickets),
         "week_key": week_key,
     }
-
-
-async def get_tickets_for_week(
-    session: AsyncSession,
-    chat_id: int,
-    week_key: str,
-) -> list[LotteryTicket]:
-    return (
-        await session.execute(
-            select(LotteryTicket).where(
-                LotteryTicket.chat_id == chat_id,
-                LotteryTicket.week_key == week_key,
-            )
-        )
-    ).scalars().all()

@@ -387,7 +387,7 @@ async def send_daily_response_report(bot: Bot) -> None:
 
 
 async def draw_weekly_lottery(bot: Bot) -> None:
-    """Разыгрывает еженедельную лотерею и объявляет победителя."""
+    """Разыгрывает еженедельную лотерею в воскресенье в 11:00 и объявляет победителя."""
     from app.services.lottery import draw_winner, current_week_key
     topic = getattr(settings, "topic_games", None)
     if topic is None:
@@ -398,22 +398,47 @@ async def draw_weekly_lottery(bot: Bot) -> None:
         if result is None:
             await bot.send_message(
                 settings.forum_chat_id,
-                f"Лотерея недели {current_week_key()}: участников меньше двух, розыгрыш переносится на следующую неделю.",
+                f"Лотерея {current_week_key()}: маловато участников — переносим на следующую неделю. Купи билет: /лотерея",
                 message_thread_id=topic,
             )
         else:
             winner_name = result["winner_name"] or f"id{result['winner_id']}"
             await bot.send_message(
                 settings.forum_chat_id,
-                f"ИТОГИ ЛОТЕРЕИ!\n\n"
+                f"ИТОГИ ЛОТЕРЕИ {current_week_key()}!\n\n"
                 f"Победитель: {winner_name}\n"
                 f"Приз: {result['prize']} монет\n"
-                f"Участников: {result['participants']}\n\n"
-                f"Купить билет на следующую неделю: /лотерея",
+                f"Билетов: {result['tickets']} | Участников: {result['participants']}\n\n"
+                f"Новая неделя — новые шансы! Купи билет: /лотерея (10 монет)",
                 message_thread_id=topic,
             )
         await session.commit()
         break
+
+
+async def announce_lottery(bot: Bot) -> None:
+    """Анонсирует лотерею в топиках курилки и игр (через день в 11:00)."""
+    from app.services.lottery import current_week_key, get_current_pot
+    from app.db import get_session as _gs
+    async for session in _gs():
+        pot, participants, tickets_count = await get_current_pot(session, settings.forum_chat_id)
+        break
+
+    text = (
+        f"Лотерея недели {current_week_key()}\n\n"
+        f"Банк: {pot} монет | Участников: {participants}\n"
+        f"Каждый билет = 10 монет, количество не ограничено — чем больше билетов, тем выше шанс!\n\n"
+        f"Розыгрыш в воскресенье в 11:00. Купить: /лотерея"
+    )
+    for topic in filter(None, [settings.topic_smoke, settings.topic_games]):
+        try:
+            await bot.send_message(
+                settings.forum_chat_id,
+                text,
+                message_thread_id=topic,
+            )
+        except Exception as exc:
+            logger.warning("Не удалось отправить анонс лотереи в топик %s: %s", topic, exc)
 
 
 async def send_weekly_leaderboard(bot: Bot) -> None:
@@ -654,12 +679,21 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         minute=59,
         args=[bot],
     )
-    # Лотерея: розыгрыш каждое воскресенье в 21:00
+    # Лотерея: розыгрыш воскресенье в 11:00
     scheduler.add_job(
         draw_weekly_lottery,
         "cron",
         day_of_week="sun",
-        hour=21,
+        hour=11,
+        minute=0,
+        args=[bot],
+    )
+    # Лотерея: анонс через день в 11:00 (пн, ср, пт, вс)
+    scheduler.add_job(
+        announce_lottery,
+        "cron",
+        day_of_week="mon,wed,fri",
+        hour=11,
         minute=0,
         args=[bot],
     )

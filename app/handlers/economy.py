@@ -1,4 +1,4 @@
-"""Почему: лотерея и инициативы жителей — способ тратить монеты с реальным смыслом."""
+"""Почему: лотерея и доработки бота — осмысленная трата монет жителями."""
 
 from __future__ import annotations
 
@@ -10,13 +10,15 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from app.config import settings
 from app.db import get_session
-from app.services.initiatives import (
-    INITIATIVE_CREATE_COST,
-    INITIATIVE_THRESHOLD,
-    INITIATIVE_VOTE_COST,
-    create_initiative,
-    get_active_initiatives,
-    vote_for_initiative,
+from app.services.improvements import (
+    IMPROVEMENT_CREATE_COST,
+    IMPROVEMENT_THRESHOLD,
+    IMPROVEMENT_VOTE_COST,
+    IMPROVEMENT_LIFETIME_DAYS,
+    can_create_improvement_this_month,
+    create_improvement,
+    get_active_improvements,
+    vote_for_improvement,
 )
 from app.services.lottery import (
     TICKET_COST,
@@ -28,6 +30,9 @@ from app.services.lottery import (
 router = Router()
 logger = logging.getLogger(__name__)
 
+# in-memory: user_id → ожидает текст доработки
+_PENDING_IMPROVEMENT: dict[int, bool] = {}
+
 
 # ──────────────────────────────────────────────────────────
 # ЛОТЕРЕЯ
@@ -35,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 @router.message(Command("лотерея", "lottery"))
 async def lottery_command(message: Message) -> None:
-    """Купить лотерейный билет на текущую неделю."""
+    """Купить лотерейный билет на текущую неделю. Можно покупать несколько."""
     if message.from_user is None:
         return
 
@@ -43,7 +48,7 @@ async def lottery_command(message: Message) -> None:
     user_name = message.from_user.full_name
 
     async for session in get_session():
-        pot, count = await get_current_pot(session, settings.forum_chat_id)
+        pot, participants, tickets_count = await get_current_pot(session, settings.forum_chat_id)
 
         result, extra = await buy_ticket(
             session,
@@ -53,34 +58,25 @@ async def lottery_command(message: Message) -> None:
         )
 
         if result is None:
-            reason = extra
-            if reason == "already_bought":
-                await message.reply(
-                    f"Вы уже купили билет на эту неделю!\n\n"
-                    f"Банк недели: {pot} монет, участников: {count}\n"
-                    f"Розыгрыш — воскресенье в 21:00."
-                )
-            else:
-                balance = int(reason.split(":")[1]) if ":" in reason else 0
-                await message.reply(
-                    f"Недостаточно монет.\n"
-                    f"Цена билета: {TICKET_COST} монет, у вас: {balance}.\n"
-                    f"Зарабатывайте монеты в /21, викторине и рулетке."
-                )
+            balance = int(extra.split(":")[1]) if ":" in extra else 0
+            await message.reply(
+                f"Недостаточно монет.\n"
+                f"Цена билета: {TICKET_COST} монет, у вас: {balance}.\n"
+                f"Зарабатывайте в /21, викторине и рулетке."
+            )
             return
 
         await session.commit()
         new_pot = pot + TICKET_COST
-        new_count = count + 1
+        new_tickets = tickets_count + 1
 
     await message.reply(
-        f"Билет куплен!\n\n"
+        f"Билет #{new_tickets} куплен!\n\n"
         f"Неделя: {current_week_key()}\n"
-        f"Банк: {new_pot} монет среди {new_count} участников\n"
+        f"Банк: {new_pot} монет | Участников: {participants + (1 if tickets_count == 0 else 0)}\n"
         f"Ваш остаток: {extra} монет\n\n"
-        f"Розыгрыш — воскресенье в 21:00.\n"
-        f"Чем больше участников — тем крупнее джекпот!\n"
-        f"Узнать банк: /банк"
+        f"Покупайте ещё — каждый билет увеличивает ваш шанс выиграть!\n"
+        f"Розыгрыш — воскресенье в 11:00. Узнать банк: /банк"
     )
 
 
@@ -88,150 +84,182 @@ async def lottery_command(message: Message) -> None:
 async def jackpot_command(message: Message) -> None:
     """Показывает текущий банк лотереи."""
     async for session in get_session():
-        pot, count = await get_current_pot(session, settings.forum_chat_id)
+        pot, participants, tickets_count = await get_current_pot(session, settings.forum_chat_id)
 
-    if count == 0:
+    if tickets_count == 0:
         await message.reply(
-            f"Лотерея этой недели ещё не началась.\n"
-            f"Купите первый билет: /лотерея (стоимость: {TICKET_COST} монет)\n"
-            f"Розыгрыш — воскресенье в 21:00."
+            f"Лотерея этой недели ещё не началась.\n\n"
+            f"Купите первый билет: /лотерея\n"
+            f"Цена: {TICKET_COST} монет — количество билетов не ограничено!\n"
+            f"Розыгрыш — воскресенье в 11:00."
         )
         return
 
     await message.reply(
         f"Лотерея недели {current_week_key()}\n\n"
         f"Банк: {pot} монет\n"
-        f"Участников: {count}\n\n"
-        f"Купить билет: /лотерея\n"
-        f"Розыгрыш — воскресенье в 21:00."
+        f"Участников: {participants}\n"
+        f"Билетов куплено: {tickets_count}\n\n"
+        f"Купить ещё: /лотерея ({TICKET_COST} монет)\n"
+        f"Розыгрыш — воскресенье в 11:00."
     )
 
 
 # ──────────────────────────────────────────────────────────
-# ИНИЦИАТИВЫ ЖИТЕЛЕЙ
+# ДОРАБОТКИ БОТА
 # ──────────────────────────────────────────────────────────
 
-def _initiative_keyboard(initiative_id: int) -> InlineKeyboardMarkup:
+def _improvement_keyboard(improvement_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
-            text=f"Поддержать ({INITIATIVE_VOTE_COST} монет)",
-            callback_data=f"init_vote:{initiative_id}",
+            text=f"Поддержать ({IMPROVEMENT_VOTE_COST} монет)",
+            callback_data=f"impr_vote:{improvement_id}",
         )
     ]])
 
 
-@router.message(Command("инициатива", "initiative"))
-async def initiative_command(message: Message, bot: Bot) -> None:
-    """Создаёт инициативу по улучшению ЖК. Формат: /инициатива <текст>"""
+@router.message(Command("доработка", "improvement"))
+async def improvement_command(message: Message) -> None:
+    """Начать создание доработки бота. Ограничение: 1 раз в месяц."""
     if message.from_user is None:
         return
 
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) < 2 or not parts[1].strip():
+    user_id = message.from_user.id
+
+    async for session in get_session():
+        can_create = await can_create_improvement_this_month(
+            session, user_id, settings.forum_chat_id
+        )
+
+    if not can_create:
         await message.reply(
-            f"Создайте инициативу по улучшению нашего дома!\n\n"
-            f"Формат: /инициатива <ваше предложение>\n"
-            f"Например: /инициатива Поставить новую лавочку у подъезда 3\n\n"
-            f"Стоимость создания: {INITIATIVE_CREATE_COST} монет\n"
-            f"Порог поддержки: {INITIATIVE_THRESHOLD} монет\n"
-            f"При достижении порога — бот объявит о принятии инициативы!"
+            "В этом месяце вы уже подавали доработку.\n"
+            "Можно подавать одну доработку в месяц. Возвращайтесь в следующем!\n\n"
+            "Поддержите чужие идеи: /доработки"
         )
         return
 
-    text = parts[1].strip()
-    if len(text) < 10:
-        await message.reply("Слишком коротко. Опишите инициативу подробнее.")
+    # Помечаем что ждём ввод
+    _PENDING_IMPROVEMENT[user_id] = True
+
+    await message.reply(
+        "Я развиваюсь и расту!\n\n"
+        "Опиши подробно: какую доработку в боте ты хотел бы видеть?\n"
+        "Чем точнее — тем больше шансов, что другие жители поддержат.\n\n"
+        f"Стоимость подачи: {IMPROVEMENT_CREATE_COST} монет\n"
+        f"Порог поддержки: {IMPROVEMENT_THRESHOLD} монет\n"
+        f"Срок голосования: {IMPROVEMENT_LIFETIME_DAYS} дней\n\n"
+        "Напиши описание одним сообщением:"
+    )
+
+
+@router.message(F.text & F.from_user)
+async def improvement_text_handler(message: Message, bot: Bot) -> None:
+    """Принимает текст доработки от пользователя в режиме ожидания."""
+    if message.from_user is None:
+        return
+    user_id = message.from_user.id
+    if user_id not in _PENDING_IMPROVEMENT:
+        return
+    # Пропускаем команды
+    text = (message.text or "").strip()
+    if text.startswith("/"):
+        del _PENDING_IMPROVEMENT[user_id]
         return
 
-    user_id = message.from_user.id
-    user_name = message.from_user.full_name
+    del _PENDING_IMPROVEMENT[user_id]
 
-    initiative = None
+    if len(text) < 20:
+        await message.reply(
+            "Слишком коротко — опиши идею подробнее (минимум 20 символов).\n"
+            "Начни заново: /доработка"
+        )
+        return
+
+    user_name = message.from_user.full_name
+    improvement = None
     async for session in get_session():
-        result, extra = await create_initiative(
+        # Перепроверяем лимит (защита от гонки)
+        can_create = await can_create_improvement_this_month(
+            session, user_id, settings.forum_chat_id
+        )
+        if not can_create:
+            await message.reply("В этом месяце вы уже подавали доработку.")
+            return
+
+        result, extra = await create_improvement(
             session,
             chat_id=settings.forum_chat_id,
             author_id=user_id,
             author_name=user_name,
             text=text,
         )
-
         if result is None:
             reason = extra
-            if reason == "too_many_active":
-                await message.reply(
-                    "Сейчас слишком много активных инициатив. "
-                    "Поддержите существующие: /инициативы"
-                )
-            else:
-                balance = int(reason.split(":")[1]) if ":" in reason else 0
-                await message.reply(
-                    f"Недостаточно монет.\n"
-                    f"Нужно: {INITIATIVE_CREATE_COST} монет, у вас: {balance}.\n"
-                    f"Зарабатывайте в /21, викторине и рулетке."
-                )
+            balance = int(reason.split(":")[1]) if ":" in reason else 0
+            await message.reply(
+                f"Недостаточно монет.\n"
+                f"Нужно: {IMPROVEMENT_CREATE_COST} монет, у вас: {balance}.\n"
+                f"Зарабатывайте в /21, викторине и рулетке."
+            )
             return
-
-        initiative = result
+        improvement = result
         new_balance = extra
         await session.commit()
 
+    expires_str = improvement.expires_at.strftime("%d.%m.%Y")
     sent = await message.answer(
-        f"Новая инициатива #{initiative.id}!\n\n"
-        f"«{initiative.text}»\n\n"
+        f"Доработка #{improvement.id} подана!\n\n"
+        f"«{improvement.text[:300]}»\n\n"
         f"Автор: {user_name}\n"
-        f"Собрано: {initiative.coins_total} / {initiative.threshold} монет\n"
+        f"Собрано: {improvement.coins_total} / {improvement.threshold} монет\n"
+        f"Голосование до: {expires_str}\n"
         f"Ваш остаток: {new_balance} монет\n\n"
-        f"Жители, поддержите инициативу кнопкой!",
-        reply_markup=_initiative_keyboard(initiative.id),
+        f"Жители, поддержите доработку кнопкой!",
+        reply_markup=_improvement_keyboard(improvement.id),
     )
+    logger.info("IMPROVEMENT #%d создана пользователем %s", improvement.id, user_id)
 
-    # Сохраняем message_id объявления для обновления при голосованиях
+
+@router.message(Command("доработки", "improvements"))
+async def improvements_list_command(message: Message) -> None:
+    """Показывает список активных доработок бота."""
     async for session in get_session():
-        ini = await session.get(type(initiative), initiative.id)
-        if ini:
-            ini.announcement_message_id = sent.message_id
-            await session.commit()
+        improvements = await get_active_improvements(session, settings.forum_chat_id)
 
-
-@router.message(Command("инициативы", "initiatives"))
-async def initiatives_list_command(message: Message) -> None:
-    """Показывает список активных инициатив жителей."""
-    async for session in get_session():
-        initiatives = await get_active_initiatives(session, settings.forum_chat_id)
-
-    if not initiatives:
+    if not improvements:
         await message.reply(
-            f"Активных инициатив нет.\n\n"
-            f"Создайте первую: /инициатива <ваше предложение>\n"
-            f"Стоимость: {INITIATIVE_CREATE_COST} монет"
+            f"Активных доработок нет.\n\n"
+            f"Предложите свою: /доработка\n"
+            f"Стоимость: {IMPROVEMENT_CREATE_COST} монет | Ограничение: 1 в месяц"
         )
         return
 
-    lines = ["Активные инициативы жителей:\n"]
-    for ini in initiatives:
-        bar_filled = int(ini.coins_total / ini.threshold * 10)
+    lines = ["Доработки бота — голосуй монетами:\n"]
+    for imp in improvements:
+        bar_filled = min(10, int(imp.coins_total / imp.threshold * 10))
         bar = "█" * bar_filled + "░" * (10 - bar_filled)
-        pct = int(ini.coins_total / ini.threshold * 100)
+        pct = min(100, int(imp.coins_total / imp.threshold * 100))
+        days_left = max(0, (imp.expires_at - __import__("datetime").datetime.now(__import__("datetime").timezone.utc)).days)
         lines.append(
-            f"#{ini.id} [{bar}] {pct}%\n"
-            f"«{ini.text[:100]}»\n"
-            f"Собрано: {ini.coins_total}/{ini.threshold} монет\n"
+            f"#{imp.id} [{bar}] {pct}%\n"
+            f"«{imp.text[:120]}»\n"
+            f"Автор: {imp.author_name} | {imp.coins_total}/{imp.threshold} монет | осталось {days_left} дн.\n"
         )
 
-    lines.append(f"Поддержать: /инициатива_голос <номер>  ({INITIATIVE_VOTE_COST} монет)")
+    lines.append(f"Поддержать кнопкой под сообщением доработки. Голос = {IMPROVEMENT_VOTE_COST} монет.")
     await message.reply("\n".join(lines))
 
 
-@router.callback_query(F.data.startswith("init_vote:"))
-async def initiative_vote_callback(callback: CallbackQuery, bot: Bot) -> None:
-    """Обрабатывает голос за инициативу через inline-кнопку."""
+@router.callback_query(F.data.startswith("impr_vote:"))
+async def improvement_vote_callback(callback: CallbackQuery, bot: Bot) -> None:
+    """Обрабатывает голос за доработку через inline-кнопку."""
     if callback.from_user is None or callback.message is None:
         await callback.answer()
         return
 
     try:
-        initiative_id = int(callback.data.split(":")[1])
+        improvement_id = int(callback.data.split(":")[1])
     except (IndexError, ValueError):
         await callback.answer("Ошибка данных.")
         return
@@ -239,12 +267,12 @@ async def initiative_vote_callback(callback: CallbackQuery, bot: Bot) -> None:
     user_id = callback.from_user.id
     user_name = callback.from_user.full_name
 
+    improvement = None
     just_completed = False
-    initiative = None
     async for session in get_session():
-        result, extra, just_completed = await vote_for_initiative(
+        result, extra, just_completed = await vote_for_improvement(
             session,
-            initiative_id=initiative_id,
+            improvement_id=improvement_id,
             user_id=user_id,
             user_name=user_name,
             chat_id=settings.forum_chat_id,
@@ -253,67 +281,67 @@ async def initiative_vote_callback(callback: CallbackQuery, bot: Bot) -> None:
         if result is None:
             reason = extra
             if reason == "already_voted":
-                await callback.answer("Вы уже поддержали эту инициативу.", show_alert=False)
+                await callback.answer("Вы уже поддержали эту доработку.", show_alert=False)
             elif reason == "already_completed":
-                await callback.answer("Инициатива уже принята!", show_alert=False)
+                await callback.answer("Доработка уже принята в работу!", show_alert=False)
+            elif reason == "expired":
+                await callback.answer("Срок голосования истёк.", show_alert=True)
             elif reason == "not_found":
-                await callback.answer("Инициатива не найдена.", show_alert=True)
+                await callback.answer("Доработка не найдена.", show_alert=True)
             else:
                 balance = int(reason.split(":")[1]) if ":" in reason else 0
                 await callback.answer(
-                    f"Недостаточно монет. У вас: {balance}, нужно: {INITIATIVE_VOTE_COST}.",
+                    f"Недостаточно монет. У вас: {balance}, нужно: {IMPROVEMENT_VOTE_COST}.",
                     show_alert=True,
                 )
             return
 
-        initiative = result
+        improvement = result
         new_balance = extra
         await session.commit()
 
-    await callback.answer(f"Поддержали! Ваш остаток: {new_balance} монет", show_alert=False)
+    await callback.answer(f"Поддержали! Остаток: {new_balance} монет", show_alert=False)
 
-    # Обновляем сообщение с прогрессом
-    bar_filled = int(initiative.coins_total / initiative.threshold * 10)
+    bar_filled = min(10, int(improvement.coins_total / improvement.threshold * 10))
     bar = "█" * bar_filled + "░" * (10 - bar_filled)
-    pct = int(initiative.coins_total / initiative.threshold * 100)
+    pct = min(100, int(improvement.coins_total / improvement.threshold * 100))
 
     if just_completed:
-        # Инициатива принята — торжественное объявление
         try:
             await callback.message.edit_text(
-                f"Инициатива #{initiative.id} ПРИНЯТА!\n\n"
-                f"«{initiative.text}»\n\n"
-                f"Автор: {initiative.author_name}\n"
-                f"Собрано монет: {initiative.coins_total} из {initiative.threshold}\n\n"
-                f"Инициатива передана на рассмотрение управляющей компании!",
+                f"Доработка #{improvement.id} ПРИНЯТА В РАБОТУ!\n\n"
+                f"«{improvement.text}»\n\n"
+                f"Автор: {improvement.author_name}\n"
+                f"Собрано: {improvement.coins_total} из {improvement.threshold} монет\n\n"
+                f"Доработка взята в разработку!",
                 reply_markup=None,
             )
         except Exception:
-            logger.warning("Не удалось обновить сообщение инициативы #%d", initiative.id)
+            logger.warning("Не удалось обновить сообщение доработки #%d", improvement.id)
 
-        # Публичное объявление в чат
         try:
             await bot.send_message(
                 settings.forum_chat_id,
-                f"ИНИЦИАТИВА ПРИНЯТА!\n\n"
-                f"«{initiative.text}»\n\n"
-                f"Жители ЖК собрали {initiative.coins_total} монет в поддержку!\n"
-                f"Инициатива передана на рассмотрение.",
+                f"ДОРАБОТКА ПРИНЯТА В РАБОТУ!\n\n"
+                f"«{improvement.text}»\n\n"
+                f"Жители ЖК поддержали {improvement.coins_total} монетами!\n"
+                f"Автор: {improvement.author_name}",
                 message_thread_id=callback.message.message_thread_id,
             )
         except Exception:
-            logger.warning("Не удалось отправить объявление о принятии инициативы #%d", initiative.id)
+            logger.warning("Не удалось отправить объявление о доработке #%d", improvement.id)
     else:
-        # Обновляем прогресс-бар
+        expires_str = improvement.expires_at.strftime("%d.%m.%Y")
         try:
             await callback.message.edit_text(
-                f"Инициатива #{initiative.id}\n\n"
-                f"«{initiative.text}»\n\n"
-                f"Автор: {initiative.author_name}\n"
+                f"Доработка #{improvement.id}\n\n"
+                f"«{improvement.text[:300]}»\n\n"
+                f"Автор: {improvement.author_name}\n"
                 f"[{bar}] {pct}%\n"
-                f"Собрано: {initiative.coins_total} / {initiative.threshold} монет\n\n"
-                f"Поддержите инициативу!",
-                reply_markup=_initiative_keyboard(initiative.id),
+                f"Собрано: {improvement.coins_total} / {improvement.threshold} монет\n"
+                f"До: {expires_str}\n\n"
+                f"Поддержите доработку!",
+                reply_markup=_improvement_keyboard(improvement.id),
             )
         except Exception:
             pass
