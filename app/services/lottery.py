@@ -69,6 +69,22 @@ async def get_current_pot(session: AsyncSession, chat_id: int) -> tuple[int, int
     return total, unique_users, len(tickets)
 
 
+async def get_tickets_for_week(
+    session: AsyncSession,
+    chat_id: int,
+    week_key: str,
+) -> list[LotteryTicket]:
+    """Возвращает все билеты за указанную неделю (для анимации)."""
+    return (
+        await session.execute(
+            select(LotteryTicket).where(
+                LotteryTicket.chat_id == chat_id,
+                LotteryTicket.week_key == week_key,
+            )
+        )
+    ).scalars().all()
+
+
 async def draw_winner(
     session: AsyncSession,
     chat_id: int,
