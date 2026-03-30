@@ -10,7 +10,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, nullslast, or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ResidentService
@@ -256,7 +256,6 @@ async def search_services(
     if not word_conditions:
         return []
 
-    now = datetime.now(timezone.utc)
     result = await session.execute(
         select(ResidentService)
         .where(
@@ -266,12 +265,8 @@ async def search_services(
                 or_(*word_conditions),
             )
         )
-        # Продвинутые услуги (с активным promoted_until) идут первыми
-        .order_by(
-            (ResidentService.promoted_until > now).desc(),
-            ResidentService.created_at.desc(),
-        )
-        .limit(top_k * 2)  # берём с запасом для ранжирования
+        .order_by(ResidentService.created_at.desc())
+        .limit(top_k * 2)
     )
     services = list(result.scalars().all())
 
@@ -372,10 +367,7 @@ async def list_services_by_category(
     result = await session.execute(
         select(ResidentService)
         .where(and_(*conditions))
-        .order_by(
-            nullslast(ResidentService.promoted_until.desc()),
-            ResidentService.created_at.desc(),
-        )
+        .order_by(ResidentService.created_at.desc())
         .limit(limit)
     )
     return list(result.scalars().all())

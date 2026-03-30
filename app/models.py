@@ -349,8 +349,6 @@ class ResidentService(Base):
     # Кто добавил (админ)
     added_by_user_id: Mapped[int] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    # Продвижение услуги за монеты: если не None — услуга в топе поиска до этого времени
-    promoted_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
@@ -396,4 +394,54 @@ class ModerationCalibration(Base):
     adjusted_severity: Mapped[int] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(Text)
     sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class LotteryTicket(Base):
+    """Почему: лотерея позволяет жителям тратить монеты с азартом и общим событием."""
+    __tablename__ = "lottery_tickets"
+    __table_args__ = (
+        UniqueConstraint("user_id", "chat_id", "week_key", name="uq_lottery_one_ticket_per_week"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    coins_bet: Mapped[int] = mapped_column(Integer)
+    # Ключ недели: "2026-W13" — для группировки розыгрышей
+    week_key: Mapped[str] = mapped_column(String(10), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class Initiative(Base):
+    """Почему: жители тратят монеты на реальные улучшения ЖК через коллективное голосование."""
+    __tablename__ = "initiatives"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    author_id: Mapped[int] = mapped_column(Integer, index=True)
+    author_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    text: Mapped[str] = mapped_column(Text)
+    coins_total: Mapped[int] = mapped_column(Integer, default=0)
+    # Порог монет для объявления инициативы принятой
+    threshold: Mapped[int] = mapped_column(Integer, default=300)
+    is_completed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # ID сообщения в чате (для публичного объявления при достижении порога)
+    announcement_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class InitiativeVote(Base):
+    """Почему: трекинг голосов за инициативы (один голос = одна ставка монет)."""
+    __tablename__ = "initiative_votes"
+    __table_args__ = (
+        UniqueConstraint("initiative_id", "user_id", name="uq_initiative_vote_per_user"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    initiative_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    amount: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))

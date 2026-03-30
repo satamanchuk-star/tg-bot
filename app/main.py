@@ -32,6 +32,7 @@ from app.config import settings
 from app.db import Base, engine, get_session
 from app.handlers import (
     admin,
+    economy as economy_handler,
     forms,
     games,
     help as help_handler,
@@ -385,6 +386,36 @@ async def send_daily_response_report(bot: Bot) -> None:
             await asyncio.sleep(2)
 
 
+async def draw_weekly_lottery(bot: Bot) -> None:
+    """Разыгрывает еженедельную лотерею и объявляет победителя."""
+    from app.services.lottery import draw_winner, current_week_key
+    topic = getattr(settings, "topic_games", None)
+    if topic is None:
+        logger.info("Лотерея пропущена: topic_games не задан.")
+        return
+    async for session in get_session():
+        result = await draw_winner(session, settings.forum_chat_id)
+        if result is None:
+            await bot.send_message(
+                settings.forum_chat_id,
+                f"Лотерея недели {current_week_key()}: участников меньше двух, розыгрыш переносится на следующую неделю.",
+                message_thread_id=topic,
+            )
+        else:
+            winner_name = result["winner_name"] or f"id{result['winner_id']}"
+            await bot.send_message(
+                settings.forum_chat_id,
+                f"ИТОГИ ЛОТЕРЕИ!\n\n"
+                f"Победитель: {winner_name}\n"
+                f"Приз: {result['prize']} монет\n"
+                f"Участников: {result['participants']}\n\n"
+                f"Купить билет на следующую неделю: /лотерея",
+                message_thread_id=topic,
+            )
+        await session.commit()
+        break
+
+
 async def send_weekly_leaderboard(bot: Bot) -> None:
     if settings.topic_games is None:
         logger.info("Еженедельный рейтинг игр пропущен: topic_games не задан.")
@@ -621,6 +652,15 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         "cron",
         hour=21,
         minute=59,
+        args=[bot],
+    )
+    # Лотерея: розыгрыш каждое воскресенье в 21:00
+    scheduler.add_job(
+        draw_weekly_lottery,
+        "cron",
+        day_of_week="sun",
+        hour=21,
+        minute=0,
         args=[bot],
     )
     # Плановые приветствия жителей
@@ -868,7 +908,8 @@ async def main() -> None:
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     dp.include_router(quiz.router)  # викторина (команды /umnij_start, /bal, /topumnij)
     dp.include_router(roulette.router)  # рулетка (команда /bet)
-    dp.include_router(services_handler.router)  # каталог услуг жителей, трата монет
+    dp.include_router(services_handler.router)  # каталог услуг жителей
+    dp.include_router(economy_handler.router)  # лотерея и инициативы жителей
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     # stats.router убран — статистика через middleware
