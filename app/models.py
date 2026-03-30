@@ -349,6 +349,8 @@ class ResidentService(Base):
     # Кто добавил (админ)
     added_by_user_id: Mapped[int] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    # Продвижение услуги за монеты: если не None — услуга в топе поиска до этого времени
+    promoted_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )

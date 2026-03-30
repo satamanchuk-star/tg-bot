@@ -40,8 +40,11 @@ from app.services.ai_usage import next_reset_delta
 from app.services.rag import add_rag_message, build_canonical_text, get_rag_count, systematize_rag
 from app.services.resident_services import (
     add_service,
+    deactivate_service,
     get_service_by_source_message_id,
     get_services_count,
+    list_services_by_category,
+    CATEGORY_LABELS,
 )
 from app.services.admin_stats_reset import reset_runtime_statistics
 from app.utils.profanity import load_profanity, load_profanity_exceptions
@@ -601,17 +604,72 @@ async def usluga_command(message: Message, bot: Bot) -> None:
         count = await get_services_count(session, settings.forum_chat_id)
 
     cat_label = record.category
-    if ai_description:
-        cat_label += " (AI)"
+    ai_mark = " (AI)" if ai_description else ""
+    kw_preview = (record.keywords or "")[:150]
     await message.reply(
         f"✅ Услуга добавлена в каталог!\n"
-        f"Категория: {cat_label}\n"
+        f"Категория: {cat_label}{ai_mark}\n"
         f"Описание: {record.description[:200]}\n"
-        f"Всего услуг в каталоге: {count}"
+        f"Теги: {kw_preview}\n"
+        f"Всего услуг: {count}\n\n"
+        f"Удалить: /del_usluga (реплаем на то же сообщение)"
     )
+
+    # Уведомляем провайдера о добавлении услуги
+    if provider_user_id:
+        cat_display = CATEGORY_LABELS.get(record.category, record.category)
+        try:
+            await bot.send_message(
+                settings.forum_chat_id,
+                f"✅ Ваша услуга добавлена в каталог ЖК!\n"
+                f"Категория: {cat_display}\n"
+                f"Описание: {record.description[:200]}\n\n"
+                f"Жители смогут найти вас через поиск и при вопросах в чате.",
+                message_thread_id=message.message_thread_id,
+                reply_to_message_id=target_msg.message_id,
+            )
+        except Exception:
+            logger.warning("Не удалось уведомить провайдера %s об услуге", provider_user_id)
+
     logger.info(
         "USLUGA: админ %s добавил услугу от %s (msg=%s, категория=%s)",
         admin_id, provider_user_id, target_msg.message_id, record.category,
+    )
+
+
+@router.message(Command("del_usluga"))
+async def del_usluga_command(message: Message, bot: Bot) -> None:
+    """Деактивирует услугу из каталога. Только для админов, реплаем на исходное сообщение."""
+    if not await _ensure_admin(message, bot):
+        return
+
+    if message.reply_to_message is None:
+        await message.reply(
+            "Используйте /del_usluga как реплай на сообщение жителя, чья услуга добавлена в каталог."
+        )
+        return
+
+    target_msg = message.reply_to_message
+    async for session in get_session():
+        existing = await get_service_by_source_message_id(
+            session,
+            chat_id=settings.forum_chat_id,
+            source_message_id=target_msg.message_id,
+        )
+        if existing is None:
+            await message.reply("Услуга по этому сообщению не найдена в каталоге.")
+            return
+        await deactivate_service(session, existing.id)
+        await session.commit()
+
+    await message.reply(
+        f"🗑 Услуга удалена из каталога.\n"
+        f"Была категория: {existing.category}\n"
+        f"Описание: {existing.description[:150]}"
+    )
+    logger.info(
+        "DEL_USLUGA: админ %s удалил услугу (msg=%s)",
+        _admin_id(message), target_msg.message_id,
     )
 
 

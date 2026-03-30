@@ -38,6 +38,7 @@ from app.handlers import (
     moderation,
     quiz,
     roulette,
+    services as services_handler,
     text_publish,
 )
 from app.models import MigrationFlag, UserStat
@@ -867,6 +868,7 @@ async def main() -> None:
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     dp.include_router(quiz.router)  # викторина (команды /umnij_start, /bal, /topumnij)
     dp.include_router(roulette.router)  # рулетка (команда /bet)
+    dp.include_router(services_handler.router)  # каталог услуг жителей, трата монет
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     # stats.router убран — статистика через middleware
