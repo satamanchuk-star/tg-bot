@@ -309,8 +309,9 @@ async def get_service_by_source_message_id(
         select(ResidentService)
         .where(and_(*conditions))
         .order_by(ResidentService.is_active.desc(), ResidentService.created_at.desc())
+        .limit(1)
     )
-    return result.scalar_one_or_none()
+    return result.scalars().first()
 
 
 async def get_services_count(session: AsyncSession, chat_id: int) -> int:

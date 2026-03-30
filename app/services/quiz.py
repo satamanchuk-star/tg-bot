@@ -108,7 +108,7 @@ async def get_active_session(session: AsyncSession, chat_id: int, topic_id: int)
             QuizSession.is_active.is_(True),
         )
     )
-    return result.scalar_one_or_none()
+    return result.scalars().first()
 
 
 async def get_random_question(session: AsyncSession, quiz_session: QuizSession | None = None) -> QuizQuestion | None:

@@ -144,7 +144,7 @@ async def get_active_round(session: AsyncSession, chat_id: int, topic_id: int) -
             RouletteRound.is_active.is_(True),
         )
     )
-    return result.scalar_one_or_none()
+    return result.scalars().first()
 
 
 async def close_round(session: AsyncSession, rnd: RouletteRound, result_number: int) -> None:
