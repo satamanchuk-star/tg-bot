@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command
+from aiogram.filters import BaseFilter, Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.config import settings
@@ -32,6 +32,14 @@ logger = logging.getLogger(__name__)
 
 # in-memory: user_id → ожидает текст доработки
 _PENDING_IMPROVEMENT: dict[int, bool] = {}
+
+
+class _PendingImprovementFilter(BaseFilter):
+    """Фильтр: пропускает только сообщения от пользователей в режиме ожидания описания доработки."""
+    async def __call__(self, message: Message) -> bool:
+        if message.from_user is None:
+            return False
+        return message.from_user.id in _PENDING_IMPROVEMENT
 
 
 # ──────────────────────────────────────────────────────────
@@ -153,14 +161,10 @@ async def improvement_command(message: Message) -> None:
     )
 
 
-@router.message(F.text & F.from_user)
+@router.message(_PendingImprovementFilter(), F.text)
 async def improvement_text_handler(message: Message, bot: Bot) -> None:
     """Принимает текст доработки от пользователя в режиме ожидания."""
-    if message.from_user is None:
-        return
     user_id = message.from_user.id
-    if user_id not in _PENDING_IMPROVEMENT:
-        return
     # Пропускаем команды
     text = (message.text or "").strip()
     if text.startswith("/"):
