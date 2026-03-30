@@ -395,3 +395,50 @@ class ModerationCalibration(Base):
     reason: Mapped[str] = mapped_column(Text)
     sample_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class LotteryTicket(Base):
+    """Почему: лотерея позволяет жителям тратить монеты с азартом и общим событием."""
+    __tablename__ = "lottery_tickets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    coins_bet: Mapped[int] = mapped_column(Integer)
+    # Ключ недели: "2026-W13" — для группировки розыгрышей
+    week_key: Mapped[str] = mapped_column(String(10), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class BotImprovement(Base):
+    """Почему: жители тратят монеты на реальные доработки бота через коллективное голосование."""
+    __tablename__ = "bot_improvements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    author_id: Mapped[int] = mapped_column(Integer, index=True)
+    author_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    text: Mapped[str] = mapped_column(Text)
+    coins_total: Mapped[int] = mapped_column(Integer, default=0)
+    # Порог монет для принятия доработки в работу
+    threshold: Mapped[int] = mapped_column(Integer, default=500)
+    is_completed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # Когда истекает срок голосования (1 неделя с момента создания)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class ImprovementVote(Base):
+    """Почему: трекинг голосов за доработки бота (один голос на пользователя)."""
+    __tablename__ = "improvement_votes"
+    __table_args__ = (
+        UniqueConstraint("improvement_id", "user_id", name="uq_improvement_vote_per_user"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    improvement_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    amount: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))

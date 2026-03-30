@@ -57,6 +57,24 @@ _SERVICE_CATEGORIES: list[tuple[str, tuple[str, ...]]] = [
 
 _KNOWN_CATEGORIES = {category.lower() for category, _markers in _SERVICE_CATEGORIES}
 
+# Читабельные метки категорий для вывода пользователям
+CATEGORY_LABELS: dict[str, str] = {
+    "кондитерская": "🎂 Кондитерская",
+    "красота": "💅 Красота",
+    "ремонт": "🔧 Ремонт",
+    "обучение": "📚 Обучение",
+    "дети": "👶 Дети",
+    "авто": "🚗 Авто",
+    "здоровье": "❤️ Здоровье",
+    "уборка": "🧹 Уборка",
+    "доставка": "📦 Доставка",
+    "фото_видео": "📷 Фото/Видео",
+    "IT": "💻 IT",
+    "юридические": "⚖️ Юридические",
+    "рукоделие": "🧵 Рукоделие",
+    "общее": "📌 Общее",
+}
+
 
 def _normalize_service_text(text: str) -> str:
     """Нормализует текст услуги для локального поиска и классификации."""
@@ -248,7 +266,7 @@ async def search_services(
             )
         )
         .order_by(ResidentService.created_at.desc())
-        .limit(top_k)
+        .limit(top_k * 2)
     )
     services = list(result.scalars().all())
 
@@ -328,6 +346,31 @@ async def get_services_count(session: AsyncSession, chat_id: int) -> int:
         )
     )
     return int(result or 0)
+
+
+async def list_services_by_category(
+    session: AsyncSession,
+    chat_id: int,
+    category: str | None = None,
+    *,
+    limit: int = 20,
+) -> list[ResidentService]:
+    """Возвращает активные услуги, опционально отфильтрованные по категории."""
+    conditions = [
+        ResidentService.chat_id == chat_id,
+        ResidentService.is_active.is_(True),
+    ]
+    if category:
+        normalized = category.strip().lower().replace("ё", "е")
+        conditions.append(ResidentService.category == normalized)
+
+    result = await session.execute(
+        select(ResidentService)
+        .where(and_(*conditions))
+        .order_by(ResidentService.created_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
 
 
 async def deactivate_service(session: AsyncSession, service_id: int) -> bool:

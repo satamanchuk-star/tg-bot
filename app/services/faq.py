@@ -39,7 +39,7 @@ async def track_question(
         FrequentQuestion.question_key == question_key,
     )
     result = await session.execute(stmt)
-    fq = result.scalar_one_or_none()
+    fq = result.scalars().first()
 
     if fq is None:
         fq = FrequentQuestion(
@@ -75,7 +75,7 @@ async def get_faq_answer(
         FrequentQuestion.question_key == question_key,
     )
     result = await session.execute(stmt)
-    fq = result.scalar_one_or_none()
+    fq = result.scalars().first()
 
     if fq is None:
         return None
@@ -101,7 +101,7 @@ async def update_faq_rating(
         FrequentQuestion.question_key == question_key,
     )
     result = await session.execute(stmt)
-    fq = result.scalar_one_or_none()
+    fq = result.scalars().first()
     if fq is None:
         return
 

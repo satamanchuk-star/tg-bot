@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -32,12 +33,14 @@ from app.config import settings
 from app.db import Base, engine, get_session
 from app.handlers import (
     admin,
+    economy as economy_handler,
     forms,
     games,
     help as help_handler,
     moderation,
     quiz,
     roulette,
+    services as services_handler,
     text_publish,
 )
 from app.models import MigrationFlag, UserStat
@@ -384,6 +387,174 @@ async def send_daily_response_report(bot: Bot) -> None:
             await asyncio.sleep(2)
 
 
+async def draw_weekly_lottery(bot: Bot) -> None:
+    """Разыгрывает еженедельную лотерею в воскресенье в 11:00 с анимацией барабана."""
+    from app.services.lottery import draw_winner, current_week_key, get_tickets_for_week
+    import asyncio
+
+    topic = getattr(settings, "topic_games", None)
+    if topic is None:
+        logger.info("Лотерея пропущена: topic_games не задан.")
+        return
+
+    wk = current_week_key()
+
+    # Шаг 1: получаем все билеты для анимации (до розыгрыша)
+    tickets = []
+    async for session in get_session():
+        tickets = list(await get_tickets_for_week(session, settings.forum_chat_id, wk))
+        break
+
+    pot = sum(t.coins_bet for t in tickets)
+    participants = len({t.user_id for t in tickets})
+
+    # Шаг 2: анонс старта
+    try:
+        msg = await bot.send_message(
+            settings.forum_chat_id,
+            f"🎰 ЕЖЕНЕДЕЛЬНАЯ ЛОТЕРЕЯ\n\n"
+            f"👥 Участников: {participants}  |  🎫 Билетов: {len(tickets)}\n"
+            f"💰 Банк: {pot} монет\n\n"
+            f"Барабан запускается...",
+            message_thread_id=topic,
+        )
+    except Exception:
+        logger.exception("Не удалось отправить стартовое сообщение лотереи")
+        return
+
+    if participants < 2:
+        await asyncio.sleep(1.5)
+        try:
+            await msg.edit_text(
+                f"🎰 Лотерея {wk}\n\n"
+                f"Участников слишком мало — переносим на следующую неделю.\n\n"
+                f"Купи билет: /лотерея (10 монет)"
+            )
+        except Exception:
+            pass
+        return
+
+    await asyncio.sleep(1.5)
+
+    # Имена участников для анимации (дедуплицированные)
+    names: list[str] = []
+    seen_ids: set[int] = set()
+    for t in tickets:
+        if t.user_id not in seen_ids:
+            seen_ids.add(t.user_id)
+            names.append(t.user_name or f"Участник {t.user_id}")
+
+    # Индикаторы скорости
+    _SPIN = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"]
+    _SPEED_BARS = [
+        "⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡",
+        "⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡",
+        "⚡⚡⚡⚡⚡⚡⚡⚡░░",
+        "⚡⚡⚡⚡⚡⚡░░░░",
+        "⚡⚡⚡⚡░░░░░░",
+        "⚡⚡⚡░░░░░░░",
+        "⚡⚡░░░░░░░░",
+    ]
+
+    async def _edit(text: str) -> None:
+        try:
+            await msg.edit_text(text)
+        except Exception:
+            pass
+
+    # Шаг 3: быстрое вращение (7 кадров × 0.4 с)
+    for i in range(7):
+        name = random.choice(names)
+        spin = _SPIN[i % len(_SPIN)]
+        await _edit(
+            f"🎰 БАРАБАН КРУТИТСЯ!\n\n"
+            f"{spin}  {name}  {spin}\n\n"
+            f"{_SPEED_BARS[0]}"
+        )
+        await asyncio.sleep(0.4)
+
+    # Шаг 4: постепенное замедление (5 кадров с нарастающим паузой)
+    slow_delays = [0.6, 0.9, 1.3, 1.8, 2.4]
+    for step, delay in enumerate(slow_delays):
+        name = random.choice(names)
+        spin = _SPIN[(7 + step) % len(_SPIN)]
+        bar_idx = min(step + 1, len(_SPEED_BARS) - 1)
+        await _edit(
+            f"🎰 Замедляемся...\n\n"
+            f"{spin}  {name}  {spin}\n\n"
+            f"{_SPEED_BARS[bar_idx]}"
+        )
+        await asyncio.sleep(delay)
+
+    # Шаг 5: СТОП — предпросмотр случайного участника (напряжение)
+    suspense_name = random.choice(names)
+    await _edit(
+        f"🎰 Стоп!\n\n"
+        f"🎯  {suspense_name}  🎯\n\n"
+        f"⚡░░░░░░░░░"
+    )
+    await asyncio.sleep(2.0)
+
+    # Шаг 6: розыгрыш (фактическое определение победителя + начисление монет)
+    result = None
+    async for session in get_session():
+        result = await draw_winner(session, settings.forum_chat_id, wk)
+        await session.commit()
+        break
+
+    if result is None:
+        await _edit(
+            f"🎰 Лотерея {wk}\n\n"
+            f"Не удалось определить победителя — розыгрыш переносится.\n"
+            f"Купи билет: /лотерея"
+        )
+        return
+
+    winner_name = result["winner_name"] or f"Участник #{result['winner_id']}"
+
+    # Шаг 7: финальный reveal с паузой для напряжения
+    await _edit(
+        f"🏆 И ПОБЕДИТЕЛЬ...\n\n"
+        f"🥁🥁🥁\n\n"
+        f"..."
+    )
+    await asyncio.sleep(2.5)
+
+    await _edit(
+        f"🏆 ПОБЕДИТЕЛЬ ЛОТЕРЕИ {wk}!\n\n"
+        f"🥇  {winner_name}  🥇\n\n"
+        f"💰 Приз: {result['prize']} монет\n"
+        f"👥 Участников: {result['participants']}  |  🎫 Билетов: {result['tickets']}\n\n"
+        f"Новая неделя — новые шансы!\n"
+        f"Купи билет: /лотерея  (10 монет)"
+    )
+
+
+async def announce_lottery(bot: Bot) -> None:
+    """Анонсирует лотерею в топиках курилки и игр (через день в 11:00)."""
+    from app.services.lottery import current_week_key, get_current_pot
+    from app.db import get_session as _gs
+    async for session in _gs():
+        pot, participants, tickets_count = await get_current_pot(session, settings.forum_chat_id)
+        break
+
+    text = (
+        f"Лотерея недели {current_week_key()}\n\n"
+        f"Банк: {pot} монет | Участников: {participants}\n"
+        f"Каждый билет = 10 монет, количество не ограничено — чем больше билетов, тем выше шанс!\n\n"
+        f"Розыгрыш в воскресенье в 11:00. Купить: /лотерея"
+    )
+    for topic in filter(None, [settings.topic_smoke, settings.topic_games]):
+        try:
+            await bot.send_message(
+                settings.forum_chat_id,
+                text,
+                message_thread_id=topic,
+            )
+        except Exception as exc:
+            logger.warning("Не удалось отправить анонс лотереи в топик %s: %s", topic, exc)
+
+
 async def send_weekly_leaderboard(bot: Bot) -> None:
     if settings.topic_games is None:
         logger.info("Еженедельный рейтинг игр пропущен: topic_games не задан.")
@@ -620,6 +791,24 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         "cron",
         hour=21,
         minute=59,
+        args=[bot],
+    )
+    # Лотерея: розыгрыш воскресенье в 11:00
+    scheduler.add_job(
+        draw_weekly_lottery,
+        "cron",
+        day_of_week="sun",
+        hour=11,
+        minute=0,
+        args=[bot],
+    )
+    # Лотерея: анонс через день в 11:00 (пн, ср, пт, вс)
+    scheduler.add_job(
+        announce_lottery,
+        "cron",
+        day_of_week="mon,wed,fri",
+        hour=11,
+        minute=0,
         args=[bot],
     )
     # Плановые приветствия жителей
@@ -867,6 +1056,8 @@ async def main() -> None:
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     dp.include_router(quiz.router)  # викторина (команды /umnij_start, /bal, /topumnij)
     dp.include_router(roulette.router)  # рулетка (команда /bet)
+    dp.include_router(services_handler.router)  # каталог услуг жителей
+    dp.include_router(economy_handler.router)  # лотерея и инициативы жителей
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     # stats.router убран — статистика через middleware
