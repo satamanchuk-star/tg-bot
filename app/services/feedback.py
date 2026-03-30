@@ -32,7 +32,7 @@ async def save_feedback(
             AiFeedback.bot_message_id == bot_message_id,
         )
     )
-    if existing.scalar_one_or_none() is not None:
+    if existing.scalars().first() is not None:
         return None
 
     fb = AiFeedback(
