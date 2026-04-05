@@ -203,10 +203,6 @@ def _build_topic_context_map() -> dict[int, tuple[str, str]]:
          "Пользователь в родительском топике. Контекст: дети, школы, садики, площадки."),
         (settings.topic_realty, "Недвижимость",
          "Пользователь в топике недвижимости. Контекст: аренда, продажа, покупка квартир."),
-        (settings.topic_rides, "Попутчики",
-         "Пользователь ищет попутчика или спрашивает про транспорт."),
-        (settings.topic_services, "Услуги",
-         "Пользователь в топике услуг. Предлагай релевантных специалистов из каталога."),
         (settings.topic_uk, "УК",
          "Пользователь в топике УК. Контекст: управляющая компания, заявки, жалобы на УК."),
         (settings.topic_smoke, "Курилка",
@@ -296,8 +292,7 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "1) Каноническая база знаний ЖК; "
     "2) База знаний ЖК с пометкой [АДМИН] (добавлено администраторами); "
     "3) Остальные записи базы знаний ЖК; "
-    "4) Каталог услуг от жителей ЖК (соседи предлагают свои услуги); "
-    "5) Справочник инфраструктуры ЖК.\n"
+    "4) Справочник инфраструктуры ЖК.\n"
     "КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО выдумывать адреса, телефоны, сайты, маршруты, "
     "расстояния, названия, номера автобусов, станции метро. "
     "ЗАПРЕЩЕНО дополнять данные из базы своими предположениями или «общими знаниями». "
@@ -306,7 +301,7 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "и предложи спросить в чате у соседей или обратиться в УК. "
     "ЛУЧШЕ сказать «не знаю» и пошутить, чем дать неверную информацию. "
     "Если есть FAQ — передай суть своими словами.\n\n"
-    "ФОРМАТ: русский язык, кратко и по делу (до 800 символов). "
+    "ФОРМАТ: русский язык, КРАТКО (до 400 символов, 1-3 предложения максимум). Не растекайся. "
     "На практический вопрос — пошаговый ответ с контактами и телефонами. "
     "Используй «•» для списков, нумерацию для шагов. "
     "Если в контексте есть ссылки — обязательно включи в ответ. "
@@ -338,8 +333,6 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "- «Лифт сегодня в хорошем настроении — ни одного застревания. Пока.»\n"
     "- «Парковка — это квест, где победитель получает право идти пешком от дальнего угла.»\n"
     "- НЕ ШУТИ про конкретных людей, национальности, внешность или личные проблемы.\n\n"
-    "УСЛУГИ ЖИТЕЛЕЙ: если в каталоге услуг есть подходящий специалист — "
-    "порекомендуй его. Это наши соседи, они рядом и проверены.\n\n"
     "ОГРАНИЧЕНИЯ: не помогай с политикой, религией, нацконфликтами, "
     "медицинскими назначениями, юридическими консультациями, финансовыми советами. "
     "Откажи с юмором: «Это за пределами моей компетенции, тут нужен специалист!».\n\n"
@@ -353,7 +346,9 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "- Просьба о помощи («помогите с...», «нужен мастер») → конкретный совет или контакт\n"
     "Данные из базы знаний — СПРАВОЧНЫЙ МАТЕРИАЛ. Используй их ТОЛЬКО если они "
     "прямо отвечают на реальный запрос. Не превращай каждый ответ в справку из KB.\n\n"
-    "КОНТЕКСТ ДИАЛОГА: помни предыдущие сообщения, ссылайся на них. "
+    "КОНТЕКСТ ДИАЛОГА: внимательно читай предыдущие сообщения в истории. "
+    "Если пользователь ссылается на что-то из предыдущего разговора — обязательно учитывай это. "
+    "Если это цитата сообщения другого человека — учитывай контекст цитируемого сообщения. "
     "Уточняющий вопрос → дополняй, не повторяй. "
     "Шутит → поддержи, развей.\n\n"
     "ВИКТОРИНЫ: если идёт викторина — НИКОГДА не давай ответ. Отшутись.\n\n"
@@ -634,15 +629,14 @@ class StubAiProvider:
         places_context = await _get_places_context(safe_prompt)
         rag_text = await _get_rag_context(chat_id, safe_prompt)
         faq_answer = await _get_faq_answer(chat_id, safe_prompt)
-        services_context = await _get_services_context(chat_id, safe_prompt)
         web_hint = ""
-        if should_search_web(safe_prompt) and not rag_text and not faq_answer and not services_context:
+        if should_search_web(safe_prompt) and not rag_text and not faq_answer:
             try:
                 web_results = await search_duckduckgo(safe_prompt)
                 web_hint = format_search_context(web_results)
             except Exception:
                 pass
-        return build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer, web_hint=web_hint, services_hint=services_context, user_id=user_id, topic_id=topic_id)
+        return build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer, web_hint=web_hint, user_id=user_id, topic_id=topic_id)
 
     async def evaluate_quiz_answer(
         self,
@@ -852,8 +846,6 @@ class OpenRouterProvider:
         rag_text = await _get_rag_context(chat_id, safe_prompt)
         faq_answer = await _get_faq_answer(chat_id, safe_prompt)
         places_context = await _get_places_context(safe_prompt)
-        services_context = await _get_services_context(chat_id, safe_prompt)
-
         system_prompt = _ASSISTANT_SYSTEM_PROMPT
 
         # Добавляем контекст топика
@@ -903,7 +895,7 @@ class OpenRouterProvider:
                 logger.warning("Веб-поиск при ответе ассистента не удался.")
 
         # Логируем какие контексты были найдены и источник ответа
-        has_factual_context = bool(resident_context) or bool(rag_text) or bool(faq_answer) or bool(places_context) or bool(services_context)
+        has_factual_context = bool(resident_context) or bool(rag_text) or bool(faq_answer) or bool(places_context)
         if resident_context:
             _answer_source = "resident_kb_context"
         elif rag_text:
@@ -912,16 +904,14 @@ class OpenRouterProvider:
             _answer_source = "faq"
         elif places_context:
             _answer_source = "places"
-        elif services_context:
-            _answer_source = "services"
         elif web_context:
             _answer_source = "web"
         else:
             _answer_source = "fallback"
         logger.info(
-            "ANSWER_SOURCE: source=%s resident_ctx=%s rag=%s faq=%s places=%s services=%s web=%s prompt=%r user_id=%s topic_id=%s",
+            "ANSWER_SOURCE: source=%s resident_ctx=%s rag=%s faq=%s places=%s web=%s prompt=%r user_id=%s topic_id=%s",
             _answer_source, bool(resident_context), bool(rag_text), bool(faq_answer),
-            bool(places_context), bool(services_context), bool(web_context),
+            bool(places_context), bool(web_context),
             safe_prompt[:80], user_id, topic_id,
         )
         _log_response_event(_answer_source + "_ai", safe_prompt, user_id, topic_id, used_ai=True)
@@ -941,12 +931,6 @@ class OpenRouterProvider:
             system_prompt += (
                 "\n\nСправочник инфраструктуры ЖК (актуальные данные из БД, используй при ответе):\n"
                 f"{places_context}"
-            )
-        if services_context:
-            system_prompt += (
-                "\n\nУслуги от жителей ЖК (соседи предлагают свои услуги, "
-                "рекомендуй их при релевантных запросах):\n"
-                f"{services_context}"
             )
         if web_context:
             system_prompt += f"\n\n{web_context}"
@@ -976,7 +960,7 @@ class OpenRouterProvider:
 
         # Формируем историю как отдельные user/assistant сообщения
         messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
-        for line in context[-20:]:
+        for line in context[-30:]:
             if line.startswith("user:"):
                 messages.append({"role": "user", "content": line[5:].strip()[:500]})
             elif line.startswith("assistant:"):
@@ -987,12 +971,12 @@ class OpenRouterProvider:
         temperature = 0.6 if has_factual_context else 0.8
         try:
             content, _ = await self._chat_completion(messages, chat_id=chat_id, temperature=temperature)
-            reply = content[:800]
+            reply = content[:500]
             return reply
         except RuntimeError as exc:
             self._record_runtime_error(exc)
             _log_response_event("ai_error_local_fallback", safe_prompt, user_id, topic_id, used_ai=False)
-            return build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer, services_hint=services_context)
+            return build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer)
 
     async def evaluate_quiz_answer(
         self,
@@ -1209,8 +1193,7 @@ class AiModuleClient:
             places_context = await _get_places_context(prompt)
             rag_text = await _get_rag_context(chat_id, prompt)
             faq_answer = await _get_faq_answer(chat_id, prompt)
-            services_ctx = await _get_services_context(chat_id, prompt)
-            return build_local_assistant_reply(prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer, services_hint=services_ctx)
+            return build_local_assistant_reply(prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer)
 
     async def assistant_reply_with_history(
         self,
@@ -1706,7 +1689,6 @@ def build_local_assistant_reply(
     rag_hint: str | None = None,
     faq_hint: str | None = None,
     web_hint: str | None = None,
-    services_hint: str | None = None,
     user_id: int | None = None,
     topic_id: int | None = None,
 ) -> str:
@@ -1753,20 +1735,7 @@ def build_local_assistant_reply(
         _log_response_event("faq", normalized_prompt, user_id, topic_id)
         return faq_hint.strip()[:800]
 
-    # 4. Услуги от жителей ЖК
-    if services_hint and services_hint.strip():
-        intros = (
-            "О, у нас прямо в ЖК есть спецы по этому делу!",
-            "Тут даже далеко ходить не надо — есть свои мастера:",
-            "Среди соседей нашёлся специалист, смотри:",
-            "Есть проверенные ребята прямо в нашем доме:",
-            "Кстати, у нас соседи этим занимаются!",
-        )
-        logger.info("ANSWER_SOURCE: source=services prompt=%r", normalized_prompt[:80])
-        _log_response_event("services", normalized_prompt, user_id, topic_id)
-        return f"{random.choice(intros)}\n{services_hint.strip()[:700]}"
-
-    # 5. Данные из БД инфраструктуры
+    # 4. Данные из БД инфраструктуры
     if places_hint and places_hint.strip():
         intros = (
             "Знаю такое место!",
@@ -2002,19 +1971,6 @@ async def _get_places_context(query: str, *, top_k: int = 5) -> str:
         logger.warning("Places search failed: %s", exc)
     return ""
 
-
-async def _get_services_context(chat_id: int, query: str) -> str:
-    """Ищет подходящие услуги от жителей ЖК для ответа."""
-    try:
-        from app.services.resident_services import search_services, format_services_context
-        async for session in get_session():
-            services = await search_services(session, chat_id, query, top_k=3)
-            if not services:
-                return ""
-            return format_services_context(services)
-    except Exception as exc:
-        logger.warning("Services search failed: %s", exc)
-    return ""
 
 
 async def build_dialog_summary_for_prompt(chat_id: int, user_id: int, *, limit: int = 6) -> str:

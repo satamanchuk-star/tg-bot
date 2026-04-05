@@ -208,6 +208,8 @@ def _init_excluded_topics() -> None:
         _EXCLUDED_TOPIC_IDS.add(settings.topic_rules)
     if settings.topic_important is not None:
         _EXCLUDED_TOPIC_IDS.add(settings.topic_important)
+    if settings.topic_rides is not None:
+        _EXCLUDED_TOPIC_IDS.add(settings.topic_rides)
 
 
 def _is_comment_cooldown(chat_id: int, topic_id: int | None) -> bool:
@@ -331,6 +333,59 @@ _EVENING_SYSTEM_PROMPT = (
     "Пожелай хорошего вечера или спокойной ночи. "
     "Разговорный стиль, тепло и уютно. Один эмодзи. НЕ пиши длинных текстов."
 )
+
+
+_WEEKLY_UPDATE_SYSTEM_PROMPT = (
+    "Ты — дружелюбный бот жилого комплекса «Живописный». "
+    "Напиши короткое еженедельное обращение к жителям на понедельник. "
+    "Включи:\n"
+    "1) Пожелание хорошей продуктивной недели — каждый раз в разном стиле.\n"
+    "2) Краткое напоминание о возможностях бота (2-3 пункта, чередуй каждую неделю):\n"
+    "   - Упомяни @бот для вопросов по ЖК\n"
+    "   - /help — навигация по форуму\n"
+    "   - /21 — блэкджек (22:00–00:00), зарабатывай монеты\n"
+    "   - Викторина каждый день в 20:00\n"
+    "   - /roulette — рулетка (21:00–22:00)\n"
+    "   - /лотерея — купить билет в топике Игры (розыгрыш в воскресенье)\n"
+    "   - /доработка — предложить улучшение бота\n"
+    "3) Можно упомянуть сезонное (погода, праздники) или бытовое наблюдение.\n"
+    "Максимум 500 символов. Разговорный, дружелюбный тон. 1-2 эмодзи. "
+    "Не перечисляй ВСЕ команды — выбери 2-3 самых интересных."
+)
+
+
+async def send_weekly_update(bot: Bot) -> None:
+    """Отправляет еженедельное обновление в топик «Важное» по понедельникам."""
+    if not settings.ai_feature_proactive:
+        return
+
+    target_topic = settings.topic_important
+    if target_topic is None:
+        logger.info("Еженедельное обновление пропущено: topic_important не задан.")
+        return
+
+    try:
+        ai_client = get_ai_client()
+        provider = ai_client._provider
+        if not hasattr(provider, "_chat_completion"):
+            logger.info("Еженедельное обновление пропущено: нет remote AI провайдера.")
+            return
+        content, _ = await provider._chat_completion(
+            [
+                {"role": "system", "content": _WEEKLY_UPDATE_SYSTEM_PROMPT},
+                {"role": "user", "content": "Напиши еженедельное обращение к жителям"},
+            ],
+            chat_id=settings.forum_chat_id,
+        )
+        if content and content.strip():
+            await bot.send_message(
+                settings.forum_chat_id,
+                content.strip()[:600],
+                message_thread_id=target_topic,
+            )
+            logger.info("WEEKLY_UPDATE: sent to topic=%s", target_topic)
+    except Exception:
+        logger.warning("Не удалось отправить еженедельное обновление.")
 
 
 async def send_scheduled_greeting(bot: Bot, period: str) -> None:

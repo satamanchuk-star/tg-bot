@@ -48,8 +48,15 @@ class _PendingImprovementFilter(BaseFilter):
 
 @router.message(Command("лотерея", "lottery"))
 async def lottery_command(message: Message) -> None:
-    """Купить лотерейный билет на текущую неделю. Можно покупать несколько."""
+    """Купить лотерей��ый билет на текущую неделю. Можно покупать ��есколько."""
     if message.from_user is None:
+        return
+
+    # Лотерея работает только в топике «Игры»
+    if (settings.topic_games is None
+            or message.chat.id != settings.forum_chat_id
+            or message.message_thread_id != settings.topic_games):
+        await message.reply("Билеты продаютс�� только в топике «Игры» 🎮")
         return
 
     user_id = message.from_user.id
@@ -91,6 +98,13 @@ async def lottery_command(message: Message) -> None:
 @router.message(Command("банк", "jackpot"))
 async def jackpot_command(message: Message) -> None:
     """Показывает текущий банк лотереи."""
+    # Работает только в топике «Игры»
+    if (settings.topic_games is None
+            or message.chat.id != settings.forum_chat_id
+            or message.message_thread_id != settings.topic_games):
+        await message.reply("Лотерея доступна только в топике «Игры» 🎮")
+        return
+
     async for session in get_session():
         pot, participants, tickets_count = await get_current_pot(session, settings.forum_chat_id)
 
