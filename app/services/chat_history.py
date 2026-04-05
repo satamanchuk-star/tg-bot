@@ -26,11 +26,11 @@ STRUCTURED_SUMMARY_PROMPT = (
 )
 
 # Сколько записей на пару (chat_id, user_id) держим в БД
-HISTORY_LIMIT = 20
+HISTORY_LIMIT = 30
 # Старше 7 дней — кандидаты на сжатие в саммари
 SUMMARY_AGE_DAYS = 7
 # Порог для запуска сжатия (когда достигнуто столько обычных записей)
-COMPRESS_THRESHOLD = 16
+COMPRESS_THRESHOLD = 24
 # Сколько записей сжимаем за раз
 COMPRESS_BATCH = 10
 

@@ -108,9 +108,6 @@ HELP_MENU_TEXT = (
     "<b>Помощь и навигация</b>\n"
     "• /help — меню тем форума и советник «Куда писать?»\n"
     "• Упомяни меня или напиши вопрос — отвечу с помощью AI\n\n"
-    "<b>Каталог услуг жителей</b>\n"
-    "• /услуги — просмотр каталога по категориям\n"
-    "• /услуги [запрос] — поиск: /услуги маникюр, /услуги ремонт\n\n"
     "<b>Игры (зарабатывай монеты!)</b>\n"
     "• /21 — блэкджек (22:00–00:00)\n"
     "• /umnij_start — викторина (20:00)\n"
@@ -335,9 +332,6 @@ TOPIC_DESCRIPTIONS: dict[str, str] = {
     "Попутчики": (
         "Попутчики — ищем попутчиков, делимся маршрутами, обсуждаем каршеринг и такси."
     ),
-    "Услуги": (
-        "Услуги — предложения и запросы услуг: мастера, няни, уборка, ремонт техники."
-    ),
     "Правила": (
         "Правила — краткое резюме правил форума. "
         "Полный свод правил опубликован в теме «Правила» — обязательно ознакомьтесь."
@@ -353,7 +347,6 @@ TOPIC_ORDER = [
     "Мамы и папы",
     "Недвижимость",
     "Попутчики",
-    "Услуги",
     "Правила",
 ]
 
@@ -441,16 +434,6 @@ TOPIC_KEYWORDS: dict[str, list[str]] = {
         "доехать",
         "в аэропорт",
     ],
-    "Услуги": [
-        "услуги",
-        "мастер",
-        "предлагаю",
-        "починю",
-        "ремонтирую",
-        "уборка",
-        "няня",
-        "репетитор",
-    ],
     "Правила": [],
 }
 
@@ -463,7 +446,6 @@ TOPIC_THREADS: dict[str, int | None] = {
     "Мамы и папы": settings.topic_parents,
     "Недвижимость": settings.topic_realty,
     "Попутчики": settings.topic_rides,
-    "Услуги": settings.topic_services,
     "Правила": settings.topic_rules,
     "Курилка": settings.topic_smoke,
 }
@@ -474,7 +456,7 @@ LAST_HINT_TIME: dict[tuple[int, int], datetime] = {}
 HELP_DELETE_TASKS: dict[tuple[int, int], asyncio.Task[None]] = {}
 # In-memory кэш используется как быстрый fallback; основная история — в БД
 AI_CHAT_HISTORY: dict[tuple[int, int], deque[str]] = {}
-AI_CHAT_HISTORY_LIMIT = 20
+AI_CHAT_HISTORY_LIMIT = 30
 LAST_AI_REPLY_TIME: dict[tuple[int, int], datetime] = {}
 # Кэш промпт→ответ для feedback кнопок (message_id → данные)
 _PENDING_FEEDBACK: dict[int, tuple[int, int, str, str, str]] = {}  # msg_id → (chat_id, user_id, prompt, reply, question_key)
@@ -500,12 +482,7 @@ _ABILITIES_CONTEXT = """
 - /help — интерактивное меню тем форума
 - Советник «Куда писать?» — определяет нужный топик по описанию вопроса
 - Ответы на вопросы жителей через AI при упоминании в чате
-- Навигация по топикам: шлагбаум, ремонт, жалобы, барахолка, питомцы, мамы и папы, недвижимость, попутчики, услуги
-
-КАТАЛОГ УСЛУГ ЖИТЕЛЕЙ:
-- /услуги — просмотр каталога по категориям (кондитерская, красота, ремонт, обучение и др.)
-- /услуги [запрос] — поиск по ключевым словам, например /услуги маникюр
-- AI-поиск по каталогу при вопросах в чате
+- Навигация по топикам: шлагбаум, ремонт, жалобы, барахолка, питомцы, мамы и папы, недвижимость, попутчики
 
 ИГРЫ (зарабатывай монеты!):
 - /21 — блэкджек (каждый день 22:00–00:00)
@@ -1045,6 +1022,24 @@ async def ai_command(message: Message) -> None:
         await message.reply("Напишите вопрос после команды: /ai <ваш вопрос>")
         return
 
+    # Добавляем контекст цитируемого сообщения, если реплай на другого пользова��еля
+    if (
+        message.reply_to_message
+        and message.reply_to_message.from_user
+        and not message.reply_to_message.from_user.is_bot
+    ):
+        reply_text = (
+            message.reply_to_message.text
+            or message.reply_to_message.caption
+            or ""
+        ).strip()
+        if reply_text:
+            reply_author = message.reply_to_message.from_user.full_name or "Сосед"
+            prompt = (
+                f"[Сообщение, на которое отвечают ({reply_author}): "
+                f"{reply_text[:500]}]\n\n{prompt}"
+            )
+
     # Дедупликация: проверяем, не отвечали ли недавно на такой же запрос
     if _is_duplicate_prompt(message.chat.id, prompt):
         logger.info("OUT: AI_CMD_SKIPPED_DUPLICATE prompt=%r", prompt[:80])
@@ -1126,7 +1121,15 @@ async def mention_help(message: Message, bot: Bot) -> None:
     if message.from_user is None:
         return
 
-    # Не отвечаем на упоминания в игровом топике, если идёт викторина
+    # Не отвечаем на упоминания в топике «Попутчики»
+    if (
+        message.chat.id == settings.forum_chat_id
+        and settings.topic_rides is not None
+        and message.message_thread_id == settings.topic_rides
+    ):
+        return
+
+    # Не отв��чаем на упоминания в игровом топике, если идёт викторина
     if (
         message.chat.id == settings.forum_chat_id
         and settings.topic_games is not None

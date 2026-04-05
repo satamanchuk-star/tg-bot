@@ -40,7 +40,7 @@ from app.handlers import (
     moderation,
     quiz,
     roulette,
-    services as services_handler,
+
     text_publish,
 )
 from app.models import MigrationFlag, UserStat
@@ -58,7 +58,7 @@ from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
 from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, get_and_clear_response_log, set_ai_admin_notifier
 from app.services.daily_summary import build_ai_summary_context, build_daily_summary, build_response_report, render_daily_summary
-from app.services.proactive import send_scheduled_greeting
+from app.services.proactive import send_scheduled_greeting, send_weekly_update
 from app.services.resident_kb import load_resident_kb
 
 logging.basicConfig(
@@ -811,6 +811,15 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         minute=0,
         args=[bot],
     )
+    # Еженедельное обновление по понедельникам
+    scheduler.add_job(
+        send_weekly_update,
+        "cron",
+        day_of_week="mon",
+        hour=10,
+        minute=0,
+        args=[bot],
+    )
     # Плановые приветствия жителей
     if settings.ai_morning_greeting:
         scheduler.add_job(
@@ -917,7 +926,8 @@ async def on_startup(bot: Bot) -> None:
                     BotCommand(command="reload_profanity", description="Перечитать мат-словари"),
                     BotCommand(command="reset_routing_state", description="Сбросить ожидания роутинга"),
                     BotCommand(command="reset_stats", description="Сбросить статистику"),
-                    BotCommand(command="usluga", description="Добавить услугу в каталог"),
+    
+
                     BotCommand(command="form", description="Форма для шлагбаума"),
                     BotCommand(command="text", description="Текст от лица бота"),
                     BotCommand(command="umnij_start", description="Запустить викторину"),
@@ -1056,7 +1066,7 @@ async def main() -> None:
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     dp.include_router(quiz.router)  # викторина (команды /umnij_start, /bal, /topumnij)
     dp.include_router(roulette.router)  # рулетка (команда /bet)
-    dp.include_router(services_handler.router)  # каталог услуг жителей
+
     dp.include_router(economy_handler.router)  # лотерея и инициативы жителей
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
