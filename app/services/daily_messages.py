@@ -259,6 +259,7 @@ async def send_morning_greeting(bot: Bot) -> None:
                 {"role": "user", "content": user_message},
             ],
             chat_id=settings.forum_chat_id,
+            bypass_limit=True,
         )
 
         if content and content.strip():
@@ -269,7 +270,7 @@ async def send_morning_greeting(bot: Bot) -> None:
             logger.info("DAILY_GREETING: утреннее приветствие отправлено в General")
 
     except Exception:
-        logger.warning("Не удалось отправить утреннее приветствие.")
+        logger.warning("Не удалось отправить утреннее приветствие.", exc_info=True)
 
 
 async def send_traffic_report(bot: Bot, period: str) -> None:
@@ -318,6 +319,7 @@ async def send_traffic_report(bot: Bot, period: str) -> None:
                 {"role": "user", "content": direction_info},
             ],
             chat_id=settings.forum_chat_id,
+            bypass_limit=True,
         )
 
         if content and content.strip():
@@ -329,4 +331,4 @@ async def send_traffic_report(bot: Bot, period: str) -> None:
             logger.info("TRAFFIC_REPORT: %s отчёт отправлен в Попутчики", period)
 
     except Exception:
-        logger.warning("Не удалось отправить трафик-отчёт (%s).", period)
+        logger.warning("Не удалось отправить трафик-отчёт (%s).", period, exc_info=True)
