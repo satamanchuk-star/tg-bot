@@ -224,6 +224,17 @@ async def clear_game_command_messages(session: AsyncSession, chat_id: int) -> No
     )
 
 
+def transfer_coins(sender: UserStat, receiver: UserStat, amount: int) -> str | None:
+    """Перевод монет между пользователями. Возвращает None при успехе или текст ошибки."""
+    if amount <= 0:
+        return "Количество должно быть положительным числом."
+    if sender.coins < amount:
+        return "Недостаточно монет для подарка."
+    sender.coins -= amount
+    receiver.coins += amount
+    return None
+
+
 def can_grant_coins(stats: UserStat, now: datetime, amount: int) -> bool:
     if amount > 10:
         return False

@@ -442,3 +442,17 @@ class ImprovementVote(Base):
     user_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     amount: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class ShopPurchase(Base):
+    """Почему: история покупок в магазине монет."""
+    __tablename__ = "shop_purchases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    chat_id: Mapped[int] = mapped_column(Integer)
+    user_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    item_key: Mapped[str] = mapped_column(Text)
+    coins_spent: Mapped[int] = mapped_column(Integer)
+    details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))

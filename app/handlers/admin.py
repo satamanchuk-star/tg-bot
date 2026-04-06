@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from app.config import settings
 from app.db import get_session
 from app.models import GameState
-from app.services.games import can_grant_coins, get_or_create_stats, register_coin_grant
+from app.services.games import get_or_create_stats
 from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import extract_target_user, is_admin
 from app.utils.admin_help import (
@@ -277,6 +277,9 @@ async def grant_coins(message: Message, bot: Bot) -> None:
     except ValueError:
         await message.reply("Монеты должны быть числом.")
         return
+    if amount <= 0:
+        await message.reply("Количество должно быть положительным.")
+        return
     target_id, display_name = extract_target_user(message)
     if target_id is None:
         await message.reply("Нужен реплай на сообщение пользователя.")
@@ -288,11 +291,7 @@ async def grant_coins(message: Message, bot: Bot) -> None:
             settings.forum_chat_id,
             display_name=display_name,
         )
-        now = datetime.now(timezone.utc)
-        if not can_grant_coins(stats, now, amount):
-            await message.reply("Нельзя выдать больше 10 монет за раз/сутки.")
-            return
-        register_coin_grant(stats, now, amount)
+        stats.coins += amount
         await session.commit()
     await message.reply(f"Начислено {amount} монет.")
 

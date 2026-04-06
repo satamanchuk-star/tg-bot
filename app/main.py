@@ -40,7 +40,7 @@ from app.handlers import (
     moderation,
     quiz,
     roulette,
-
+    shop,
     text_publish,
 )
 from app.models import MigrationFlag, UserStat
@@ -1064,6 +1064,7 @@ async def main() -> None:
     dp.include_router(admin.router)  # админ-команды
     dp.include_router(games.router)  # игры (команды /21, /score)
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
+    dp.include_router(shop.router)  # магазин монет (FSM, перед economy)
     dp.include_router(economy_handler.router)  # лотерея и инициативы жителей (до quiz — catch-all в topic_games)
     dp.include_router(quiz.router)  # викторина (команды /umnij_start, /bal, /topumnij)
     dp.include_router(roulette.router)  # рулетка (команда /bet)
