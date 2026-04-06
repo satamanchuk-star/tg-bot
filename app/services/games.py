@@ -264,4 +264,8 @@ def is_game_timed_out(state: BlackjackState, now: datetime) -> bool:
     if state.started_at is None:
         return False
     started = datetime.fromisoformat(state.started_at)
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     return now - started > timedelta(minutes=GAME_TIMEOUT_MINUTES)

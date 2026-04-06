@@ -101,7 +101,10 @@ async def vote_for_improvement(
         return None, "not_found", False
     if improvement.is_completed:
         return None, "already_completed", False
-    if improvement.expires_at < datetime.now(timezone.utc):
+    expires_at = improvement.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
         return None, "expired", False
 
     existing_vote = (
