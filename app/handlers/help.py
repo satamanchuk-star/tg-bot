@@ -64,6 +64,35 @@ class HelpRoutingActiveFilter(BaseFilter):
         return key in HELP_ROUTING_STATE
 
 
+class AdminCorrectionFilter(BaseFilter):
+    """Срабатывает когда администратор отвечает на сообщение бота с корректировкой.
+
+    Проверяет: реплай на бота + отправитель-администратор + паттерн коррекции.
+    Работает в любом чате и топике.
+    """
+
+    async def __call__(self, message: Message, bot: Bot) -> bool:
+        # Только реплаи на сообщения бота
+        if not message.reply_to_message or not message.reply_to_message.from_user:
+            return False
+        me = await _get_bot_profile(bot)
+        if message.reply_to_message.from_user.id != me.id:
+            return False
+        # Есть текст
+        text = _get_message_text(message)
+        if not text:
+            return False
+        # Содержит паттерн коррекции
+        from app.services.admin_corrections import is_admin_correction
+        if not is_admin_correction(text):
+            return False
+        # Отправитель — администратор
+        if not message.from_user:
+            return False
+        from app.utils.admin import is_admin
+        return await is_admin(bot, message.chat.id, message.from_user.id)
+
+
 class BotMentionFilter(BaseFilter):
     """Почему: ловим упоминания бота, не блокируя остальные команды."""
 
@@ -1105,6 +1134,40 @@ async def ai_command(message: Message) -> None:
     except Exception:
         logger.exception("Ошибка при обработке /ai команды.")
         await message.reply("Произошла ошибка при обработке запроса. Попробуйте позже.")
+
+
+@router.message(AdminCorrectionFilter(), flags={"block": False})
+async def admin_correction_handler(message: Message, bot: Bot) -> None:
+    """Поправка бота от администратора — сохраняется в RAG бессрочно."""
+    if message.from_user is None:
+        return
+    # Помечаем как обработанное, чтобы BotMentionFilter его не подхватил
+    _mark_message_processed(message.message_id)
+
+    text = _get_message_text(message) or ""
+    bot_reply_text = (
+        message.reply_to_message.text or message.reply_to_message.caption or ""
+    ).strip()
+
+    from app.services.admin_corrections import apply_admin_correction
+    try:
+        async for session in get_session():
+            success, fact = await apply_admin_correction(
+                session,
+                chat_id=message.chat.id,
+                admin_id=message.from_user.id,
+                admin_text=text,
+                bot_reply=bot_reply_text,
+            )
+            if success:
+                await message.reply(
+                    f"✅ Запомнил! Обновил базу знаний:\n"
+                    f"<blockquote>{fact[:400]}</blockquote>",
+                    parse_mode="HTML",
+                )
+            break
+    except Exception:
+        logger.exception("Ошибка при применении коррекции от администратора.")
 
 
 @router.message(BotMentionFilter(), flags={"block": False})
