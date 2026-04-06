@@ -21,7 +21,9 @@ from app.services.games import (
     save_game,
     start_game,
     evaluate_game,
+    transfer_coins,
 )
+from app.utils.admin import extract_target_user
 
 router = Router()
 
@@ -176,6 +178,59 @@ async def show_score(message: Message) -> None:
         await session.commit()
     await message.reply(
         f"Монеты: {stats.coins}\nИгры: {stats.games_played}\nПобеды: {stats.wins}"
+    )
+
+
+@router.message(Command("подарить", "gift"))
+async def gift_coins_cmd(message: Message) -> None:
+    if settings.topic_games is None:
+        return
+    if (
+        message.chat.id != settings.forum_chat_id
+        or message.message_thread_id != settings.topic_games
+    ):
+        return
+    if message.from_user is None:
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        await message.reply("Укажи количество монет: /подарить 50")
+        return
+    try:
+        amount = int(parts[1])
+    except ValueError:
+        await message.reply("Количество монет должно быть числом.")
+        return
+    target_id, target_name = extract_target_user(message)
+    if target_id is None:
+        await message.reply("Нужен реплай на сообщение получателя.")
+        return
+    if target_id == message.from_user.id:
+        await message.reply("Нельзя подарить монеты самому себе.")
+        return
+    async for session in get_session():
+        sender_stats = await get_or_create_stats(
+            session,
+            message.from_user.id,
+            settings.forum_chat_id,
+            display_name=_display_name(message),
+        )
+        receiver_stats = await get_or_create_stats(
+            session,
+            target_id,
+            settings.forum_chat_id,
+            display_name=target_name,
+        )
+        error = transfer_coins(sender_stats, receiver_stats, amount)
+        if error:
+            await message.reply(error)
+            return
+        await session.commit()
+    sender_name = _display_name(message) or str(message.from_user.id)
+    recv_name = target_name or str(target_id)
+    await message.reply(
+        f"🎁 {sender_name} подарил(а) {amount} монет пользователю {recv_name}!\n"
+        f"Баланс: {sender_stats.coins} | {recv_name}: {receiver_stats.coins}"
     )
 
 
