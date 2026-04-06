@@ -1064,10 +1064,9 @@ async def main() -> None:
     dp.include_router(admin.router)  # админ-команды
     dp.include_router(games.router)  # игры (команды /21, /score)
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
+    dp.include_router(economy_handler.router)  # лотерея и инициативы жителей (до quiz — catch-all в topic_games)
     dp.include_router(quiz.router)  # викторина (команды /umnij_start, /bal, /topumnij)
     dp.include_router(roulette.router)  # рулетка (команда /bet)
-
-    dp.include_router(economy_handler.router)  # лотерея и инициативы жителей
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     # stats.router убран — статистика через middleware
