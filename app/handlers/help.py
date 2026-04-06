@@ -93,6 +93,16 @@ class AdminCorrectionFilter(BaseFilter):
         return await is_admin(bot, message.chat.id, message.from_user.id)
 
 
+# Реакции на ответ бота — короткие эмоциональные фразы, которые не требуют ответа
+# (обсуждение между людьми, а не обращение к боту)
+_REPLY_REACTION_PHRASES = frozenset({
+    "ок", "окк", "ага", "угу", "ясно", "понял", "понятно", "понятненько",
+    "лол", "ахах", "хаха", "хахаха", "ха", "класс", "топ", "огонь", "огонь🔥",
+    "спасибо", "спс", "благодарю", "thanks", "ok", "ок!", "ага!", "понял!",
+    "👍", "🙏", "👌", "😂", "🔥", "❤️", "👏", "😄", "😊",
+})
+
+
 class BotMentionFilter(BaseFilter):
     """Почему: ловим упоминания бота, не блокируя остальные команды."""
 
@@ -112,8 +122,8 @@ class BotMentionFilter(BaseFilter):
 
         has_direct_mention = _is_bot_mentioned(message, me) or _is_bot_name_called(text, me)
 
-        # Реплай на бота: только если содержательный вопрос (≥ 15 символов + знак вопроса)
-        # Короткие реплаи типа "ахах точно" или "согласен" — это обсуждение между людьми, не обращение к боту
+        # Реплай на бота: пропускаем короткие эмоциональные реакции ("ок", "👍", "спасибо"),
+        # но отвечаем на любое содержательное продолжение разговора — даже без знака вопроса
         is_reply_to_bot = False
         if (
             not has_direct_mention
@@ -122,14 +132,24 @@ class BotMentionFilter(BaseFilter):
             and message.reply_to_message.from_user.id == me.id
         ):
             stripped = text.strip()
+            stripped_lower = stripped.lower()
             if (
-                len(stripped) >= 15
+                len(stripped) >= 7
                 and not stripped.startswith("/")
-                and "?" in stripped
+                and stripped_lower not in _REPLY_REACTION_PHRASES
             ):
                 is_reply_to_bot = True
 
-        return has_direct_mention or is_reply_to_bot
+        # Активный диалог: если бот недавно отвечал этому пользователю в этом топике —
+        # продолжаем разговор без явного упоминания
+        is_active_dialog = False
+        if not has_direct_mention and not is_reply_to_bot and message.from_user:
+            stripped = text.strip() if text else ""
+            if len(stripped) >= 5 and not stripped.startswith("/"):
+                if _is_in_active_dialog(message.chat.id, message.from_user.id, message.message_thread_id):
+                    is_active_dialog = True
+
+        return has_direct_mention or is_reply_to_bot or is_active_dialog
 
 
 HELP_MENU_TEXT = (
@@ -489,6 +509,11 @@ AI_CHAT_HISTORY_LIMIT = 30
 LAST_AI_REPLY_TIME: dict[tuple[int, int], datetime] = {}
 # Кэш промпт→ответ для feedback кнопок (message_id → данные)
 _PENDING_FEEDBACK: dict[int, tuple[int, int, str, str, str]] = {}  # msg_id → (chat_id, user_id, prompt, reply, question_key)
+# Активное окно диалога: (chat_id, user_id, thread_id) → время последнего ответа бота
+# Если пользователь пишет в течение окна — продолжаем разговор без явного упоминания
+_ACTIVE_DIALOG: dict[tuple[int, int, int | None], datetime] = {}
+_ACTIVE_DIALOG_WINDOW = timedelta(minutes=4)
+_ACTIVE_DIALOG_MAX = 500
 
 
 async def _get_menu_text(bot: Bot, user_id: int | None) -> str:
@@ -819,6 +844,25 @@ def _is_ai_reply_rate_limited(chat_id: int, user_id: int) -> bool:
         return True
     LAST_AI_REPLY_TIME[key] = now
     return False
+
+
+def _is_in_active_dialog(chat_id: int, user_id: int, thread_id: int | None) -> bool:
+    """Проверяет, находится ли пользователь в активном окне диалога с ботом."""
+    key = (chat_id, user_id, thread_id)
+    entry = _ACTIVE_DIALOG.get(key)
+    if entry is None:
+        return False
+    return datetime.now(timezone.utc) - entry < _ACTIVE_DIALOG_WINDOW
+
+
+def _open_active_dialog(chat_id: int, user_id: int, thread_id: int | None) -> None:
+    """Открывает/обновляет окно активного диалога после ответа бота."""
+    if len(_ACTIVE_DIALOG) > _ACTIVE_DIALOG_MAX:
+        now = datetime.now(timezone.utc)
+        expired = [k for k, v in _ACTIVE_DIALOG.items() if now - v >= _ACTIVE_DIALOG_WINDOW]
+        for k in expired:
+            _ACTIVE_DIALOG.pop(k, None)
+    _ACTIVE_DIALOG[(chat_id, user_id, thread_id)] = datetime.now(timezone.utc)
 
 
 async def set_waiting_state(
@@ -1301,29 +1345,45 @@ async def mention_help(message: Message, bot: Bot) -> None:
             )
             return
 
-        # Добавляем контекст цитируемого сообщения, если реплай на другого пользователя
+        # Добавляем контекст цитируемого сообщения в зависимости от источника реплая
         full_prompt = prompt
-        if (
-            message.reply_to_message
-            and message.reply_to_message.from_user
-            and not message.reply_to_message.from_user.is_bot
-        ):
-            reply_text = (
-                message.reply_to_message.text
-                or message.reply_to_message.caption
-                or ""
-            ).strip()
-            if reply_text:
-                reply_author = message.reply_to_message.from_user.full_name or "Сосед"
-                full_prompt = (
-                    f"[Сообщение, на которое отвечают ({reply_author}): "
-                    f"{reply_text[:500]}]\n\n{prompt}"
-                )
+        if message.reply_to_message and message.reply_to_message.from_user:
+            if not message.reply_to_message.from_user.is_bot:
+                # Реплай на другого пользователя — добавляем цитату как контекст
+                reply_text = (
+                    message.reply_to_message.text
+                    or message.reply_to_message.caption
+                    or ""
+                ).strip()
+                if reply_text:
+                    reply_author = message.reply_to_message.from_user.full_name or "Сосед"
+                    full_prompt = (
+                        f"[Сообщение, на которое отвечают ({reply_author}): "
+                        f"{reply_text[:500]}]\n\n{prompt}"
+                    )
+            elif message.reply_to_message.from_user.id == me.id:
+                # Реплай на бота — добавляем предыдущий ответ бота как контекст продолжения
+                bot_prev_text = (
+                    message.reply_to_message.text
+                    or message.reply_to_message.caption
+                    or ""
+                ).strip()
+                if bot_prev_text:
+                    full_prompt = (
+                        f"[Продолжение диалога — предыдущий ответ бота: "
+                        f"{bot_prev_text[:400]}]\n\n{prompt}"
+                    )
 
         try:
             question_key = _normalize_cache_key(prompt)
 
             context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
+
+            # Подсказка по глубине диалога: если уже несколько обменов — просим предложить итог
+            dialog_depth = sum(1 for line in context[-10:] if line.startswith("assistant:"))
+            if dialog_depth >= 3:
+                full_prompt += "\n[Продолжительный диалог — после ответа предложи итог или спроси «Ещё что-то?»]"
+
             reply = await get_ai_client().assistant_reply(
                 full_prompt, context, chat_id=message.chat.id,
                 user_id=message.from_user.id,
@@ -1366,6 +1426,8 @@ async def mention_help(message: Message, bot: Bot) -> None:
                 await sent.edit_reply_markup(reply_markup=_feedback_keyboard(sent.message_id))
             except Exception:
                 pass
+            # Открываем окно активного диалога: пользователь может продолжить без упоминания
+            _open_active_dialog(message.chat.id, message.from_user.id, message.message_thread_id)
         except Exception:
             logger.exception("Ошибка при генерации AI-ответа на упоминание.")
             try:
