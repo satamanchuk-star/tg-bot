@@ -214,7 +214,7 @@ def _get_session_lock(chat_id: int, topic_id: int) -> asyncio.Lock:
 def _cancel_answer_grace(chat_id: int, topic_id: int) -> None:
     key = (chat_id, topic_id)
     task = _answer_grace_tasks.pop(key, None)
-    if task:
+    if task and task is not asyncio.current_task():
         task.cancel()
     _pending_answers.pop(key, None)
     _question_attempts.pop(key, None)
