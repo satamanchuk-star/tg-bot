@@ -48,7 +48,7 @@ class _PendingImprovementFilter(BaseFilter):
 
 @router.message(Command("лотерея", "lottery"))
 async def lottery_command(message: Message) -> None:
-    """Купить лотерей��ый билет на текущую неделю. Можно покупать ��есколько."""
+    """Купить лотерейные билеты на текущую неделю. Пример: /лотерея 5"""
     if message.from_user is None:
         return
 
@@ -56,7 +56,28 @@ async def lottery_command(message: Message) -> None:
     if (settings.topic_games is None
             or message.chat.id != settings.forum_chat_id
             or message.message_thread_id != settings.topic_games):
-        await message.reply("Билеты продаютс�� только в топике «Игры» 🎮")
+        await message.reply("Билеты продаются только в топике «Игры» 🎮")
+        return
+
+    # Разбираем количество билетов из аргумента команды
+    count = 1
+    text = (message.text or "").strip()
+    parts = text.split(maxsplit=1)
+    if len(parts) > 1:
+        arg = parts[1].strip()
+        if arg.isdigit() and int(arg) > 0:
+            count = int(arg)
+        else:
+            await message.reply(
+                f"Укажите целое положительное число билетов.\n"
+                f"Пример: /лотерея 3"
+            )
+            return
+
+    # Ограничение: не более 50 билетов за раз
+    MAX_PER_COMMAND = 50
+    if count > MAX_PER_COMMAND:
+        await message.reply(f"Максимум {MAX_PER_COMMAND} билетов за один раз.")
         return
 
     user_id = message.from_user.id
@@ -65,34 +86,61 @@ async def lottery_command(message: Message) -> None:
     async for session in get_session():
         pot, participants, tickets_count = await get_current_pot(session, settings.forum_chat_id)
 
-        result, extra = await buy_ticket(
-            session,
-            user_id=user_id,
-            chat_id=settings.forum_chat_id,
-            user_name=user_name,
-        )
-
-        if result is None:
-            balance = int(extra.split(":")[1]) if ":" in extra else 0
-            await message.reply(
-                f"Недостаточно монет.\n"
-                f"Цена билета: {TICKET_COST} монет, у вас: {balance}.\n"
-                f"Зарабатывайте в /21, викторине и рулетке."
+        bought = 0
+        last_balance = 0
+        for _ in range(count):
+            result, extra = await buy_ticket(
+                session,
+                user_id=user_id,
+                chat_id=settings.forum_chat_id,
+                user_name=user_name,
             )
-            return
+            if result is None:
+                # Монеты закончились — прерываем цикл
+                balance = int(extra.split(":")[1]) if ":" in extra else 0
+                if bought == 0:
+                    await message.reply(
+                        f"Недостаточно монет.\n"
+                        f"Цена билета: {TICKET_COST} монет, у вас: {balance}.\n"
+                        f"Зарабатывайте в /21, викторине и рулетке."
+                    )
+                    return
+                last_balance = balance
+                break
+            bought += 1
+            last_balance = extra  # new_balance при успехе
 
         await session.commit()
-        new_pot = pot + TICKET_COST
-        new_tickets = tickets_count + 1
+        new_pot = pot + TICKET_COST * bought
+        new_tickets = tickets_count + bought
+        is_new_participant = tickets_count == 0
+        new_participants = participants + (1 if is_new_participant else 0)
 
-    await message.reply(
-        f"Билет #{new_tickets} куплен!\n\n"
-        f"Неделя: {current_week_key()}\n"
-        f"Банк: {new_pot} монет | Участников: {participants + (1 if tickets_count == 0 else 0)}\n"
-        f"Ваш остаток: {extra} монет\n\n"
-        f"Покупайте ещё — каждый билет увеличивает ваш шанс выиграть!\n"
-        f"Розыгрыш — воскресенье в 11:00. Узнать банк: /банк"
-    )
+    if bought < count:
+        await message.reply(
+            f"Куплено {bought} из {count} билетов — монеты закончились.\n\n"
+            f"Неделя: {current_week_key()}\n"
+            f"Банк: {new_pot} монет | Участников: {new_participants}\n"
+            f"Ваш остаток: {last_balance} монет\n\n"
+            f"Розыгрыш — воскресенье в 11:00. Узнать банк: /банк"
+        )
+    elif bought == 1:
+        await message.reply(
+            f"Билет #{new_tickets} куплен!\n\n"
+            f"Неделя: {current_week_key()}\n"
+            f"Банк: {new_pot} монет | Участников: {new_participants}\n"
+            f"Ваш остаток: {last_balance} монет\n\n"
+            f"Покупайте ещё — каждый билет увеличивает ваш шанс выиграть!\n"
+            f"Розыгрыш — воскресенье в 11:00. Узнать банк: /банк"
+        )
+    else:
+        await message.reply(
+            f"Куплено {bought} билетов (#{tickets_count + 1}–#{new_tickets})!\n\n"
+            f"Неделя: {current_week_key()}\n"
+            f"Банк: {new_pot} монет | Участников: {new_participants}\n"
+            f"Ваш остаток: {last_balance} монет\n\n"
+            f"Розыгрыш — воскресенье в 11:00. Узнать банк: /банк"
+        )
 
 
 @router.message(Command("банк", "jackpot"))
