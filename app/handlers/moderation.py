@@ -27,6 +27,7 @@ from app.services.flood import FloodTracker
 from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import is_admin
 from app.utils.text import contains_forbidden_link
+from app.utils.time import ensure_aware
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -334,7 +335,7 @@ async def _check_flood(message: Message, bot: Bot) -> bool:
         if record is None:
             record = FloodRecord(user_id=message.from_user.id, chat_id=settings.forum_chat_id)
             session.add(record)
-        repeat_within_hour = record.last_flood_at and now - record.last_flood_at < timedelta(hours=1)
+        repeat_within_hour = record.last_flood_at and now - ensure_aware(record.last_flood_at) < timedelta(hours=1)
         record.last_flood_at = now
         await session.commit()
 

@@ -241,6 +241,8 @@ def _time_decay_factor(created_at: datetime | None) -> float:
     """Экспоненциальное затухание: 1.0 для свежих, ~0.5 через half_life дней."""
     if created_at is None:
         return 0.5
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
     age_days = (datetime.now(timezone.utc) - created_at).total_seconds() / 86400
     if age_days <= 0:
         return 1.0

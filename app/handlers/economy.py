@@ -258,7 +258,8 @@ async def improvements_list_command(message: Message) -> None:
         bar_filled = min(10, int(imp.coins_total / imp.threshold * 10))
         bar = "█" * bar_filled + "░" * (10 - bar_filled)
         pct = min(100, int(imp.coins_total / imp.threshold * 100))
-        days_left = max(0, (imp.expires_at - __import__("datetime").datetime.now(__import__("datetime").timezone.utc)).days)
+        _exp = imp.expires_at if imp.expires_at.tzinfo else imp.expires_at.replace(tzinfo=__import__("datetime").timezone.utc)
+        days_left = max(0, (_exp - __import__("datetime").datetime.now(__import__("datetime").timezone.utc)).days)
         lines.append(
             f"#{imp.id} [{bar}] {pct}%\n"
             f"«{imp.text[:120]}»\n"

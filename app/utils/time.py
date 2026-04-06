@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from app.config import settings
@@ -10,6 +10,13 @@ from app.config import settings
 
 def now_tz() -> datetime:
     return datetime.now(tz=ZoneInfo(settings.timezone))
+
+
+def ensure_aware(dt: datetime) -> datetime:
+    """Если datetime naive — считаем его UTC и добавляем tzinfo."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def is_game_time_allowed(start_hour: int, end_hour: int) -> bool:
