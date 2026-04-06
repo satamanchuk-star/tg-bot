@@ -686,12 +686,13 @@ class OpenRouterProvider:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def _chat_completion(self, messages: list[dict[str, str]], *, chat_id: int, temperature: float = 0.8) -> tuple[str, int]:
+    async def _chat_completion(self, messages: list[dict[str, str]], *, chat_id: int, temperature: float = 0.8, bypass_limit: bool = False) -> tuple[str, int]:
         if not settings.ai_key:
             raise RuntimeError("AI_KEY не задан")
-        allowed, reason = await _can_use_remote_ai(chat_id)
-        if not allowed:
-            raise RuntimeError(f"AI лимит: {reason or 'превышен'}")
+        if not bypass_limit:
+            allowed, reason = await _can_use_remote_ai(chat_id)
+            if not allowed:
+                raise RuntimeError(f"AI лимит: {reason or 'превышен'}")
 
         payload = {
             "temperature": temperature,
