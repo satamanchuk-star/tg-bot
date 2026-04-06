@@ -180,6 +180,28 @@ def clear_assistant_cache() -> int:
     return count
 
 
+def invalidate_cache_by_keywords(keywords: list[str]) -> int:
+    """Удаляет из кэша записи, ключи которых содержат хотя бы одно из ключевых слов.
+
+    Используется после поправки от администратора, чтобы устаревший ответ
+    не был возвращён из кэша при следующем похожем вопросе.
+    """
+    if not keywords:
+        return 0
+    normalized = {
+        re.sub(r"ё", "е", kw.lower())
+        for kw in keywords
+        if len(kw) >= 3
+    }
+    to_delete = [
+        k for k in list(_ASSISTANT_CACHE)
+        if any(kw in k for kw in normalized)
+    ]
+    for k in to_delete:
+        _ASSISTANT_CACHE.pop(k, None)
+    return len(to_delete)
+
+
 # ---------------------------------------------------------------------------
 # Topic-aware контекст: маппинг topic_id → подсказка для промпта
 # ---------------------------------------------------------------------------
