@@ -186,7 +186,7 @@ class Settings(BaseSettings):
         default="deepseek/deepseek-v3.2",
         validation_alias=AliasChoices("AI_MODEL", "ai_model"),
     )
-    ai_max_tokens: int = 400
+    ai_max_tokens: int = 700
     ai_timeout_seconds: int = 20
     ai_retries: int = 2
     ai_daily_request_limit: int = 2000
