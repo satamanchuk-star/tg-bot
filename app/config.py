@@ -183,10 +183,10 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("AI_KEY", "OPENROUTER_API_KEY", "AI_API_KEY"),
     )
     ai_model: str = Field(
-        default="deepseek/deepseek-v3.2",
+        default="anthropic/claude-haiku-4.5",
         validation_alias=AliasChoices("AI_MODEL", "ai_model"),
     )
-    ai_max_tokens: int = 700
+    ai_max_tokens: int = 800
     ai_timeout_seconds: int = 20
     ai_retries: int = 2
     ai_daily_request_limit: int = 2000
