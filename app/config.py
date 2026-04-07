@@ -213,17 +213,6 @@ class Settings(BaseSettings):
     ai_daily_greeting: bool = False
     # Трафик-отчёт в Попутчиках (7:00 утро / 19:00 вечер, пн-пт)
     ai_traffic_report: bool = False
-    # 2ГИС Routing API — реальное время в пути с учётом пробок
-    dgis_api_key: str | None = None
-    dgis_routing_url: str = "https://routing.api.2gis.com/routing/7.0.0/global"
-    # Координаты ключевых точек (lat, lon). Дефолты — ЖК «Живописный» (Бутово),
-    # м. Аннино, точка съезда МКАД у Варшавского шоссе.
-    dgis_point_home_lat: float = 55.5697
-    dgis_point_home_lon: float = 37.5419
-    dgis_point_annino_lat: float = 55.5814
-    dgis_point_annino_lon: float = 37.6037
-    dgis_point_mkad_lat: float = 55.5887
-    dgis_point_mkad_lon: float = 37.6037
     ai_summary_hour: int = 21
     ai_summary_minute: int = 0
     ai_summary_topic_id: int | None = None
