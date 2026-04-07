@@ -1336,9 +1336,16 @@ async def mention_help(message: Message, bot: Bot) -> None:
                     logger.warning("Не удалось обработать коррекцию.")
 
     if prompt:
-        context: list[str] = []
-        # Дедупликация: проверяем, не отвечали ли недавно на такой же запрос
-        if _is_duplicate_prompt(message.chat.id, prompt):
+        # Загружаем историю диалога заранее — нужна и для дедупа, и для дальнейшей логики.
+        context: list[str] = await _get_ai_context_persistent(
+            message.chat.id, message.from_user.id
+        )
+        # Считаем глубину активного диалога: если бот недавно уже отвечал этому юзеру —
+        # это продолжение беседы, а не спам одинаковыми вопросами.
+        dialog_depth = sum(1 for line in context[-10:] if line.startswith("assistant:"))
+
+        # Дедупликация: применяем её ТОЛЬКО если нет активного диалога.
+        if dialog_depth == 0 and _is_duplicate_prompt(message.chat.id, prompt):
             logger.info("OUT: MENTION_REPLY_SKIPPED_DUPLICATE prompt=%r", prompt[:80])
             await message.reply(
                 "Э, я же только что отвечал! Промотай чат вверх или переформулируй вопрос 😄"
@@ -1377,11 +1384,9 @@ async def mention_help(message: Message, bot: Bot) -> None:
         try:
             question_key = _normalize_cache_key(prompt)
 
-            context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
-
-            # Подсказка по глубине диалога: если уже несколько обменов — просим предложить итог
-            dialog_depth = sum(1 for line in context[-10:] if line.startswith("assistant:"))
-            if dialog_depth >= 3:
+            # Подсказка по глубине диалога: если уже много обменов — просим предложить итог.
+            # Порог 5 (а не 3) — чтобы бот не «закруглял» беседу слишком рано.
+            if dialog_depth >= 5:
                 full_prompt += "\n[Продолжительный диалог — после ответа предложи итог или спроси «Ещё что-то?»]"
 
             reply = await get_ai_client().assistant_reply(

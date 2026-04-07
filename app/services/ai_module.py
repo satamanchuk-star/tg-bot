@@ -323,7 +323,8 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "и предложи спросить в чате у соседей или обратиться в УК. "
     "ЛУЧШЕ сказать «не знаю» и пошутить, чем дать неверную информацию. "
     "Если есть FAQ — передай суть своими словами.\n\n"
-    "ФОРМАТ: русский язык, КРАТКО (до 400 символов, 1-3 предложения максимум). Не растекайся. "
+    "ФОРМАТ: русский язык. Обычно кратко (до 400 символов, 1-3 предложения), "
+    "но в разговорном режиме (болтовня, эмпатия, продолжение диалога) допустимо до 700 символов и 4-5 предложений. Не растекайся. "
     "На практический вопрос — пошаговый ответ с контактами и телефонами. "
     "Используй «•» для списков, нумерацию для шагов. "
     "Если в контексте есть ссылки — обязательно включи в ответ. "
@@ -368,6 +369,14 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "- Просьба о помощи («помогите с...», «нужен мастер») → конкретный совет или контакт\n"
     "Данные из базы знаний — СПРАВОЧНЫЙ МАТЕРИАЛ. Используй их ТОЛЬКО если они "
     "прямо отвечают на реальный запрос. Не превращай каждый ответ в справку из KB.\n\n"
+    "РЕЖИМ ОТВЕТА ПО НАМЕРЕНИЮ:\n"
+    "- Информационный/практический → краткость, до 3 предложений, факты, контакты.\n"
+    "- Социальный/общение/болтовня → 2-5 предложений, тёплый тон, можно шутку про ЖК. "
+    "ОБЯЗАТЕЛЬНО реагируй на эмоцию, а не своди к справке.\n"
+    "- Жалоба/вентинг → начни с короткой эмпатии (1 предложение), потом практический совет. "
+    "Не торопись «закруглить» беседу.\n"
+    "- Продолжение диалога → опирайся на предыдущие реплики, не повторяй уже сказанное, "
+    "развивай тему, поддерживай вовлечённость.\n\n"
     "КОНТЕКСТ ДИАЛОГА: внимательно читай предыдущие сообщения в истории. "
     "Если пользователь ссылается на что-то из предыдущего разговора — обязательно учитывай это. "
     "Если это цитата сообщения другого человека — учитывай контекст цитируемого сообщения. "
@@ -390,8 +399,9 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "НЕ перечисляй факты обратно пользователю. НЕ спрашивай о том, что уже знаешь.\n\n"
     "ДЛИНА В ДИАЛОГЕ:\n"
     "Короткий вопрос → 1-2 предложения. Сложный → до 5, не больше. "
+    "Разговорный/эмоциональный → 2-5 предложений, не обрывай мысль на полуслове. "
     "Список → максимум 4 пункта. "
-    "Если в контексте уже 3+ ответа подряд — предложи итог или спроси «Ещё что-то нужно?» один раз."
+    "Если в контексте уже 5+ ответов подряд — предложи итог или спроси «Ещё что-то нужно?» один раз."
 )
 
 _FALLBACK_VARIANTS = (
@@ -422,6 +432,36 @@ _FALLBACK_VARIANTS = (
     "Нет в моей базе, но это не значит, что никто не знает. Закинь вопрос соседям!",
     "Тут я пас, но не расстраивайся — коллективный разум чата тебя не подведёт!",
 )
+
+
+# Последний использованный style-hint per (chat_id, user_id) — чтобы не повторялся подряд.
+_LAST_STYLE_HINT_BY_USER: dict[tuple[int, int], str] = {}
+
+
+_SMALLTALK_PATTERNS = re.compile(
+    r"(?ix)"
+    r"\b(привет|здаров|здорово|здравствуй|хай|hello|hi|добрый\s+(день|вечер|утро)|"
+    r"как\s+дел[аои]|как\s+ты|как\s+жизнь|что\s+нового|"
+    r"что\s+думаешь|как\s+вам|как\s+тебе|"
+    r"расскажи|поговорим|поболтаем|"
+    r"спасибо|благодар|пасиб|"
+    r"опять|достал[оa]|задолбал|надоел|бесит|"
+    r"ох+|эх+|ну\s+вот|ужас|кошмар|"
+    r"шут[ия]|прикол|смешно|"
+    r"скучно|грустно|устал)\b"
+)
+
+
+def _looks_like_smalltalk(text: str) -> bool:
+    """Грубая эвристика: похоже ли сообщение на болтовню/эмоцию, а не на фактологический запрос."""
+    if not text:
+        return False
+    stripped = text.strip()
+    if len(stripped) <= 25 and ("?" in stripped or "!" in stripped or any(ch.isalpha() for ch in stripped)):
+        # Очень короткие сообщения чаще всего болтовня
+        if not re.search(r"\b(где|когда|сколько|кто|как\s+попасть|телефон|адрес|номер|маршрут)\b", stripped, re.I):
+            return True
+    return bool(_SMALLTALK_PATTERNS.search(stripped))
 
 
 _DAILY_SUMMARY_SYSTEM_PROMPT = (
@@ -917,7 +957,13 @@ class OpenRouterProvider:
             "\n[Стиль: начни с «Ох...» или «Эх...» — с сочувствием и теплотой]",
             "\n[Стиль: ответь с юмором, как стендап-комик про жизнь в ЖК]",
         )
-        system_prompt += random.choice(style_hints)
+        # Выбираем style-hint, исключая последний использованный для этого юзера, чтобы не повторялся подряд.
+        _last_hint_key = (chat_id or 0, user_id or 0)
+        _prev_hint = _LAST_STYLE_HINT_BY_USER.get(_last_hint_key)
+        _hint_pool = [h for h in style_hints if h != _prev_hint] or list(style_hints)
+        chosen_hint = random.choice(_hint_pool)
+        _LAST_STYLE_HINT_BY_USER[_last_hint_key] = chosen_hint
+        system_prompt += chosen_hint
 
         resident_context = build_resident_context(safe_prompt, context=context)
 
@@ -994,20 +1040,29 @@ class OpenRouterProvider:
                 "и предложи спросить в чате у соседей."
             )
 
-        # Формируем историю как отдельные user/assistant сообщения
+        # Формируем историю как отдельные user/assistant сообщения.
+        # Гибридная обрезка: последние 6 реплик — до 1500 символов, остальные — до 500.
         messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
-        for line in context[-30:]:
+        history_window = context[-30:]
+        recent_cutoff = max(0, len(history_window) - 6)
+        for idx, line in enumerate(history_window):
+            char_limit = 1500 if idx >= recent_cutoff else 500
             if line.startswith("user:"):
-                messages.append({"role": "user", "content": line[5:].strip()[:500]})
+                messages.append({"role": "user", "content": line[5:].strip()[:char_limit]})
             elif line.startswith("assistant:"):
-                messages.append({"role": "assistant", "content": line[10:].strip()[:500]})
+                messages.append({"role": "assistant", "content": line[10:].strip()[:char_limit]})
         messages.append({"role": "user", "content": safe_prompt})
 
-        # Снижаем температуру при наличии фактического контекста для точности
-        temperature = 0.6 if has_factual_context else 0.8
+        # Динамическая температура: ниже для фактов, выше для болтовни.
+        if has_factual_context:
+            temperature = 0.55
+        elif _looks_like_smalltalk(safe_prompt):
+            temperature = 0.9
+        else:
+            temperature = 0.8
         try:
             content, _ = await self._chat_completion(messages, chat_id=chat_id, temperature=temperature)
-            reply = content[:500]
+            reply = content[:900]
             return reply
         except RuntimeError as exc:
             self._record_runtime_error(exc)
