@@ -696,7 +696,17 @@ async def _sync_places_from_sheets() -> None:
 
 
 async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler(timezone=settings.timezone)
+    scheduler = AsyncIOScheduler(
+        timezone=settings.timezone,
+        job_defaults={
+            # Если процесс был перезапущен (Watchtower и т.п.) и проспал тик —
+            # всё равно выполнить задачу, если опоздание не больше часа.
+            "misfire_grace_time": 3600,
+            # Несколько накопившихся пропусков схлопнуть в один запуск.
+            "coalesce": True,
+            "max_instances": 1,
+        },
+    )
     scheduler.add_job(
         send_daily_summary,
         "cron",
@@ -838,7 +848,7 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
             minute=0,
             args=[bot, "evening"],
         )
-    # Утреннее приветствие с погодой и праздниками (8:00 каждый день)
+    # Утреннее приветствие с погодой и праздниками (8:00 каждый день, в General)
     if settings.ai_daily_greeting:
         scheduler.add_job(
             send_morning_greeting,
@@ -847,25 +857,45 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
             minute=0,
             args=[bot],
         )
-    # Утренний трафик в Попутчиках (7:00 пн-пт)
-    if settings.ai_traffic_report:
-        scheduler.add_job(
-            send_traffic_report,
-            "cron",
-            hour=7,
-            minute=0,
-            day_of_week="mon-fri",
-            args=[bot, "morning"],
+        logger.info("DAILY_GREETING: запланирован 08:00 ежедневно в General.")
+    else:
+        logger.info(
+            "DAILY_GREETING: отключён (AI_DAILY_GREETING=false). "
+            "Чтобы включить — поставьте AI_DAILY_GREETING=true."
         )
-    # Вечерний трафик в Попутчиках (19:00 пн-пт)
+
+    # Утренний и вечерний трафик в Попутчиках (7:00 / 19:00 пн-пт)
     if settings.ai_traffic_report:
-        scheduler.add_job(
-            send_traffic_report,
-            "cron",
-            hour=19,
-            minute=0,
-            day_of_week="mon-fri",
-            args=[bot, "evening"],
+        if settings.topic_rides is None:
+            logger.warning(
+                "TRAFFIC_REPORT: AI_TRAFFIC_REPORT=true, но TOPIC_RIDES не задан — "
+                "задачи не будут зарегистрированы."
+            )
+        else:
+            scheduler.add_job(
+                send_traffic_report,
+                "cron",
+                hour=7,
+                minute=0,
+                day_of_week="mon-fri",
+                args=[bot, "morning"],
+            )
+            scheduler.add_job(
+                send_traffic_report,
+                "cron",
+                hour=19,
+                minute=0,
+                day_of_week="mon-fri",
+                args=[bot, "evening"],
+            )
+            logger.info(
+                "TRAFFIC_REPORT: запланирован 07:00/19:00 пн-пт в topic_rides=%s",
+                settings.topic_rides,
+            )
+    else:
+        logger.info(
+            "TRAFFIC_REPORT: отключён (AI_TRAFFIC_REPORT=false). "
+            "Чтобы включить — поставьте AI_TRAFFIC_REPORT=true и TOPIC_RIDES=<id>."
         )
     scheduler.start()
     return scheduler

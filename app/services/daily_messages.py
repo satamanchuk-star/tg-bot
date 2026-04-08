@@ -300,7 +300,7 @@ async def send_traffic_report(bot: Bot, period: str) -> None:
     if not settings.ai_traffic_report:
         return
     if settings.topic_rides is None:
-        logger.info("Трафик-отчёт пропущен: topic_rides не задан.")
+        logger.warning("TRAFFIC_REPORT: пропущен — topic_rides не задан.")
         return
 
     try:
