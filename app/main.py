@@ -589,6 +589,11 @@ async def send_weekly_leaderboard(bot: Bot) -> None:
 
 
 async def heartbeat_job(bot: Bot) -> None:
+    from app.services.ai_module import (
+        _ASSISTANT_CACHE,
+        get_ai_client,
+        get_ai_usage_for_today,
+    )
     now = datetime.now(timezone.utc)
     async for session in get_session():
         state = await get_health_state(session)
@@ -605,10 +610,24 @@ async def heartbeat_job(bot: Bot) -> None:
                 now - last_notice > timedelta(days=1)
             )
             if should_notify:
+                # Формируем расширенный heartbeat-отчёт
+                try:
+                    ai_client = get_ai_client()
+                    provider = ai_client._provider
+                    cb_state = getattr(provider, "get_circuit_breaker_state", lambda: "n/a")()
+                    cache_size = len(_ASSISTANT_CACHE)
+                    req_used, tok_used = await get_ai_usage_for_today(settings.forum_chat_id)
+                    req_pct = int(req_used / max(settings.ai_daily_request_limit, 1) * 100)
+                    extra = (
+                        f"\nAI CB: {cb_state} | Кэш: {cache_size} записей"
+                        f"\nAI запросов: {req_used}/{settings.ai_daily_request_limit} ({req_pct}%)"
+                    )
+                except Exception:
+                    extra = ""
                 try:
                     await bot.send_message(
                         settings.admin_log_chat_id,
-                        "Бот был недоступен. Сейчас снова онлайн.",
+                        f"Бот был недоступен. Сейчас снова онлайн.{extra}",
                     )
                 except (TelegramNetworkError, TelegramAPIError) as exc:
                     logger.warning(
@@ -695,24 +714,48 @@ async def _sync_places_from_sheets() -> None:
         logger.exception("Ошибка импорта инфраструктуры из Google Sheets.")
 
 
+def _make_safe_job(name: str, fn: Callable, bot: Bot | None = None) -> Callable:
+    """Оборачивает scheduled-функцию в try/except.
+
+    Почему: необработанное исключение в job тихо гасится APScheduler-ом и
+    не приводит к алерту. Обёртка логирует ошибку и отправляет уведомление
+    в admin_log_chat_id если bot доступен.
+    """
+    async def _wrapper(*args: object, **kwargs: object) -> None:
+        try:
+            await fn(*args, **kwargs)
+        except Exception as exc:
+            logger.error("Scheduled job '%s' failed: %s", name, exc, exc_info=True)
+            _bot = bot or (args[0] if args and isinstance(args[0], Bot) else None)
+            if _bot is not None:
+                try:
+                    await _bot.send_message(
+                        settings.admin_log_chat_id,
+                        f"❌ Ошибка в задаче «{name}»: {exc}",
+                    )
+                except Exception:
+                    pass  # не блокируем если Telegram недоступен
+    return _wrapper
+
+
 async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
     scheduler.add_job(
-        send_daily_summary,
+        _make_safe_job("daily_summary", send_daily_summary, bot),
         "cron",
         hour=settings.ai_summary_hour,
         minute=settings.ai_summary_minute,
         args=[bot],
     )
     scheduler.add_job(
-        send_daily_response_report,
+        _make_safe_job("daily_response_report", send_daily_response_report, bot),
         "cron",
         hour=settings.ai_summary_hour,
         minute=(settings.ai_summary_minute + 2) % 60,
         args=[bot],
     )
     scheduler.add_job(
-        send_weekly_leaderboard,
+        _make_safe_job("weekly_leaderboard", send_weekly_leaderboard, bot),
         "cron",
         day_of_week="sat",
         hour=21,
@@ -720,45 +763,53 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         args=[bot],
     )
     scheduler.add_job(
-        heartbeat_job, "interval", minutes=HEARTBEAT_INTERVAL_MIN, args=[bot]
+        _make_safe_job("heartbeat", heartbeat_job, bot),
+        "interval",
+        minutes=HEARTBEAT_INTERVAL_MIN,
+        args=[bot],
     )
-    scheduler.add_job(check_game_timeouts, "interval", minutes=1, args=[bot])
     scheduler.add_job(
-        cleanup_blackjack_commands,
+        _make_safe_job("game_timeouts", check_game_timeouts, bot),
+        "interval",
+        minutes=1,
+        args=[bot],
+    )
+    scheduler.add_job(
+        _make_safe_job("cleanup_blackjack", cleanup_blackjack_commands, bot),
         "cron",
         hour=0,
         minute=1,
         args=[bot],
     )
     scheduler.add_job(
-        cleanup_database,
+        _make_safe_job("cleanup_database", cleanup_database),
         "cron",
         hour=4,
         minute=20,
     )
     scheduler.add_job(
-        _sync_places_from_sheets,
+        _make_safe_job("sync_places", _sync_places_from_sheets),
         "cron",
         hour="0,6,12,18",
         minute=30,
     )
     # Викторина: анонс → правила → автостарт
     scheduler.add_job(
-        quiz.announce_quiz_soon,
+        _make_safe_job("quiz_announce", quiz.announce_quiz_soon, bot),
         "cron",
         hour=19,
         minute=55,
         args=[bot],
     )
     scheduler.add_job(
-        quiz.announce_quiz_rules,
+        _make_safe_job("quiz_rules", quiz.announce_quiz_rules, bot),
         "cron",
         hour=19,
         minute=59,
         args=[bot],
     )
     scheduler.add_job(
-        quiz.start_quiz_auto,
+        _make_safe_job("quiz_auto_start", quiz.start_quiz_auto, bot),
         "cron",
         hour=20,
         minute=0,
@@ -766,21 +817,21 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     )
     # Рулетка: анонс → правила → запуск первого раунда
     scheduler.add_job(
-        roulette.announce_roulette_soon,
+        _make_safe_job("roulette_announce", roulette.announce_roulette_soon, bot),
         "cron",
         hour=20,
         minute=55,
         args=[bot],
     )
     scheduler.add_job(
-        roulette.announce_roulette_rules,
+        _make_safe_job("roulette_rules", roulette.announce_roulette_rules, bot),
         "cron",
         hour=20,
         minute=59,
         args=[bot],
     )
     scheduler.add_job(
-        roulette.start_roulette_round,
+        _make_safe_job("roulette_start", roulette.start_roulette_round, bot),
         "cron",
         hour=21,
         minute=0,
@@ -788,7 +839,7 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     )
     # Блэкджек: правила за минуту до старта
     scheduler.add_job(
-        games.announce_blackjack_rules,
+        _make_safe_job("blackjack_rules", games.announce_blackjack_rules, bot),
         "cron",
         hour=21,
         minute=59,
@@ -796,7 +847,7 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     )
     # Лотерея: розыгрыш воскресенье в 11:00
     scheduler.add_job(
-        draw_weekly_lottery,
+        _make_safe_job("lottery_draw", draw_weekly_lottery, bot),
         "cron",
         day_of_week="sun",
         hour=11,
@@ -805,7 +856,7 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     )
     # Лотерея: анонс через день в 11:00 (пн, ср, пт, вс)
     scheduler.add_job(
-        announce_lottery,
+        _make_safe_job("lottery_announce", announce_lottery, bot),
         "cron",
         day_of_week="mon,wed,fri",
         hour=11,
@@ -814,7 +865,7 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     )
     # Еженедельное обновление по понедельникам
     scheduler.add_job(
-        send_weekly_update,
+        _make_safe_job("weekly_update", send_weekly_update, bot),
         "cron",
         day_of_week="mon",
         hour=10,
@@ -824,7 +875,7 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     # Плановые приветствия жителей
     if settings.ai_morning_greeting:
         scheduler.add_job(
-            send_scheduled_greeting,
+            _make_safe_job("morning_greeting", send_scheduled_greeting, bot),
             "cron",
             hour=9,
             minute=0,
@@ -832,7 +883,7 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         )
     if settings.ai_evening_greeting:
         scheduler.add_job(
-            send_scheduled_greeting,
+            _make_safe_job("evening_greeting", send_scheduled_greeting, bot),
             "cron",
             hour=20,
             minute=0,
@@ -841,7 +892,7 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     # Утреннее приветствие с погодой и праздниками (8:00 каждый день)
     if settings.ai_daily_greeting:
         scheduler.add_job(
-            send_morning_greeting,
+            _make_safe_job("daily_greeting", send_morning_greeting, bot),
             "cron",
             hour=8,
             minute=0,
@@ -850,7 +901,7 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     # Утренний трафик в Попутчиках (7:00 пн-пт)
     if settings.ai_traffic_report:
         scheduler.add_job(
-            send_traffic_report,
+            _make_safe_job("morning_traffic", send_traffic_report, bot),
             "cron",
             hour=7,
             minute=0,
@@ -860,7 +911,7 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     # Вечерний трафик в Попутчиках (19:00 пн-пт)
     if settings.ai_traffic_report:
         scheduler.add_job(
-            send_traffic_report,
+            _make_safe_job("evening_traffic", send_traffic_report, bot),
             "cron",
             hour=19,
             minute=0,

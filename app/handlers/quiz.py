@@ -34,6 +34,7 @@ from app.services.quiz import (
     get_current_question,
     get_questions_left,
     get_quiz_leaderboard,
+    get_quiz_leaderboard_monthly,
     get_random_question,
     is_quiz_finished,
     set_current_question,
@@ -410,6 +411,39 @@ async def show_quiz_leaderboard(message: Message) -> None:
         name = stat.display_name or str(stat.user_id)
         lines.append(f"{i}. @{name} — {stat.total_points} очков")
     await message.reply("\n".join(lines))
+
+
+@router.message(Command("топ", "лидеры"))
+async def show_quiz_top(message: Message, bot: Bot) -> None:
+    """Топ-10 участников викторины по очкам — отправляется в топик Игры."""
+    if settings.topic_games is None:
+        await message.reply("Топик игр не настроен.")
+        return
+
+    async for session in get_session():
+        top_players = await get_quiz_leaderboard_monthly(session, settings.forum_chat_id, limit=10)
+        break
+
+    if not top_players:
+        await bot.send_message(
+            settings.forum_chat_id,
+            "Рейтинг викторины пуст. Пора играть! 🏆",
+            message_thread_id=settings.topic_games,
+        )
+        return
+
+    lines = ["🏆 Таблица лидеров викторины (топ-10):"]
+    medals = ["🥇", "🥈", "🥉"]
+    for i, stat in enumerate(top_players, 1):
+        name = stat.display_name or str(stat.user_id)
+        medal = medals[i - 1] if i <= 3 else f"{i}."
+        lines.append(f"{medal} @{name} — {stat.total_points} очков")
+
+    await bot.send_message(
+        settings.forum_chat_id,
+        "\n".join(lines),
+        message_thread_id=settings.topic_games,
+    )
 
 
 @router.message(

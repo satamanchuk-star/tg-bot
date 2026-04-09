@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -278,18 +279,32 @@ _YANDEX_MAPS_TRAFFIC_URL = (
 )
 
 
+_MORNING_TRAFFIC_TEMPLATES = (
+    "🚗 Доброе утро, попутчики! {weekday}. {score} Удачной дороги!",
+    "🌅 Доброе утро! {weekday}, выезжаем. {score} Счастливого пути, соседи!",
+    "🚗 Утро, попутчики! {weekday}. {score} Стартуем в добрый час.",
+    "☀️ С добрым утром! {weekday}. {score} Берегите нервы за рулём.",
+    "🚗 Попутчики, доброе утро! {weekday}. {score} Удачи на дороге!",
+)
+
+_EVENING_TRAFFIC_TEMPLATES = (
+    "🚗 Добрый вечер, попутчики! {weekday}. {score} Счастливой дороги домой!",
+    "🏠 Добрый вечер! {weekday}. {score} Скоро дома — держитесь!",
+    "🚗 Вечер, попутчики! {weekday}. {score} Терпения на дорогах!",
+    "🌆 Добрый вечер! {weekday}. {score} Дорога домой зовёт!",
+    "🚗 Попутчики, добрый вечер! {weekday}. {score} Удачи в пути!",
+)
+
+
 def _fallback_traffic_text(period: str, weekday: str, yandex_score: str) -> str:
-    """Шаблонный текст, если LLM недоступен."""
-    header = (
-        "🚗 Доброе утро, попутчики!"
-        if period == "morning"
-        else "🚗 Добрый вечер, попутчики!"
+    """Шаблонный текст, если LLM недоступен — выбирается случайный вариант."""
+    score_line = yandex_score or "Балл пробок Москвы: данные недоступны."
+    templates = _MORNING_TRAFFIC_TEMPLATES if period == "morning" else _EVENING_TRAFFIC_TEMPLATES
+    body = random.choice(templates).format(
+        weekday=weekday.capitalize(),
+        score=score_line,
     )
-    score_line = yandex_score or "Балл пробок Москвы: данные недоступны"
-    return (
-        f"{header}\n{weekday.capitalize()}. {score_line}.\n\n"
-        f"🗺️ Яндекс.Карты: {_YANDEX_MAPS_TRAFFIC_URL}"
-    )
+    return f"{body}\n\n🗺️ Яндекс.Карты: {_YANDEX_MAPS_TRAFFIC_URL}"
 
 
 async def send_traffic_report(bot: Bot, period: str) -> None:
