@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import time
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, F, Router
@@ -51,9 +52,24 @@ def is_training_mode() -> bool:
     return settings.moderation_training_mode
 
 
-# Множество message_id, уже прошедших модерацию (предотвращает двойной вызов)
-_MODERATED_MSG_IDS: set[int] = set()
-_MODERATED_MSG_IDS_MAX = 500
+# Dict message_id → timestamp для идемпотентности модерации.
+# TTL 120 сек: исключает коллизии при ротации ID после переполнения set,
+# а также корректно сбрасывает записи при долгой работе бота.
+_MODERATED_MSG_IDS: dict[int, float] = {}
+_MODERATED_MSG_IDS_TTL = 120.0  # секунд
+
+
+def _is_already_moderated(msg_id: int) -> bool:
+    """Проверяет и регистрирует message_id. Возвращает True если уже модерировалось."""
+    now = time.monotonic()
+    # TTL-очистка устаревших записей
+    expired = [k for k, v in _MODERATED_MSG_IDS.items() if now - v > _MODERATED_MSG_IDS_TTL]
+    for k in expired:
+        _MODERATED_MSG_IDS.pop(k, None)
+    if msg_id in _MODERATED_MSG_IDS:
+        return True
+    _MODERATED_MSG_IDS[msg_id] = now
+    return False
 
 # Вариативные мягкие предупреждения (L1)
 _SOFT_WARNINGS = (
@@ -103,17 +119,19 @@ async def _store_message_log(message: Message, severity: int, sentiment: str | N
         await session.commit()
 
 
-async def _get_topic_context(chat_id: int, topic_id: int | None, limit: int = 10) -> list[str]:
+async def _get_topic_context(chat_id: int, topic_id: int | None, limit: int = 15) -> list[str]:
     """Возвращает последние сообщения из того же топика для контекстной модерации.
 
-    Формат: «[user_NNNN]: текст» — чтобы AI видел, кто что написал.
+    Формат: «[user_NNNN sev=N]: текст» — чтобы AI видел, кто что написал
+    и какой severity был у предыдущих нарушений (сигнал рецидива).
+    Лимит увеличен до 15: даёт лучший контекст без заметной нагрузки на SQLite.
     """
     if topic_id is None:
         return []
     try:
         async for session in get_session():
             result = await session.execute(
-                select(MessageLog.user_id, MessageLog.text)
+                select(MessageLog.user_id, MessageLog.text, MessageLog.severity)
                 .where(
                     and_(
                         MessageLog.chat_id == chat_id,
@@ -125,7 +143,13 @@ async def _get_topic_context(chat_id: int, topic_id: int | None, limit: int = 10
                 .limit(limit)
             )
             rows = result.all()
-            return [f"[user_{uid}]: {txt}" for uid, txt in reversed(rows)]
+            lines = []
+            for uid, txt, sev in reversed(rows):
+                if sev and sev > 0:
+                    lines.append(f"[user_{uid} sev={sev}]: {txt}")
+                else:
+                    lines.append(f"[user_{uid}]: {txt}")
+            return lines
     except Exception:
         logger.warning("Не удалось загрузить контекст топика для модерации")
         return []
@@ -178,14 +202,8 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
         return False
 
     # Предотвращаем двойную модерацию одного сообщения (mention_help + moderate_message)
-    msg_id = message.message_id
-    if msg_id in _MODERATED_MSG_IDS:
+    if _is_already_moderated(message.message_id):
         return False
-    if len(_MODERATED_MSG_IDS) > _MODERATED_MSG_IDS_MAX:
-        to_remove = sorted(_MODERATED_MSG_IDS)[:_MODERATED_MSG_IDS_MAX // 2]
-        for mid in to_remove:
-            _MODERATED_MSG_IDS.discard(mid)
-    _MODERATED_MSG_IDS.add(msg_id)
 
     if await is_admin(bot, settings.forum_chat_id, message.from_user.id):
         return False
