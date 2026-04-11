@@ -11,7 +11,10 @@ from pydantic import AliasChoices, Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-SERVER_COMPOSE_PATH = Path("/opt/alexbot/docker-compose.yaml")
+SERVER_COMPOSE_PATHS: tuple[Path, ...] = (
+    Path("/opt/alexbot/docker-compose.yaml"),
+    Path("/opt/alexbot/docker-compose.yml"),
+)
 REQUIRED_ENV_FIELDS: tuple[str, ...] = (
     "BOT_TOKEN",
     "FORUM_CHAT_ID",
@@ -34,7 +37,11 @@ def _resolve_compose_value(raw_value: str) -> str:
 
 def _read_env_file_values(compose_path: Path, env_file_item: str) -> dict[str, str]:
     """Читает переменные из env_file, если файл существует."""
-    env_file_path = (compose_path.parent / env_file_item).resolve()
+    env_file_candidate = Path(env_file_item).expanduser()
+    if env_file_candidate.is_absolute():
+        env_file_path = env_file_candidate.resolve()
+    else:
+        env_file_path = (compose_path.parent / env_file_candidate).resolve()
     if not env_file_path.exists():
         return {}
 
@@ -47,8 +54,8 @@ def _read_env_file_values(compose_path: Path, env_file_item: str) -> dict[str, s
     return result
 
 
-def _extract_compose_bot_env(compose_path: Path) -> dict[str, str]:
-    """Извлекает environment/env_file для сервиса bot из docker-compose.yaml."""
+def _extract_compose_service_env(compose_path: Path, service_name: str) -> dict[str, str]:
+    """Извлекает environment/env_file для указанного сервиса из docker-compose."""
     if not compose_path.exists():
         return {}
 
@@ -67,13 +74,13 @@ def _extract_compose_bot_env(compose_path: Path) -> dict[str, str]:
         if not stripped or stripped.startswith("#"):
             continue
 
-        if stripped == "bot:" and indent == 2:
+        if stripped == f"{service_name}:" and indent == 2:
             in_bot = True
             in_environment = False
             in_env_file = False
             continue
 
-        if in_bot and indent <= 2 and stripped.endswith(":") and stripped != "bot:":
+        if in_bot and indent <= 2 and stripped.endswith(":") and stripped != f"{service_name}:":
             in_bot = False
             in_environment = False
             in_env_file = False
@@ -126,15 +133,66 @@ def _extract_compose_bot_env(compose_path: Path) -> dict[str, str]:
                 continue
 
         if in_env_file and indent == 6 and stripped.startswith("-"):
-            env_file_item = stripped.removeprefix("-").strip().strip("'\"")
-            result.update(_read_env_file_values(compose_path, env_file_item))
+            env_file_item = stripped.removeprefix("-").strip()
+            if env_file_item.startswith("path:"):
+                env_file_path = env_file_item.partition(":")[2].strip().strip("'\"")
+                if env_file_path:
+                    result.update(_read_env_file_values(compose_path, env_file_path))
+                continue
+            env_file_path = env_file_item.strip("'\"")
+            if env_file_path:
+                result.update(_read_env_file_values(compose_path, env_file_path))
 
     return result
 
 
+def _extract_compose_bot_env(compose_path: Path) -> dict[str, str]:
+    """Извлекает env для целевого сервиса бота (bot/alexbot или первого валидного)."""
+    if not compose_path.exists():
+        return {}
+
+    lines = compose_path.read_text(encoding="utf-8").splitlines()
+    services: list[str] = []
+    in_services = False
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip(" "))
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped == "services:" and indent == 0:
+            in_services = True
+            continue
+        if in_services and indent == 0 and stripped.endswith(":") and stripped != "services:":
+            in_services = False
+        if in_services and indent == 2 and stripped.endswith(":"):
+            services.append(stripped[:-1].strip())
+
+    preferred = ["bot", "alexbot"]
+    checked: list[str] = []
+    best_match: dict[str, str] = {}
+
+    for service in [*preferred, *services]:
+        if service in checked:
+            continue
+        checked.append(service)
+        env = _extract_compose_service_env(compose_path, service)
+        if not env:
+            continue
+        if all(env.get(field) for field in REQUIRED_ENV_FIELDS):
+            return env
+        if len(env) > len(best_match):
+            best_match = env
+    return best_match
+
+
 def _inject_env_from_server_compose() -> None:
     """Подхватывает env из /opt/alexbot/docker-compose.yaml как источник истины."""
-    compose_env = _extract_compose_bot_env(SERVER_COMPOSE_PATH)
+    compose_env: dict[str, str] = {}
+    for compose_path in SERVER_COMPOSE_PATHS:
+        compose_env = _extract_compose_bot_env(compose_path)
+        if compose_env:
+            break
     for key, value in compose_env.items():
         if not value:
             continue
