@@ -332,19 +332,8 @@ async def get_quiz_leaderboard_monthly(
     chat_id: int,
     limit: int = 10,
 ) -> list[QuizUserStat]:
-    """Возвращает топ-10 по очкам за текущий месяц.
-
-    Почему отдельная функция: QuizUserStat накапливает total_points за всё время,
-    но для ежемесячной таблицы лидеров используем те же данные — сброс очков
-    не предусмотрен, поэтому возвращаем топ по накопленным очкам.
-    """
-    result = await session.execute(
-        select(QuizUserStat)
-        .where(QuizUserStat.chat_id == chat_id)
-        .order_by(QuizUserStat.total_points.desc())
-        .limit(limit)
-    )
-    return list(result.scalars().all())
+    """Топ участников по накопленным очкам (делегирует в get_quiz_leaderboard)."""
+    return await get_quiz_leaderboard(session, chat_id, limit=limit)
 
 
 async def is_quiz_finished(quiz_session: QuizSession) -> bool:

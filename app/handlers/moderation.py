@@ -53,21 +53,27 @@ def is_training_mode() -> bool:
 
 
 # Dict message_id → timestamp для идемпотентности модерации.
-# TTL 120 сек: исключает коллизии при ротации ID после переполнения set,
-# а также корректно сбрасывает записи при долгой работе бота.
+# TTL 120 сек + лимит 1000 записей — защита от утечки памяти.
 _MODERATED_MSG_IDS: dict[int, float] = {}
 _MODERATED_MSG_IDS_TTL = 120.0  # секунд
+_MODERATED_MSG_IDS_MAX = 1000
 
 
 def _is_already_moderated(msg_id: int) -> bool:
     """Проверяет и регистрирует message_id. Возвращает True если уже модерировалось."""
     now = time.monotonic()
-    # TTL-очистка устаревших записей
-    expired = [k for k, v in _MODERATED_MSG_IDS.items() if now - v > _MODERATED_MSG_IDS_TTL]
-    for k in expired:
-        _MODERATED_MSG_IDS.pop(k, None)
     if msg_id in _MODERATED_MSG_IDS:
         return True
+    # TTL-очистка раз в 100 вызовов или при переполнении
+    if len(_MODERATED_MSG_IDS) >= _MODERATED_MSG_IDS_MAX:
+        expired = [k for k, v in _MODERATED_MSG_IDS.items() if now - v > _MODERATED_MSG_IDS_TTL]
+        for k in expired:
+            del _MODERATED_MSG_IDS[k]
+        # Если всё ещё переполнено — вытесняем самые старые
+        if len(_MODERATED_MSG_IDS) >= _MODERATED_MSG_IDS_MAX:
+            oldest = sorted(_MODERATED_MSG_IDS, key=_MODERATED_MSG_IDS.__getitem__)
+            for k in oldest[: _MODERATED_MSG_IDS_MAX // 2]:
+                del _MODERATED_MSG_IDS[k]
     _MODERATED_MSG_IDS[msg_id] = now
     return False
 
