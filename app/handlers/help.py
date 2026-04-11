@@ -50,8 +50,20 @@ async def _get_bot_profile(bot: Bot) -> User:
 
     global _BOT_PROFILE_CACHE
     if _BOT_PROFILE_CACHE is None:
-        _BOT_PROFILE_CACHE = await bot.get_me()
+        # Если aiogram уже закэшировал профиль через startup-probe — переиспользуем.
+        bot_me = getattr(bot, "_me", None)
+        if bot_me is not None:
+            _BOT_PROFILE_CACHE = bot_me
+        else:
+            _BOT_PROFILE_CACHE = await bot.get_me()
     return _BOT_PROFILE_CACHE
+
+
+def prewarm_bot_profile(bot_user: User) -> None:
+    """Предзаполняет кэш профиля бота из on_startup, чтобы первое упоминание
+    не ждало лишний round-trip к Telegram API."""
+    global _BOT_PROFILE_CACHE
+    _BOT_PROFILE_CACHE = bot_user
 
 
 class HelpRoutingActiveFilter(BaseFilter):
