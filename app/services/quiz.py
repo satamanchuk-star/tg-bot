@@ -9,7 +9,7 @@ import random
 import re
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import QuizQuestion, QuizSession, QuizUsedQuestion, QuizUserStat, UserStat
@@ -55,8 +55,8 @@ async def get_available_questions_count(session: AsyncSession) -> int:
 def _is_session_stale(quiz_session: QuizSession) -> bool:
     """Проверяет, зависла ли сессия (например, после перезапуска бота)."""
     if quiz_session.question_started_at is None:
-        # Сессия без активного вопроса — зависла между вопросами
-        return True
+        # Новая сессия ещё не стартовала с первым вопросом: это не зависание.
+        return quiz_session.question_number > 0
     now = datetime.now(timezone.utc)
     started = quiz_session.question_started_at
     if started.tzinfo is None:
@@ -271,10 +271,6 @@ async def award_correct_answer_coins(
 async def end_quiz_session(session: AsyncSession, quiz_session: QuizSession) -> None:
     quiz_session.is_active = False
     quiz_session.current_question_id = None
-
-    used_ids = get_used_question_ids(quiz_session)
-    if used_ids:
-        await session.execute(delete(QuizQuestion).where(QuizQuestion.id.in_(used_ids)))
 
 
 async def get_quiz_leaderboard(session: AsyncSession, chat_id: int, limit: int = 5) -> list[QuizUserStat]:
