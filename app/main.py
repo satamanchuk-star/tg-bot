@@ -113,10 +113,18 @@ class LoggingMiddleware(BaseMiddleware):
 
 
 MAX_RETRIES_ON_FLOOD = 3
+MAX_RETRIES_ON_NETWORK = 3
+NETWORK_RETRY_BACKOFF = (1.0, 2.0, 4.0)
 
 
 class RetryOnFloodSession(AiohttpSession):
-    """Автоматически повторяет запросы при TelegramRetryAfter (flood control)."""
+    """Автоматически повторяет запросы при TelegramRetryAfter и сетевых таймаутах.
+
+    Сетевые сбои (TelegramNetworkError) происходят, когда HTTP-клиент Telegram
+    не успевает получить ответ: таймаут запроса, обрыв соединения, временная
+    недоступность api.telegram.org. Без ретраев любой такой сбой прерывает
+    обработку апдейта и превращается в шумное уведомление в лог-чате.
+    """
 
     async def make_request(
         self,
@@ -124,17 +132,36 @@ class RetryOnFloodSession(AiohttpSession):
         method: TelegramMethod[TelegramType],
         timeout: int | None = None,
     ) -> TelegramType:
-        for attempt in range(1, MAX_RETRIES_ON_FLOOD + 1):
+        flood_attempts = 0
+        network_attempts = 0
+        while True:
             try:
                 return await super().make_request(bot, method, timeout=timeout)
             except TelegramRetryAfter as e:
-                if attempt == MAX_RETRIES_ON_FLOOD:
+                flood_attempts += 1
+                if flood_attempts >= MAX_RETRIES_ON_FLOOD:
                     raise
                 logger.warning(
                     "Flood control, жду %s сек (попытка %d/%d)",
-                    e.retry_after, attempt, MAX_RETRIES_ON_FLOOD,
+                    e.retry_after, flood_attempts, MAX_RETRIES_ON_FLOOD,
                 )
                 await asyncio.sleep(e.retry_after)
+            except TelegramNetworkError as e:
+                network_attempts += 1
+                if network_attempts >= MAX_RETRIES_ON_NETWORK:
+                    logger.warning(
+                        "Сетевой сбой Telegram после %d попыток: %s",
+                        network_attempts, e,
+                    )
+                    raise
+                delay = NETWORK_RETRY_BACKOFF[
+                    min(network_attempts - 1, len(NETWORK_RETRY_BACKOFF) - 1)
+                ]
+                logger.warning(
+                    "Сетевой сбой Telegram (%s), ретрай через %.1f сек (попытка %d/%d)",
+                    e, delay, network_attempts, MAX_RETRIES_ON_NETWORK,
+                )
+                await asyncio.sleep(delay)
 
 
 OFFLINE_THRESHOLD_MIN = 30
@@ -882,11 +909,17 @@ async def on_startup(bot: Bot) -> None:
     for attempt in range(1, 4):
         try:
             _t0 = _time.monotonic()
-            await bot.get_me()  # заполняет bot.me с информацией о боте
+            bot_me = await bot.get_me()  # заполняет bot.me с информацией о боте
             _tg_latency_ms = int((_time.monotonic() - _t0) * 1000)
             telegram_available = True
             tg_probe_note = f"Telegram API: ✅ доступен ({_tg_latency_ms} ms)"
             logger.info("Telegram API probe: ok=True latency_ms=%d", _tg_latency_ms)
+            # Прогреваем кэш профиля в help-роутере, чтобы первое упоминание
+            # не тратило лишний HTTP-round-trip на bot.get_me().
+            try:
+                help_handler.prewarm_bot_profile(bot_me)
+            except Exception:  # noqa: BLE001
+                logger.warning("Не удалось прогреть кэш профиля бота в help-роутере.")
             break
         except TelegramNetworkError:
             if attempt >= 3:
@@ -1045,14 +1078,47 @@ async def on_startup(bot: Bot) -> None:
         await bot.send_message(settings.admin_log_chat_id, "\n".join(lines))
 
 
+_ERROR_NOTIFY_WINDOW_SECONDS = 300  # окно дедупликации (5 минут)
+_ERROR_NOTIFY_MAX = 100
+_error_notify_last: dict[str, float] = {}
+
+
+def _should_notify_error(signature: str) -> bool:
+    """Возвращает True, если такую ошибку ещё не показывали в окне дедупликации."""
+    import time as _t
+    now = _t.monotonic()
+    # Очищаем устаревшие записи, чтобы dict не рос бесконечно
+    if len(_error_notify_last) >= _ERROR_NOTIFY_MAX:
+        stale = [
+            k for k, v in _error_notify_last.items()
+            if now - v > _ERROR_NOTIFY_WINDOW_SECONDS
+        ]
+        for key in stale:
+            _error_notify_last.pop(key, None)
+    last = _error_notify_last.get(signature)
+    if last is not None and now - last < _ERROR_NOTIFY_WINDOW_SECONDS:
+        return False
+    _error_notify_last[signature] = now
+    return True
+
+
 async def error_handler(event: ErrorEvent) -> bool:
     """Глобальный обработчик ошибок — логирует и отправляет в админ-чат."""
-    logger.exception(f"Ошибка: {event.exception}")
+    exc = event.exception
+    logger.exception(f"Ошибка: {exc}")
+
+    # Сетевые сбои Telegram обычно транзиентные (таймаут, обрыв соединения).
+    # Мы их уже ретраем в RetryOnFloodSession, поэтому в админ-чат отправляем
+    # только при сериях повторных сбоев — один раз на окно дедупликации.
+    is_transient_network = isinstance(exc, TelegramNetworkError)
+    signature = f"{type(exc).__name__}:{str(exc)[:120]}"
+    if is_transient_network and not _should_notify_error(signature):
+        return True
 
     error_text = (
         f"🔴 Ошибка в боте\n"
-        f"Тип: {type(event.exception).__name__}\n"
-        f"Сообщение: {event.exception}"
+        f"Тип: {type(exc).__name__}\n"
+        f"Сообщение: {exc}"
     )
 
     if event.update and event.update.message:
@@ -1060,7 +1126,10 @@ async def error_handler(event: ErrorEvent) -> bool:
         error_text += "\n\nКонтекст:\n"
         error_text += f"Chat: {msg.chat.id}\n"
         error_text += f"User: {msg.from_user.id if msg.from_user else 'N/A'}\n"
-        error_text += f"Text: {(msg.text or '')[:100]}"
+        preview = (msg.text or msg.caption or "").strip()
+        if not preview and msg.content_type:
+            preview = f"[{msg.content_type}]"
+        error_text += f"Text: {preview[:100]}"
 
     try:
         await event.update.bot.send_message(settings.admin_log_chat_id, error_text)
