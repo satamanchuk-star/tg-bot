@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import logging
@@ -9,10 +10,11 @@ import random
 import re
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import QuizQuestion, QuizSession, QuizUsedQuestion, QuizUserStat, UserStat
+from app.utils.time import ensure_aware
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +57,9 @@ async def get_available_questions_count(session: AsyncSession) -> int:
 def _is_session_stale(quiz_session: QuizSession) -> bool:
     """Проверяет, зависла ли сессия (например, после перезапуска бота)."""
     if quiz_session.question_started_at is None:
-        # Сессия без активного вопроса — зависла между вопросами
-        return True
+        return bool(quiz_session.question_number)
     now = datetime.now(timezone.utc)
-    started = quiz_session.question_started_at
-    if started.tzinfo is None:
-        started = started.replace(tzinfo=timezone.utc)
+    started = ensure_aware(quiz_session.question_started_at)
     elapsed = (now - started).total_seconds()
     return elapsed > QUIZ_STALE_SESSION_SEC
 
@@ -272,9 +271,30 @@ async def end_quiz_session(session: AsyncSession, quiz_session: QuizSession) -> 
     quiz_session.is_active = False
     quiz_session.current_question_id = None
 
-    used_ids = get_used_question_ids(quiz_session)
-    if used_ids:
-        await session.execute(delete(QuizQuestion).where(QuizQuestion.id.in_(used_ids)))
+
+_QUIZ_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
+
+
+def _get_quiz_lock(chat_id: int, topic_id: int) -> asyncio.Lock:
+    key = (chat_id, topic_id)
+    if key not in _QUIZ_LOCKS:
+        _QUIZ_LOCKS[key] = asyncio.Lock()
+    return _QUIZ_LOCKS[key]
+
+
+async def safe_start_quiz(
+    session: AsyncSession,
+    chat_id: int,
+    topic_id: int,
+) -> tuple[QuizSession | None, str]:
+    """Атомарно проверяет и запускает викторину в пределах одного event-loop."""
+    async with _get_quiz_lock(chat_id, topic_id):
+        ok, reason = await can_start_quiz(session, chat_id, topic_id)
+        if not ok:
+            return None, reason
+        quiz_session = await start_quiz_session(session, chat_id, topic_id)
+        await session.commit()
+        return quiz_session, ""
 
 
 async def get_quiz_leaderboard(session: AsyncSession, chat_id: int, limit: int = 5) -> list[QuizUserStat]:
