@@ -54,13 +54,12 @@ _CACHE_STOP_WORDS = {
 _RESPONSE_LOG: deque[dict] = deque(maxlen=500)
 
 # ---------------------------------------------------------------------------
-# Дедупликация ответов по топику (in-memory, TTL 5 минут, лимит 500 записей)
+# Дедупликация ответов по топику (in-memory, TTL 5 минут)
 # Ключ: (chat_id, topic_id) → (первые 80 символов ответа, timestamp)
 # Предотвращает отправку похожих ответов подряд в одном топике.
 # ---------------------------------------------------------------------------
 _LAST_REPLY_BY_TOPIC: dict[tuple[int, int | None], tuple[str, float]] = {}
 _REPLY_DEDUP_TTL = 300.0  # 5 минут
-_REPLY_DEDUP_MAX_SIZE = 500
 _REPLY_SIMILARITY_CHARS = 80
 _REPLY_SIMILARITY_THRESHOLD = 0.75
 
@@ -95,12 +94,7 @@ def _reply_is_duplicate(
 
 
 def _reply_record(chat_id: int, topic_id: int | None, reply: str) -> None:
-    """Записывает ответ для дедупликации. Вытесняет старые записи при превышении лимита."""
-    if len(_LAST_REPLY_BY_TOPIC) >= _REPLY_DEDUP_MAX_SIZE:
-        # Удаляем половину самых старых записей
-        oldest = sorted(_LAST_REPLY_BY_TOPIC, key=lambda k: _LAST_REPLY_BY_TOPIC[k][1])
-        for k in oldest[: _REPLY_DEDUP_MAX_SIZE // 2]:
-            del _LAST_REPLY_BY_TOPIC[k]
+    """Записывает ответ для дедупликации."""
     _LAST_REPLY_BY_TOPIC[(chat_id, topic_id)] = (reply[:_REPLY_SIMILARITY_CHARS], time.monotonic())
 
 
@@ -837,7 +831,7 @@ class OpenRouterProvider:
                 prev_state, self._cb_failures,
             )
             if _ADMIN_ALERT_NOTIFIER is not None:
-                asyncio.create_task(
+                asyncio.ensure_future(
                     _ADMIN_ALERT_NOTIFIER(
                         f"⚠️ AI circuit breaker открыт, {self._cb_failures} ошибок подряд"
                     )
@@ -848,7 +842,7 @@ class OpenRouterProvider:
         if self._cb_state == "HALF_OPEN":
             logger.info("AI circuit breaker закрыт (HALF_OPEN→CLOSED), соединение восстановлено.")
             if _ADMIN_ALERT_NOTIFIER is not None:
-                asyncio.create_task(
+                asyncio.ensure_future(
                     _ADMIN_ALERT_NOTIFIER("✅ AI circuit breaker закрыт, соединение восстановлено")
                 )
         self._cb_state = "CLOSED"
@@ -2278,16 +2272,12 @@ _ADMIN_ALERT_NOTIFIER: Callable[[str], Awaitable[None]] | None = None
 _LAST_ERROR: str | None = None
 _LAST_ERROR_AT: datetime | None = None
 
-# Флаг однократного предупреждения об 80% лимита за день.
-# Проверка запускается каждые _AI_LIMIT_CHECK_INTERVAL запросов — не на каждом,
-# чтобы не делать лишний DB-запрос на каждый AI-вызов.
+# Флаг однократного предупреждения об 80% лимита за день (сбрасывается при рестарте/новом дне)
 _AI_LIMIT_ALERT_SENT_DATE: str | None = None
-_AI_LIMIT_CHECK_COUNTER: int = 0
-_AI_LIMIT_CHECK_INTERVAL = 10
 
 
 async def _can_use_remote_ai(chat_id: int) -> tuple[bool, str | None]:
-    global _AI_LIMIT_ALERT_SENT_DATE, _AI_LIMIT_CHECK_COUNTER
+    global _AI_LIMIT_ALERT_SENT_DATE
     date_key = now_tz().date().isoformat()
     async for session in get_session():
         allowed, reason = await can_consume_ai(
@@ -2297,26 +2287,23 @@ async def _can_use_remote_ai(chat_id: int) -> tuple[bool, str | None]:
             request_limit=settings.ai_daily_request_limit,
             token_limit=settings.ai_daily_token_limit,
         )
-        # Проверяем 80%-порог раз в _AI_LIMIT_CHECK_INTERVAL запросов,
-        # только если alert ещё не отправлялся сегодня
+        # Однократное предупреждение при достижении 80% дневного лимита запросов
         if allowed and _AI_LIMIT_ALERT_SENT_DATE != date_key:
-            _AI_LIMIT_CHECK_COUNTER += 1
-            if _AI_LIMIT_CHECK_COUNTER % _AI_LIMIT_CHECK_INTERVAL == 0:
-                usage = await get_usage_stats(session, date_key=date_key, chat_id=chat_id)
-                threshold = 0.8 * settings.ai_daily_request_limit
-                if usage.requests_used >= threshold and _ADMIN_ALERT_NOTIFIER is not None:
-                    _AI_LIMIT_ALERT_SENT_DATE = date_key
-                    pct = int(usage.requests_used / settings.ai_daily_request_limit * 100)
-                    asyncio.create_task(
-                        _ADMIN_ALERT_NOTIFIER(
-                            f"⚠️ AI лимит запросов: использовано {usage.requests_used}/"
-                            f"{settings.ai_daily_request_limit} ({pct}%) за сегодня"
-                        )
+            usage = await get_usage_stats(session, date_key=date_key, chat_id=chat_id)
+            threshold = 0.8 * settings.ai_daily_request_limit
+            if usage.requests_used >= threshold and _ADMIN_ALERT_NOTIFIER is not None:
+                _AI_LIMIT_ALERT_SENT_DATE = date_key
+                pct = int(usage.requests_used / settings.ai_daily_request_limit * 100)
+                asyncio.ensure_future(
+                    _ADMIN_ALERT_NOTIFIER(
+                        f"⚠️ AI лимит запросов: использовано {usage.requests_used}/"
+                        f"{settings.ai_daily_request_limit} ({pct}%) за сегодня"
                     )
-                    logger.warning(
-                        "AI usage warning: %d/%d requests used today (%d%%)",
-                        usage.requests_used, settings.ai_daily_request_limit, pct,
-                    )
+                )
+                logger.warning(
+                    "AI usage warning: %d/%d requests used today (%d%%)",
+                    usage.requests_used, settings.ai_daily_request_limit, pct,
+                )
         return allowed, reason
     return False, "не удалось получить сессию БД"
 
