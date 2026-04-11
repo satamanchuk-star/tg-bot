@@ -1,0 +1,32 @@
+name: Quality Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  critical-tests:
+    name: critical-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run subsystem critical tests
+        run: |
+          pytest -q \
+            tests/moderation_dedup/test_moderation_dedup.py \
+            tests/quiz_fix/test_quiz_fix.py \
+            tests/quiz_lock/test_quiz_lock.py \
+            tests/datetime_aware/test_datetime_aware.py \
+            tests/circuit_breaker/test_circuit_breaker.py

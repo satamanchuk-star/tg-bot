@@ -918,23 +918,28 @@ async def on_startup(bot: Bot) -> None:
                 len(settings.bot_token),
             )
             break
-    await init_db(engine)
+    try:
+        await init_db(engine)
+    except Exception:
+        logger.exception(
+            "Критическая ошибка: не удалось инициализировать БД. "
+            "Проверьте DATABASE_URL и права на директорию данных."
+        )
+        raise
     try:
         await cleanup_database()
-    except Exception as exc:  # noqa: BLE001 - не блокируем старт из-за не-критичной очистки
-        _mark_degradation("cleanup_database", exc)
-
-    # Применяем миграции-флаги (некритично)
+    except Exception:  # noqa: BLE001 - не блокируем старт из-за не-критичной очистки
+        logger.exception("Очистка БД при старте завершилась с ошибкой.")
+    # Применяем миграции
     try:
         async for session in get_session():
             await apply_v11_stats_reset(session)
-    except Exception as exc:  # noqa: BLE001 - деградация допустима
-        _mark_degradation("apply_v11_stats_reset", exc)
-
+    except Exception:  # noqa: BLE001
+        logger.exception("Не удалось выполнить миграцию v1.1 (некритично, продолжаем).")
     try:
         await heartbeat_job(bot)
-    except Exception as exc:  # noqa: BLE001 - деградация допустима
-        _mark_degradation("heartbeat_job", exc)
+    except Exception:  # noqa: BLE001
+        logger.exception("Ошибка heartbeat при старте (некритично, продолжаем).")
     if telegram_available:
         # Публичные команды для всех пользователей
         await bot.set_my_commands(
@@ -1020,8 +1025,8 @@ async def on_startup(bot: Bot) -> None:
     # Возобновляем рулетку, если бот перезагрузился в игровое время
     try:
         await roulette.resume_roulette_if_needed(bot)
-    except Exception as exc:  # noqa: BLE001 - деградация допустима
-        _mark_degradation("resume_roulette_if_needed", exc)
+    except Exception:  # noqa: BLE001
+        logger.exception("Не удалось возобновить рулетку при старте (некритично, продолжаем).")
 
     # Инициализируем AI-клиент и логируем режим работы
     try:
