@@ -23,6 +23,7 @@ from app.services.ai_module import (
     is_ai_runtime_enabled,
     set_ai_runtime_enabled,
     resolve_provider_mode,
+    reload_profanity_runtime,
 )
 
 
@@ -84,6 +85,27 @@ def test_detects_masked_profanity() -> None:
     normalized = normalize_for_profanity("Да ты б*л_я!")
     assert detect_profanity(normalized)
 
+
+def test_reload_profanity_runtime_changes_detect_behavior(monkeypatch) -> None:
+    from app.services import ai_module
+
+    original_loader = ai_module.reload_profanity_runtime_dict
+    monkeypatch.setattr(
+        "app.services.ai_module.reload_profanity_runtime_dict",
+        lambda: {"exact": {"грубость"}, "prefixes": set(), "exceptions": set()},
+    )
+    reload_profanity_runtime()
+    assert detect_profanity(normalize_for_profanity("Это грубость"))
+
+    monkeypatch.setattr(
+        "app.services.ai_module.reload_profanity_runtime_dict",
+        lambda: {"exact": set(), "prefixes": set(), "exceptions": set()},
+    )
+    reload_profanity_runtime()
+    assert not detect_profanity(normalize_for_profanity("Это грубость"))
+
+    monkeypatch.setattr("app.services.ai_module.reload_profanity_runtime_dict", original_loader)
+    reload_profanity_runtime()
 
 def test_masks_personal_data() -> None:
     masked = mask_personal_data("Иван Иванов, +79991234567, test@example.com")
