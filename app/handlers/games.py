@@ -107,7 +107,7 @@ async def announce_blackjack_rules(bot: Bot) -> None:
         "• «Взять карту» — добавить ещё одну карту в руку\n"
         "• «Остановиться» — закончить набор, ход переходит к дилеру\n"
         "• Туз считается за 11 или 1 (автоматически)\n"
-        "• Ровно 21 двумя картами — блэкджек: +40 монет!\n"
+        "• Ровно 21 двумя картами — блэкджек!\n"
         "• Победа: +20 монет, проигрыш: -10 монет\n"
         "• /score — ваш баланс, /21top — таблица лидеров\n\n"
         "Блэкджек доступен с 22:00 до 00:00. Удачи! 🍀",
@@ -318,9 +318,9 @@ async def on_hit(callback: CallbackQuery) -> None:
             await session.commit()
 
             if result == "win":
-                result_text = "победа!" + (" +40 за блэкджек!" if blackjack else " +20 монет")
+                result_text = "победа!" + (" +2 за ровно 21!" if blackjack else "")
             elif result == "lose":
-                result_text = "проигрыш. -10 монет"
+                result_text = "проигрыш."
             else:
                 result_text = "ничья."
 
@@ -369,9 +369,9 @@ async def on_stand(callback: CallbackQuery) -> None:
         await session.commit()
 
     if result == "win":
-        result_text = "победа!" + (" +40 за блэкджек!" if blackjack else " +20 монет")
+        result_text = "победа!" + (" +2 за ровно 21!" if blackjack else "")
     elif result == "lose":
-        result_text = "проигрыш. -10 монет"
+        result_text = "проигрыш."
     else:
         result_text = "ничья."
 

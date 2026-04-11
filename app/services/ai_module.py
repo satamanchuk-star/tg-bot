@@ -1640,92 +1640,12 @@ def normalize_for_profanity(text: str) -> str:
     return lowered
 
 
-# Базовый набор корней — используется, если файл-словарь пустой/отсутствует.
-_DEFAULT_PROFANITY_ROOTS: tuple[str, ...] = (
-    "хуй", "пизд", "еб", "бля", "бле", "сук", "муд", "гандон",
-    "нах", "пох", "хер", "хрен", "шалав", "манд", "говн",
-)
-
-# Рантайм-наборы. Заполняются на старте бота через reload_profanity_runtime().
-_PROFANITY_EXACT: set[str] = set()
-_PROFANITY_PREFIXES: set[str] = set(_DEFAULT_PROFANITY_ROOTS)
-_PROFANITY_EXCEPTIONS: set[str] = set()
-
-
-def reload_profanity_runtime() -> tuple[int, int]:
-    """Перечитывает app/data/profanity.txt и profanity_exceptions.txt в рантайм.
-
-    Возвращает (количество_слов, количество_исключений).
-    """
-    from app.utils.profanity import (
-        load_profanity,
-        load_profanity_exceptions,
-        split_profanity_words,
-    )
-
-    global _PROFANITY_EXACT, _PROFANITY_PREFIXES, _PROFANITY_EXCEPTIONS
-
-    words = load_profanity()
-    exceptions = load_profanity_exceptions()
-
-    if words:
-        exact, prefixes = split_profanity_words(words)
-        _PROFANITY_EXACT = exact
-        # Добавляем базовые корни как fallback — если в файле их нет, но они надёжные.
-        _PROFANITY_PREFIXES = prefixes | set(_DEFAULT_PROFANITY_ROOTS)
-    else:
-        _PROFANITY_EXACT = set()
-        _PROFANITY_PREFIXES = set(_DEFAULT_PROFANITY_ROOTS)
-
-    _PROFANITY_EXCEPTIONS = {
-        _normalize_exception(w) for w in exceptions if w
-    }
-    _PROFANITY_EXCEPTIONS.discard("")
-
-    logger.info(
-        "Profanity-словарь обновлён: exact=%d, prefixes=%d, exceptions=%d",
-        len(_PROFANITY_EXACT),
-        len(_PROFANITY_PREFIXES),
-        len(_PROFANITY_EXCEPTIONS),
-    )
-    return len(words), len(exceptions)
-
-
-def _normalize_exception(word: str) -> str:
-    """Нормализует исключение тем же способом, что и входящий текст."""
-    return normalize_for_profanity(word)
-
-
 def detect_profanity(normalized: str) -> bool:
-    if not normalized:
-        return False
-
-    # Если всё нормализованное сообщение целиком — исключение, пропускаем.
-    if normalized in _PROFANITY_EXCEPTIONS:
-        return False
-
-    # Точные совпадения из словаря.
-    if _PROFANITY_EXACT and normalized in _PROFANITY_EXACT:
-        return True
-
-    # Префиксы/корни: ищем вхождение, но не реагируем, если найденный корень
-    # полностью покрывается исключением (например, «страх» vs «стр*»).
-    for root in _PROFANITY_PREFIXES:
-        if root and root in normalized:
-            if _is_covered_by_exception(normalized, root):
-                continue
-            return True
-    return False
-
-
-def _is_covered_by_exception(normalized: str, root: str) -> bool:
-    """True, если вхождение `root` в `normalized` полностью принадлежит исключению."""
-    if not _PROFANITY_EXCEPTIONS:
-        return False
-    for exc in _PROFANITY_EXCEPTIONS:
-        if exc and root in exc and exc in normalized:
-            return True
-    return False
+    roots = (
+        "хуй", "пизд", "еб", "бля", "бле", "сук", "муд", "гандон",
+        "нах", "пох", "хер", "хрен", "шалав", "манд", "говн",
+    )
+    return any(root in normalized for root in roots)
 
 
 def detect_aggression_level(text: str) -> Literal["low", "high"]:

@@ -360,6 +360,7 @@ async def send_daily_summary(bot: Bot) -> None:
     ai_summary_text = ""
     if summary.messages > 0:
         try:
+            from app.services.ai_module import get_ai_client
             ai_client = get_ai_client()
             ai_context = build_ai_summary_context(summary)
             ai_summary = await ai_client.generate_daily_summary(
@@ -552,7 +553,8 @@ async def draw_weekly_lottery(bot: Bot) -> None:
 async def announce_lottery(bot: Bot) -> None:
     """Анонсирует лотерею в топиках курилки и игр (через день в 11:00)."""
     from app.services.lottery import current_week_key, get_current_pot
-    async for session in get_session():
+    from app.db import get_session as _gs
+    async for session in _gs():
         pot, participants, tickets_count = await get_current_pot(session, settings.forum_chat_id)
         break
 
@@ -1047,21 +1049,6 @@ async def on_startup(bot: Bot) -> None:
     except Exception:
         logger.exception("Не удалось загрузить базу знаний жителей (resident_kb.json).")
 
-    # Загружаем profanity-словарь в рантайм, чтобы detect_profanity использовал файл,
-    # а не только хардкод-корни. Без этого правки в app/data/profanity.txt не применяются
-    # до рестарта + /reload_profanity.
-    try:
-        from app.services.ai_module import reload_profanity_runtime
-
-        words_count, exceptions_count = reload_profanity_runtime()
-        logger.info(
-            "Profanity-словарь загружен на старте: слов=%d, исключений=%d.",
-            words_count,
-            exceptions_count,
-        )
-    except Exception:
-        logger.exception("Не удалось загрузить profanity-словарь на старте.")
-
     # Очистка устаревших и seed инфраструктуры из JSON
     try:
         from scripts.seed_places import purge_old_places, seed_places
@@ -1214,9 +1201,7 @@ async def main() -> None:
             )
     finally:
         if scheduler is not None:
-            # wait=True даёт активным джобам (e.g. long-running AI calls) закончиться
-            # корректно перед остановкой, чтобы не оставить транзакции в воздухе.
-            scheduler.shutdown(wait=True)
+            scheduler.shutdown()
         await close_ai_client()
         await bot.session.close()
 
