@@ -20,6 +20,7 @@ from app.models import GameState
 from app.services.games import get_or_create_stats
 from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import extract_target_user, is_admin
+from app.utils.safe_telegram import safe_call
 from app.utils.admin_help import (
     ADMIN_CATEGORIES,
     admin_back_keyboard,
@@ -178,12 +179,18 @@ async def mute_user(message: Message, bot: Bot) -> None:
         return
     until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
     permissions = ChatPermissions(can_send_messages=False)
-    await bot.restrict_chat_member(
-        settings.forum_chat_id,
-        target_id,
-        permissions=permissions,
-        until_date=until,
+    result = await safe_call(
+        bot.restrict_chat_member(
+            settings.forum_chat_id,
+            target_id,
+            permissions=permissions,
+            until_date=until,
+        ),
+        log_ctx=f"/mute user_id={target_id} minutes={minutes}",
     )
+    if result is None:
+        await message.reply("Не удалось замьютить: Telegram API вернул ошибку (см. логи).")
+        return
     await message.reply(f"Пользователь замьючен на {minutes} минут.")
 
 
@@ -196,9 +203,15 @@ async def unmute_user(message: Message, bot: Bot) -> None:
         await message.reply("Нужен реплай на сообщение пользователя.")
         return
     permissions = ChatPermissions(can_send_messages=True, can_send_other_messages=True)
-    await bot.restrict_chat_member(
-        settings.forum_chat_id, target_id, permissions=permissions
+    result = await safe_call(
+        bot.restrict_chat_member(
+            settings.forum_chat_id, target_id, permissions=permissions
+        ),
+        log_ctx=f"/unmute user_id={target_id}",
     )
+    if result is None:
+        await message.reply("Не удалось снять мут: Telegram API вернул ошибку (см. логи).")
+        return
     await message.reply("Мут снят.")
 
 
@@ -220,7 +233,13 @@ async def ban_user(message: Message, bot: Bot) -> None:
         await message.reply("Нужен реплай на сообщение пользователя.")
         return
     until = datetime.now(timezone.utc) + timedelta(days=days)
-    await bot.ban_chat_member(settings.forum_chat_id, target_id, until_date=until)
+    result = await safe_call(
+        bot.ban_chat_member(settings.forum_chat_id, target_id, until_date=until),
+        log_ctx=f"/ban user_id={target_id} days={days}",
+    )
+    if result is None:
+        await message.reply("Не удалось забанить: Telegram API вернул ошибку (см. логи).")
+        return
     await message.reply(f"Бан на {days} дней выдан.")
 
 
@@ -232,7 +251,13 @@ async def unban_user(message: Message, bot: Bot) -> None:
     if target_id is None:
         await message.reply("Нужен реплай на сообщение пользователя.")
         return
-    await bot.unban_chat_member(settings.forum_chat_id, target_id)
+    result = await safe_call(
+        bot.unban_chat_member(settings.forum_chat_id, target_id),
+        log_ctx=f"/unban user_id={target_id}",
+    )
+    if result is None:
+        await message.reply("Не удалось снять бан: Telegram API вернул ошибку (см. логи).")
+        return
     await message.reply("Бан снят.")
 
 
@@ -250,11 +275,14 @@ async def strike_user(message: Message, bot: Bot) -> None:
     if count >= 3:
         until = datetime.now(timezone.utc) + timedelta(hours=24)
         permissions = ChatPermissions(can_send_messages=False)
-        await bot.restrict_chat_member(
-            settings.forum_chat_id,
-            target_id,
-            permissions=permissions,
-            until_date=until,
+        await safe_call(
+            bot.restrict_chat_member(
+                settings.forum_chat_id,
+                target_id,
+                permissions=permissions,
+                until_date=until,
+            ),
+            log_ctx=f"/strike L3 mute user_id={target_id}",
         )
         async for session in get_session():
             await clear_strikes(session, target_id, settings.forum_chat_id)
