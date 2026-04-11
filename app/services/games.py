@@ -144,9 +144,9 @@ async def apply_game_result(
     stats.games_played += 1
     if result == "win":
         stats.wins += 1
-        stats.coins += 2 if exact_21 else 1
+        stats.coins += 40 if exact_21 else 20
     elif result == "lose":
-        stats.coins -= 1
+        stats.coins -= 10
     await session.flush()
     return stats
 

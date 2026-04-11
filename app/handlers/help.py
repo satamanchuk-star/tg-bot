@@ -766,6 +766,7 @@ async def _remember_ai_exchange_persistent(
     try:
         async for session in get_session():
             await save_exchange(session, chat_id, user_id, prompt, reply)
+            await session.commit()
     except Exception:
         logger.warning("Не удалось сохранить историю диалога в БД.")
 
@@ -1203,6 +1204,7 @@ async def admin_correction_handler(message: Message, bot: Bot) -> None:
                 admin_text=text,
                 bot_reply=bot_reply_text,
             )
+            await session.commit()
             if success:
                 await message.reply(
                     f"✅ Запомнил! Обновил базу знаний:\n"
@@ -1328,6 +1330,7 @@ async def mention_help(message: Message, bot: Bot) -> None:
                             bot_reply=bot_reply_text,
                             bot=bot,
                         )
+                        await session.commit()
                         if applied:
                             await message.reply("Спасибо за поправку! Записал, в следующий раз не ошибусь 📝")
                             return
@@ -1568,6 +1571,7 @@ async def _extract_and_save_profile(
             return
         async for session in get_session():
             await update_profile(session, user_id, chat_id, facts, display_name)
+            await session.commit()
             break
         logger.info("Профиль обновлён: user_id=%s, facts=%s", user_id, list(facts.keys()))
     except Exception:
