@@ -6,6 +6,7 @@ import json
 import logging
 import random
 from datetime import datetime, timedelta, timezone
+from typing import Awaitable, Callable, TypeVar
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
@@ -73,16 +74,47 @@ _HARD_WARNINGS = (
     "это {count}-е предупреждение из 3. Правила действуют для всех.",
 )
 
+_T = TypeVar("_T")
+
+
+async def _safe_tg_call(
+    action: str,
+    operation: Callable[[], Awaitable[_T]],
+    *,
+    chat_id: int | None,
+    user_id: int | None,
+    message_id: int | None,
+    fallback: _T | None = None,
+) -> _T | None:
+    """Почему: Telegram API может быть нестабилен, модерация не должна падать целиком."""
+    try:
+        return await operation()
+    except Exception:
+        logger.exception(
+            "Telegram call failed: action=%s chat_id=%s user_id=%s message_id=%s",
+            action,
+            chat_id,
+            user_id,
+            message_id,
+        )
+        return fallback
+
 
 async def _warn_user(message: Message, text: str, bot: Bot) -> None:
     if message.from_user is None:
         return
     mention = message.from_user.mention_html()
-    await bot.send_message(
-        message.chat.id,
-        f"{mention}, {text}",
-        parse_mode="HTML",
-        message_thread_id=message.message_thread_id,
+    await _safe_tg_call(
+        "warn_user",
+        lambda: bot.send_message(
+            message.chat.id,
+            f"{mention}, {text}",
+            parse_mode="HTML",
+            message_thread_id=message.message_thread_id,
+        ),
+        chat_id=message.chat.id,
+        user_id=message.from_user.id,
+        message_id=message.message_id,
     )
 
 
@@ -196,7 +228,13 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
 
     # Проверка запрещённых ссылок (до AI)
     if contains_forbidden_link(text):
-        await message.delete()
+        await _safe_tg_call(
+            "delete_forbidden_link",
+            message.delete,
+            chat_id=chat_id,
+            user_id=user_id,
+            message_id=message.message_id,
+        )
         await _warn_user(message, "ссылки разрешены только в формате Telegram.", bot)
         await _store_mod_event(chat_id, user_id, "delete", 1, message_id=message.message_id)
         return True
@@ -262,7 +300,16 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
 
     # L3: удаление + счётчик +1 + немедленный мут + уведомление админа
     if severity >= 3:
-        await message.delete()
+        deleted = bool(
+            await _safe_tg_call(
+                "delete_l3_message",
+                message.delete,
+                chat_id=chat_id,
+                user_id=user_id,
+                message_id=message.message_id,
+                fallback=False,
+            )
+        )
         async for session in get_session():
             strike_count = await add_strike(session, user_id, settings.forum_chat_id)
             await session.commit()
@@ -273,13 +320,24 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
         # Немедленный мут 24ч
         until = datetime.now(timezone.utc) + timedelta(hours=24)
         permissions = ChatPermissions(can_send_messages=False)
-        await bot.restrict_chat_member(
-            settings.forum_chat_id,
-            user_id,
-            permissions=permissions,
-            until_date=until,
+        await _safe_tg_call(
+            "restrict_l3_user",
+            lambda: bot.restrict_chat_member(
+                settings.forum_chat_id,
+                user_id,
+                permissions=permissions,
+                until_date=until,
+            ),
+            chat_id=chat_id,
+            user_id=user_id,
+            message_id=message.message_id,
         )
-        await _warn_user(message, "сообщение удалено, мут на 24 часа за грубое нарушение.", bot)
+        warn_text = (
+            "сообщение удалено, мут на 24 часа за грубое нарушение."
+            if deleted
+            else "не удалось удалить сообщение, но применён мут на 24 часа за грубое нарушение."
+        )
+        await _warn_user(message, warn_text, bot)
         # Уведомление админа
         mention = message.from_user.mention_html()
         admin_text = (
@@ -289,7 +347,13 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
             f"Уверенность: {confidence or 'н/д'}\n"
             f"Текст: {text[:200]}"
         )
-        await bot.send_message(settings.admin_log_chat_id, admin_text, parse_mode="HTML")
+        await _safe_tg_call(
+            "notify_admin_l3",
+            lambda: bot.send_message(settings.admin_log_chat_id, admin_text, parse_mode="HTML"),
+            chat_id=chat_id,
+            user_id=user_id,
+            message_id=message.message_id,
+        )
         await _apply_strike_threshold(bot, message, user_id, strike_count)
         return True
 
@@ -300,20 +364,34 @@ async def _apply_strike_threshold(bot: Bot, message: Message, user_id: int, stri
     """Применяет мут/бан по порогам счётчика предупреждений."""
     if strike_count >= 5:
         # Бан
-        await bot.ban_chat_member(settings.forum_chat_id, user_id)
-        async for session in get_session():
-            await clear_strikes(session, user_id, settings.forum_chat_id)
-            await session.commit()
+        banned = await _safe_tg_call(
+            "ban_by_strike_threshold",
+            lambda: bot.ban_chat_member(settings.forum_chat_id, user_id),
+            chat_id=message.chat.id,
+            user_id=user_id,
+            message_id=message.message_id,
+            fallback=False,
+        )
+        if banned:
+            async for session in get_session():
+                await clear_strikes(session, user_id, settings.forum_chat_id)
+                await session.commit()
         await _warn_user(message, "слишком много нарушений — бан.", bot)
     elif strike_count >= 3:
         # Мут 24ч
         until = datetime.now(timezone.utc) + timedelta(hours=24)
         permissions = ChatPermissions(can_send_messages=False)
-        await bot.restrict_chat_member(
-            settings.forum_chat_id,
-            user_id,
-            permissions=permissions,
-            until_date=until,
+        await _safe_tg_call(
+            "restrict_by_strike_threshold",
+            lambda: bot.restrict_chat_member(
+                settings.forum_chat_id,
+                user_id,
+                permissions=permissions,
+                until_date=until,
+            ),
+            chat_id=message.chat.id,
+            user_id=user_id,
+            message_id=message.message_id,
         )
         await _warn_user(message, "3 предупреждения — пауза в чате на 24 часа.", bot)
 
@@ -342,11 +420,17 @@ async def _check_flood(message: Message, bot: Bot) -> bool:
     mute_minutes = 60 if repeat_within_hour else 15
     until = datetime.now(timezone.utc) + timedelta(minutes=mute_minutes)
     permissions = ChatPermissions(can_send_messages=False)
-    await bot.restrict_chat_member(
-        settings.forum_chat_id,
-        message.from_user.id,
-        permissions=permissions,
-        until_date=until,
+    await _safe_tg_call(
+        "restrict_flood_user",
+        lambda: bot.restrict_chat_member(
+            settings.forum_chat_id,
+            message.from_user.id,
+            permissions=permissions,
+            until_date=until,
+        ),
+        chat_id=message.chat.id,
+        user_id=message.from_user.id,
+        message_id=message.message_id,
     )
     await _warn_user(message, f"слишком частые сообщения. Мут на {mute_minutes} минут.", bot)
     await _store_mod_event(message.chat.id, message.from_user.id, "mute", 2)
