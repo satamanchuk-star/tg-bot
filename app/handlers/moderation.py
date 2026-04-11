@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import random
-import time
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, F, Router
@@ -27,7 +26,6 @@ from app.services.ai_module import get_ai_client
 from app.services.flood import FloodTracker
 from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import is_admin
-from app.utils.safe_telegram import safe_call
 from app.utils.text import contains_forbidden_link
 from app.utils.time import ensure_aware
 
@@ -53,30 +51,9 @@ def is_training_mode() -> bool:
     return settings.moderation_training_mode
 
 
-# Dict message_id → timestamp для идемпотентности модерации.
-# TTL 120 сек + лимит 1000 записей — защита от утечки памяти.
-_MODERATED_MSG_IDS: dict[int, float] = {}
-_MODERATED_MSG_IDS_TTL = 120.0  # секунд
-_MODERATED_MSG_IDS_MAX = 1000
-
-
-def _is_already_moderated(msg_id: int) -> bool:
-    """Проверяет и регистрирует message_id. Возвращает True если уже модерировалось."""
-    now = time.monotonic()
-    if msg_id in _MODERATED_MSG_IDS:
-        return True
-    # TTL-очистка раз в 100 вызовов или при переполнении
-    if len(_MODERATED_MSG_IDS) >= _MODERATED_MSG_IDS_MAX:
-        expired = [k for k, v in _MODERATED_MSG_IDS.items() if now - v > _MODERATED_MSG_IDS_TTL]
-        for k in expired:
-            del _MODERATED_MSG_IDS[k]
-        # Если всё ещё переполнено — вытесняем самые старые
-        if len(_MODERATED_MSG_IDS) >= _MODERATED_MSG_IDS_MAX:
-            oldest = sorted(_MODERATED_MSG_IDS, key=_MODERATED_MSG_IDS.__getitem__)
-            for k in oldest[: _MODERATED_MSG_IDS_MAX // 2]:
-                del _MODERATED_MSG_IDS[k]
-    _MODERATED_MSG_IDS[msg_id] = now
-    return False
+# Множество message_id, уже прошедших модерацию (предотвращает двойной вызов)
+_MODERATED_MSG_IDS: set[int] = set()
+_MODERATED_MSG_IDS_MAX = 500
 
 # Вариативные мягкие предупреждения (L1)
 _SOFT_WARNINGS = (
@@ -101,14 +78,11 @@ async def _warn_user(message: Message, text: str, bot: Bot) -> None:
     if message.from_user is None:
         return
     mention = message.from_user.mention_html()
-    await safe_call(
-        bot.send_message(
-            message.chat.id,
-            f"{mention}, {text}",
-            parse_mode="HTML",
-            message_thread_id=message.message_thread_id,
-        ),
-        log_ctx=f"warn user_id={message.from_user.id}",
+    await bot.send_message(
+        message.chat.id,
+        f"{mention}, {text}",
+        parse_mode="HTML",
+        message_thread_id=message.message_thread_id,
     )
 
 
@@ -129,19 +103,17 @@ async def _store_message_log(message: Message, severity: int, sentiment: str | N
         await session.commit()
 
 
-async def _get_topic_context(chat_id: int, topic_id: int | None, limit: int = 15) -> list[str]:
+async def _get_topic_context(chat_id: int, topic_id: int | None, limit: int = 10) -> list[str]:
     """Возвращает последние сообщения из того же топика для контекстной модерации.
 
-    Формат: «[user_NNNN sev=N]: текст» — чтобы AI видел, кто что написал
-    и какой severity был у предыдущих нарушений (сигнал рецидива).
-    Лимит увеличен до 15: даёт лучший контекст без заметной нагрузки на SQLite.
+    Формат: «[user_NNNN]: текст» — чтобы AI видел, кто что написал.
     """
     if topic_id is None:
         return []
     try:
         async for session in get_session():
             result = await session.execute(
-                select(MessageLog.user_id, MessageLog.text, MessageLog.severity)
+                select(MessageLog.user_id, MessageLog.text)
                 .where(
                     and_(
                         MessageLog.chat_id == chat_id,
@@ -153,13 +125,7 @@ async def _get_topic_context(chat_id: int, topic_id: int | None, limit: int = 15
                 .limit(limit)
             )
             rows = result.all()
-            lines = []
-            for uid, txt, sev in reversed(rows):
-                if sev and sev > 0:
-                    lines.append(f"[user_{uid} sev={sev}]: {txt}")
-                else:
-                    lines.append(f"[user_{uid}]: {txt}")
-            return lines
+            return [f"[user_{uid}]: {txt}" for uid, txt in reversed(rows)]
     except Exception:
         logger.warning("Не удалось загрузить контекст топика для модерации")
         return []
@@ -212,8 +178,14 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
         return False
 
     # Предотвращаем двойную модерацию одного сообщения (mention_help + moderate_message)
-    if _is_already_moderated(message.message_id):
+    msg_id = message.message_id
+    if msg_id in _MODERATED_MSG_IDS:
         return False
+    if len(_MODERATED_MSG_IDS) > _MODERATED_MSG_IDS_MAX:
+        to_remove = sorted(_MODERATED_MSG_IDS)[:_MODERATED_MSG_IDS_MAX // 2]
+        for mid in to_remove:
+            _MODERATED_MSG_IDS.discard(mid)
+    _MODERATED_MSG_IDS.add(msg_id)
 
     if await is_admin(bot, settings.forum_chat_id, message.from_user.id):
         return False
@@ -224,10 +196,7 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
 
     # Проверка запрещённых ссылок (до AI)
     if contains_forbidden_link(text):
-        await safe_call(
-            message.delete(),
-            log_ctx=f"delete forbidden link msg={message.message_id}",
-        )
+        await message.delete()
         await _warn_user(message, "ссылки разрешены только в формате Telegram.", bot)
         await _store_mod_event(chat_id, user_id, "delete", 1, message_id=message.message_id)
         return True
@@ -304,14 +273,11 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
         # Немедленный мут 24ч
         until = datetime.now(timezone.utc) + timedelta(hours=24)
         permissions = ChatPermissions(can_send_messages=False)
-        await safe_call(
-            bot.restrict_chat_member(
-                settings.forum_chat_id,
-                user_id,
-                permissions=permissions,
-                until_date=until,
-            ),
-            log_ctx=f"L3 mute user_id={user_id}",
+        await bot.restrict_chat_member(
+            settings.forum_chat_id,
+            user_id,
+            permissions=permissions,
+            until_date=until,
         )
         await _warn_user(message, "сообщение удалено, мут на 24 часа за грубое нарушение.", bot)
         # Уведомление админа
@@ -323,10 +289,7 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
             f"Уверенность: {confidence or 'н/д'}\n"
             f"Текст: {text[:200]}"
         )
-        await safe_call(
-            bot.send_message(settings.admin_log_chat_id, admin_text, parse_mode="HTML"),
-            log_ctx="L3 admin notify",
-        )
+        await bot.send_message(settings.admin_log_chat_id, admin_text, parse_mode="HTML")
         await _apply_strike_threshold(bot, message, user_id, strike_count)
         return True
 
@@ -337,10 +300,7 @@ async def _apply_strike_threshold(bot: Bot, message: Message, user_id: int, stri
     """Применяет мут/бан по порогам счётчика предупреждений."""
     if strike_count >= 5:
         # Бан
-        await safe_call(
-            bot.ban_chat_member(settings.forum_chat_id, user_id),
-            log_ctx=f"strike ban user_id={user_id}",
-        )
+        await bot.ban_chat_member(settings.forum_chat_id, user_id)
         async for session in get_session():
             await clear_strikes(session, user_id, settings.forum_chat_id)
             await session.commit()
@@ -349,14 +309,11 @@ async def _apply_strike_threshold(bot: Bot, message: Message, user_id: int, stri
         # Мут 24ч
         until = datetime.now(timezone.utc) + timedelta(hours=24)
         permissions = ChatPermissions(can_send_messages=False)
-        await safe_call(
-            bot.restrict_chat_member(
-                settings.forum_chat_id,
-                user_id,
-                permissions=permissions,
-                until_date=until,
-            ),
-            log_ctx=f"strike mute user_id={user_id}",
+        await bot.restrict_chat_member(
+            settings.forum_chat_id,
+            user_id,
+            permissions=permissions,
+            until_date=until,
         )
         await _warn_user(message, "3 предупреждения — пауза в чате на 24 часа.", bot)
 
@@ -385,14 +342,11 @@ async def _check_flood(message: Message, bot: Bot) -> bool:
     mute_minutes = 60 if repeat_within_hour else 15
     until = datetime.now(timezone.utc) + timedelta(minutes=mute_minutes)
     permissions = ChatPermissions(can_send_messages=False)
-    await safe_call(
-        bot.restrict_chat_member(
-            settings.forum_chat_id,
-            message.from_user.id,
-            permissions=permissions,
-            until_date=until,
-        ),
-        log_ctx=f"flood mute user_id={message.from_user.id}",
+    await bot.restrict_chat_member(
+        settings.forum_chat_id,
+        message.from_user.id,
+        permissions=permissions,
+        until_date=until,
     )
     await _warn_user(message, f"слишком частые сообщения. Мут на {mute_minutes} минут.", bot)
     await _store_mod_event(message.chat.id, message.from_user.id, "mute", 2)

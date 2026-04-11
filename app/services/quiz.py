@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import math
 import logging
@@ -10,11 +9,10 @@ import random
 import re
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import QuizQuestion, QuizSession, QuizUsedQuestion, QuizUserStat, UserStat
-from app.utils.time import ensure_aware
 
 logger = logging.getLogger(__name__)
 
@@ -55,19 +53,14 @@ async def get_available_questions_count(session: AsyncSession) -> int:
 
 
 def _is_session_stale(quiz_session: QuizSession) -> bool:
-    """Проверяет, зависла ли сессия (например, после перезапуска бота).
-
-    Сессия считается зависшей между вопросами только если question_number > 0
-    (вопросы уже задавались). Сессия с question_number == 0 и без
-    question_started_at — только что создана и ещё не инициализирована,
-    не считается зависшей.
-    """
+    """Проверяет, зависла ли сессия (например, после перезапуска бота)."""
     if quiz_session.question_started_at is None:
-        # Зависла между вопросами: признак — уже были вопросы (> 0)
-        return bool(quiz_session.question_number)
+        # Сессия без активного вопроса — зависла между вопросами
+        return True
     now = datetime.now(timezone.utc)
-    # Используем ensure_aware чтобы избежать TypeError при naive datetime из SQLite
-    started = ensure_aware(quiz_session.question_started_at)
+    started = quiz_session.question_started_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
     elapsed = (now - started).total_seconds()
     return elapsed > QUIZ_STALE_SESSION_SEC
 
@@ -278,43 +271,10 @@ async def award_correct_answer_coins(
 async def end_quiz_session(session: AsyncSession, quiz_session: QuizSession) -> None:
     quiz_session.is_active = False
     quiz_session.current_question_id = None
-    # QuizQuestion НЕ удаляем — вопросы уже помечены в QuizUsedQuestion
-    # Удаление здесь приводило к тому, что после каждой сессии вопросы
-    # пропадали из базы навсегда и следующую викторину не из чего было собрать.
 
-
-# ---------------------------------------------------------------------------
-# In-memory lock: предотвращает race condition при одновременном старте двух
-# викторин в одном топике (между can_start_quiz и start_quiz_session).
-# ---------------------------------------------------------------------------
-_QUIZ_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
-
-
-def _get_quiz_lock(chat_id: int, topic_id: int) -> asyncio.Lock:
-    key = (chat_id, topic_id)
-    if key not in _QUIZ_LOCKS:
-        _QUIZ_LOCKS[key] = asyncio.Lock()
-    return _QUIZ_LOCKS[key]
-
-
-async def safe_start_quiz(
-    session: AsyncSession,
-    chat_id: int,
-    topic_id: int,
-) -> tuple[QuizSession | None, str]:
-    """Атомарная проверка + создание сессии викторины под asyncio.Lock.
-
-    Возвращает (session_obj, "") при успехе или (None, reason) при отказе.
-    Это предотвращает race condition, когда два хендлера одновременно проходят
-    can_start_quiz и затем оба создают сессию.
-    """
-    async with _get_quiz_lock(chat_id, topic_id):
-        ok, reason = await can_start_quiz(session, chat_id, topic_id)
-        if not ok:
-            return None, reason
-        session_obj = await start_quiz_session(session, chat_id, topic_id)
-        await session.commit()
-        return session_obj, ""
+    used_ids = get_used_question_ids(quiz_session)
+    if used_ids:
+        await session.execute(delete(QuizQuestion).where(QuizQuestion.id.in_(used_ids)))
 
 
 async def get_quiz_leaderboard(session: AsyncSession, chat_id: int, limit: int = 5) -> list[QuizUserStat]:
@@ -325,15 +285,6 @@ async def get_quiz_leaderboard(session: AsyncSession, chat_id: int, limit: int =
         .limit(limit)
     )
     return list(result.scalars().all())
-
-
-async def get_quiz_leaderboard_monthly(
-    session: AsyncSession,
-    chat_id: int,
-    limit: int = 10,
-) -> list[QuizUserStat]:
-    """Топ участников по накопленным очкам (делегирует в get_quiz_leaderboard)."""
-    return await get_quiz_leaderboard(session, chat_id, limit=limit)
 
 
 async def is_quiz_finished(quiz_session: QuizSession) -> bool:
