@@ -250,6 +250,44 @@ def test_inject_env_from_server_compose_fallback_to_yml(monkeypatch, tmp_path) -
     assert os.environ["ADMIN_LOG_CHAT_ID"] == "-100002"
 
 
+def test_inject_env_from_server_compose_continues_until_required_vars_found(
+    monkeypatch, tmp_path
+) -> None:
+    yaml_path = tmp_path / "docker-compose.yaml"
+    yml_path = tmp_path / "docker-compose.yml"
+    yaml_path.write_text(
+        """services:
+  watchtower:
+    image: containrrr/watchtower
+    environment:
+      - WATCHTOWER_CLEANUP=true
+""",
+        encoding="utf-8",
+    )
+    yml_path.write_text(
+        """services:
+  bot:
+    image: test
+    environment:
+      - BOT_TOKEN=from-yml-required
+      - FORUM_CHAT_ID=-100111
+      - ADMIN_LOG_CHAT_ID=-100222
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("app.config.SERVER_COMPOSE_PATHS", (yaml_path, yml_path))
+    monkeypatch.delenv("BOT_TOKEN", raising=False)
+    monkeypatch.delenv("FORUM_CHAT_ID", raising=False)
+    monkeypatch.delenv("ADMIN_LOG_CHAT_ID", raising=False)
+
+    _inject_env_from_server_compose()
+
+    assert os.environ["BOT_TOKEN"] == "from-yml-required"
+    assert os.environ["FORUM_CHAT_ID"] == "-100111"
+    assert os.environ["ADMIN_LOG_CHAT_ID"] == "-100222"
+
+
 def test_extract_compose_bot_env_from_env_file_path_mapping(tmp_path) -> None:
     compose = tmp_path / "docker-compose.yaml"
     env_file = tmp_path / ".env"

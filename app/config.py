@@ -22,6 +22,11 @@ REQUIRED_ENV_FIELDS: tuple[str, ...] = (
 )
 
 
+def _has_required_bot_env(env: dict[str, str]) -> bool:
+    """Проверяет наличие обязательных переменных бота."""
+    return all(env.get(field) for field in REQUIRED_ENV_FIELDS)
+
+
 def _resolve_compose_value(raw_value: str) -> str:
     """Упрощённо резолвит ${VAR} и ${VAR:-default} из docker-compose."""
     value = raw_value.strip().strip("'\"")
@@ -179,7 +184,7 @@ def _extract_compose_bot_env(compose_path: Path) -> dict[str, str]:
         env = _extract_compose_service_env(compose_path, service)
         if not env:
             continue
-        if all(env.get(field) for field in REQUIRED_ENV_FIELDS):
+        if _has_required_bot_env(env):
             return env
         if len(env) > len(best_match):
             best_match = env
@@ -189,10 +194,17 @@ def _extract_compose_bot_env(compose_path: Path) -> dict[str, str]:
 def _inject_env_from_server_compose() -> None:
     """Подхватывает env из /opt/alexbot/docker-compose.yaml как источник истины."""
     compose_env: dict[str, str] = {}
+    fallback_env: dict[str, str] = {}
     for compose_path in SERVER_COMPOSE_PATHS:
         compose_env = _extract_compose_bot_env(compose_path)
-        if compose_env:
+        if not compose_env:
+            continue
+        if _has_required_bot_env(compose_env):
             break
+        if len(compose_env) > len(fallback_env):
+            fallback_env = compose_env
+    if not _has_required_bot_env(compose_env):
+        compose_env = fallback_env
     for key, value in compose_env.items():
         if not value:
             continue
