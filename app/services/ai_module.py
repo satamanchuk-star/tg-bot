@@ -23,6 +23,7 @@ from app.services.ai_usage import add_usage, can_consume_ai, get_usage_stats
 from app.services.faq import get_faq_answer
 from app.services.resident_kb import build_resident_answer, build_resident_context, search_resident_kb
 from app.services.web_search import format_search_context, search_duckduckgo, should_search_web
+from app.utils.profanity import reload_profanity_runtime as reload_profanity_runtime_dict
 from app.utils.time import now_tz
 
 logger = logging.getLogger(__name__)
@@ -620,6 +621,9 @@ class AiProbeResult:
 class AiRuntimeStatus:
     last_error: str | None
     last_error_at: datetime | None
+    profanity_exact_count: int = 0
+    profanity_prefix_count: int = 0
+    profanity_exceptions_count: int = 0
 
 
 @dataclass(slots=True)
@@ -1491,11 +1495,16 @@ def normalize_for_profanity(text: str) -> str:
 
 
 def detect_profanity(normalized: str) -> bool:
-    roots = (
-        "хуй", "пизд", "еб", "бля", "бле", "сук", "муд", "гандон",
-        "нах", "пох", "хер", "хрен", "шалав", "манд", "говн",
-    )
-    return any(root in normalized for root in roots)
+    if not normalized:
+        return False
+
+    if normalized in _PROFANITY_RUNTIME["exceptions"]:
+        return False
+
+    if any(word in normalized for word in _PROFANITY_RUNTIME["exact"]):
+        return True
+
+    return any(normalized.startswith(prefix) or prefix in normalized for prefix in _PROFANITY_RUNTIME["prefixes"])
 
 
 def detect_aggression_level(text: str) -> Literal["low", "high"]:
@@ -2127,6 +2136,22 @@ _AI_RUNTIME_ENABLED: bool = True
 _ADMIN_ALERT_NOTIFIER: Callable[[str], Awaitable[None]] | None = None
 _LAST_ERROR: str | None = None
 _LAST_ERROR_AT: datetime | None = None
+_PROFANITY_RUNTIME: dict[str, set[str]] = {"exact": set(), "prefixes": set(), "exceptions": set()}
+
+
+def reload_profanity_runtime() -> dict[str, int]:
+    """Перезагружает runtime-словарь мата и возвращает применённые размеры."""
+
+    global _PROFANITY_RUNTIME
+    _PROFANITY_RUNTIME = reload_profanity_runtime_dict()
+    return {
+        "exact": len(_PROFANITY_RUNTIME["exact"]),
+        "prefixes": len(_PROFANITY_RUNTIME["prefixes"]),
+        "exceptions": len(_PROFANITY_RUNTIME["exceptions"]),
+    }
+
+
+reload_profanity_runtime()
 
 
 async def _can_use_remote_ai(chat_id: int) -> tuple[bool, str | None]:
@@ -2151,7 +2176,13 @@ async def _add_remote_usage(chat_id: int, tokens: int) -> None:
 
 
 def get_ai_runtime_status() -> AiRuntimeStatus:
-    return AiRuntimeStatus(last_error=_LAST_ERROR, last_error_at=_LAST_ERROR_AT)
+    return AiRuntimeStatus(
+        last_error=_LAST_ERROR,
+        last_error_at=_LAST_ERROR_AT,
+        profanity_exact_count=len(_PROFANITY_RUNTIME["exact"]),
+        profanity_prefix_count=len(_PROFANITY_RUNTIME["prefixes"]),
+        profanity_exceptions_count=len(_PROFANITY_RUNTIME["exceptions"]),
+    )
 
 
 def resolve_provider_mode() -> Literal["remote", "stub"]:

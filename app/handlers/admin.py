@@ -35,13 +35,13 @@ from app.services.ai_module import (
     is_ai_runtime_enabled,
     set_ai_runtime_enabled,
     resolve_provider_mode,
+    reload_profanity_runtime,
 )
 from app.handlers.moderation import is_training_mode, set_training_mode
 from app.services.ai_usage import next_reset_delta
 from app.services.rag import add_rag_message, build_canonical_text, get_rag_count, systematize_rag
 
 from app.services.admin_stats_reset import reset_runtime_statistics
-from app.utils.profanity import load_profanity, load_profanity_exceptions
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -407,11 +407,12 @@ async def training_off(message: Message, bot: Bot) -> None:
 async def reload_profanity(message: Message, bot: Bot) -> None:
     if not await _ensure_admin(message, bot):
         return
-    words = load_profanity()
-    exceptions = load_profanity_exceptions()
+    runtime_sizes = reload_profanity_runtime()
     await message.reply(
-        "Словари перечитаны с диска. "
-        f"Мат-словарь: {len(words)}, исключения: {len(exceptions)}."
+        "Словари перечитаны и применены в AI runtime. "
+        f"exact: {runtime_sizes['exact']}, "
+        f"prefixes: {runtime_sizes['prefixes']}, "
+        f"exceptions: {runtime_sizes['exceptions']}."
     )
 
 
