@@ -27,7 +27,6 @@ from app.services.quiz import (
     award_winner_bonus_coins,
     build_answer_hint,
     build_session_stats,
-    can_start_quiz,
     check_answer,
     end_quiz_session,
     get_active_session,
@@ -37,7 +36,7 @@ from app.services.quiz import (
     get_random_question,
     is_quiz_finished,
     set_current_question,
-    start_quiz_session,
+    safe_start_quiz,
     winners_from_results,
 )
 from app.utils.admin import is_admin_message
@@ -144,13 +143,11 @@ async def _start_quiz(bot: Bot, chat_id: int, topic_id: int, actor: str) -> tupl
     _cancel_answer_grace(chat_id, topic_id)
 
     async for session in get_session():
-        can_start, reason = await can_start_quiz(session, chat_id, topic_id)
-        if not can_start:
+        quiz_session, reason = await safe_start_quiz(session, chat_id, topic_id)
+        if quiz_session is None:
             if actor == "авто":
                 await bot.send_message(settings.admin_log_chat_id, f"Автозапуск викторины отменён: {reason}")
             return False, reason
-
-        quiz_session = await start_quiz_session(session, chat_id, topic_id)
         question = await get_random_question(session, quiz_session)
         if not question:
             await bot.send_message(chat_id, "Вопросы закончились. Загрузите новую базу.", message_thread_id=topic_id)
