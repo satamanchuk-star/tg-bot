@@ -56,7 +56,15 @@ from app.services.games import (
 from app.services.health import get_health_state, update_heartbeat, update_notice
 from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
-from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, get_and_clear_response_log, set_ai_admin_notifier
+from app.services.ai_module import (
+    _ASSISTANT_CACHE,
+    clear_assistant_cache,
+    close_ai_client,
+    get_ai_client,
+    get_ai_usage_for_today,
+    get_and_clear_response_log,
+    set_ai_admin_notifier,
+)
 from app.services.daily_summary import build_ai_summary_context, build_daily_summary, build_response_report, render_daily_summary
 from app.services.daily_messages import send_morning_greeting, send_traffic_report
 from app.services.proactive import send_scheduled_greeting, send_weekly_update
@@ -113,10 +121,12 @@ class LoggingMiddleware(BaseMiddleware):
 
 
 MAX_RETRIES_ON_FLOOD = 3
+# Задержки повтора при сетевом таймауте: 2, 4, 8 сек (экспоненциальный backoff)
+_NETWORK_RETRY_DELAYS = (2, 4, 8)
 
 
 class RetryOnFloodSession(AiohttpSession):
-    """Автоматически повторяет запросы при TelegramRetryAfter (flood control)."""
+    """Повторяет запросы при flood control и временных сетевых ошибках."""
 
     async def make_request(
         self,
@@ -135,6 +145,15 @@ class RetryOnFloodSession(AiohttpSession):
                     e.retry_after, attempt, MAX_RETRIES_ON_FLOOD,
                 )
                 await asyncio.sleep(e.retry_after)
+            except TelegramNetworkError as e:
+                if attempt == MAX_RETRIES_ON_FLOOD:
+                    raise
+                delay = _NETWORK_RETRY_DELAYS[attempt - 1]
+                logger.warning(
+                    "TelegramNetworkError '%s', повтор через %s сек (попытка %d/%d)",
+                    e, delay, attempt, MAX_RETRIES_ON_FLOOD,
+                )
+                await asyncio.sleep(delay)
 
 
 OFFLINE_THRESHOLD_MIN = 30
@@ -589,11 +608,6 @@ async def send_weekly_leaderboard(bot: Bot) -> None:
 
 
 async def heartbeat_job(bot: Bot) -> None:
-    from app.services.ai_module import (
-        _ASSISTANT_CACHE,
-        get_ai_client,
-        get_ai_usage_for_today,
-    )
     now = datetime.now(timezone.utc)
     async for session in get_session():
         state = await get_health_state(session)
