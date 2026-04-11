@@ -8,7 +8,7 @@ import logging
 import random
 import re
 import time
-from collections import OrderedDict, deque
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Literal, Protocol
@@ -52,50 +52,6 @@ _CACHE_STOP_WORDS = {
 # Лог ответов бота (in-memory, для ежедневного отчёта)
 # ---------------------------------------------------------------------------
 _RESPONSE_LOG: deque[dict] = deque(maxlen=500)
-
-# ---------------------------------------------------------------------------
-# Дедупликация ответов по топику (in-memory, TTL 5 минут)
-# Ключ: (chat_id, topic_id) → (первые 80 символов ответа, timestamp)
-# Предотвращает отправку похожих ответов подряд в одном топике.
-# ---------------------------------------------------------------------------
-_LAST_REPLY_BY_TOPIC: dict[tuple[int, int | None], tuple[str, float]] = {}
-_REPLY_DEDUP_TTL = 300.0  # 5 минут
-_REPLY_SIMILARITY_CHARS = 80
-_REPLY_SIMILARITY_THRESHOLD = 0.75
-
-
-def _reply_is_duplicate(
-    chat_id: int,
-    topic_id: int | None,
-    reply: str,
-) -> bool:
-    """Возвращает True если ответ похож на предыдущий в этом топике (< 5 мин назад).
-
-    Метрика: доля совпадающих символов в первых _REPLY_SIMILARITY_CHARS символах.
-    """
-    key = (chat_id, topic_id)
-    now = time.monotonic()
-    entry = _LAST_REPLY_BY_TOPIC.get(key)
-    if entry is None:
-        return False
-    prev_head, ts = entry
-    if now - ts > _REPLY_DEDUP_TTL:
-        # TTL истёк — запись неактуальна
-        _LAST_REPLY_BY_TOPIC.pop(key, None)
-        return False
-    # Сравниваем первые N символов (нормализованные)
-    new_head = reply[:_REPLY_SIMILARITY_CHARS].lower()
-    prev_normalized = prev_head.lower()
-    if not new_head or not prev_normalized:
-        return False
-    matches = sum(a == b for a, b in zip(new_head, prev_normalized))
-    ratio = matches / max(len(new_head), len(prev_normalized))
-    return ratio >= _REPLY_SIMILARITY_THRESHOLD
-
-
-def _reply_record(chat_id: int, topic_id: int | None, reply: str) -> None:
-    """Записывает ответ для дедупликации."""
-    _LAST_REPLY_BY_TOPIC[(chat_id, topic_id)] = (reply[:_REPLY_SIMILARITY_CHARS], time.monotonic())
 
 
 def _log_response_event(
@@ -467,17 +423,7 @@ _FALLBACK_VARIANTS = (
 
 
 # Последний использованный style-hint per (chat_id, user_id) — чтобы не повторялся подряд.
-# Ограничен до 1000 записей через OrderedDict с eviction при превышении — защита
-# от утечки памяти при большом числе пользователей/чатов.
-_LAST_STYLE_HINT_BY_USER: OrderedDict[tuple[int, int], str] = OrderedDict()
-_LAST_STYLE_HINT_MAX_SIZE = 1000
-
-
-def _style_hint_set(key: tuple[int, int], value: str) -> None:
-    """Записывает style-hint с eviction при превышении лимита."""
-    _LAST_STYLE_HINT_BY_USER[key] = value
-    while len(_LAST_STYLE_HINT_BY_USER) > _LAST_STYLE_HINT_MAX_SIZE:
-        _LAST_STYLE_HINT_BY_USER.popitem(last=False)
+_LAST_STYLE_HINT_BY_USER: dict[tuple[int, int], str] = {}
 
 
 _SMALLTALK_PATTERNS = re.compile(
@@ -786,14 +732,6 @@ class StubAiProvider:
         return "{}"
 
 
-# ---------------------------------------------------------------------------
-# Circuit Breaker константы (in-memory, не env-переменные)
-# ---------------------------------------------------------------------------
-_CB_FAILURE_THRESHOLD = 3      # ошибок подряд → OPEN
-_CB_RECOVERY_TIMEOUT_SEC = 300  # 5 мин до HALF_OPEN
-_CB_HALF_OPEN_MAX_CALLS = 1    # проб в HALF_OPEN
-
-
 class OpenRouterProvider:
     """Почему: подключаем реальный ИИ через API без изменения публичных интерфейсов бота."""
 
@@ -807,66 +745,6 @@ class OpenRouterProvider:
         if self._model != settings.ai_model:
             logger.warning("AI model id normalized: %r -> %r", settings.ai_model, self._model)
         self._retries = max(0, settings.ai_retries)
-
-        # Circuit Breaker state (in-memory, сбрасывается при рестарте)
-        self._cb_state: Literal["CLOSED", "OPEN", "HALF_OPEN"] = "CLOSED"
-        self._cb_failures: int = 0
-        self._cb_opened_at: float | None = None
-
-    def get_circuit_breaker_state(self) -> str:
-        """Возвращает текущее состояние circuit breaker для диагностики."""
-        return self._cb_state
-
-    def _cb_record_failure(self) -> None:
-        """Записывает ошибку в circuit breaker; при достижении порога → OPEN."""
-        self._cb_failures += 1
-        if self._cb_state == "HALF_OPEN" or (
-            self._cb_state == "CLOSED" and self._cb_failures >= _CB_FAILURE_THRESHOLD
-        ):
-            prev_state = self._cb_state
-            self._cb_state = "OPEN"
-            self._cb_opened_at = time.monotonic()
-            logger.warning(
-                "AI circuit breaker открыт (%s→OPEN), %d ошибок подряд.",
-                prev_state, self._cb_failures,
-            )
-            if _ADMIN_ALERT_NOTIFIER is not None:
-                asyncio.ensure_future(
-                    _ADMIN_ALERT_NOTIFIER(
-                        f"⚠️ AI circuit breaker открыт, {self._cb_failures} ошибок подряд"
-                    )
-                )
-
-    def _cb_record_success(self) -> None:
-        """Записывает успех; если был HALF_OPEN — переходит в CLOSED."""
-        if self._cb_state == "HALF_OPEN":
-            logger.info("AI circuit breaker закрыт (HALF_OPEN→CLOSED), соединение восстановлено.")
-            if _ADMIN_ALERT_NOTIFIER is not None:
-                asyncio.ensure_future(
-                    _ADMIN_ALERT_NOTIFIER("✅ AI circuit breaker закрыт, соединение восстановлено")
-                )
-        self._cb_state = "CLOSED"
-        self._cb_failures = 0
-        self._cb_opened_at = None
-
-    def _cb_check_before_request(self) -> bool:
-        """Возвращает True если запрос разрешён, False — если CB заблокирован.
-
-        CLOSED → разрешён всегда.
-        OPEN → разрешён только если истёк _CB_RECOVERY_TIMEOUT_SEC (переход в HALF_OPEN).
-        HALF_OPEN → разрешён только первый пробный запрос.
-        """
-        if self._cb_state == "CLOSED":
-            return True
-        if self._cb_state == "OPEN":
-            elapsed = time.monotonic() - (self._cb_opened_at or 0)
-            if elapsed >= _CB_RECOVERY_TIMEOUT_SEC:
-                logger.info("AI circuit breaker: timeout истёк, переход OPEN→HALF_OPEN.")
-                self._cb_state = "HALF_OPEN"
-                return True
-            return False
-        # HALF_OPEN — пробный вызов уже разрешён
-        return True
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -902,11 +780,6 @@ class OpenRouterProvider:
     async def _chat_completion(self, messages: list[dict], *, chat_id: int, temperature: float = 0.8, bypass_limit: bool = False) -> tuple[str, int]:
         if not settings.ai_key:
             raise RuntimeError("AI_KEY не задан")
-
-        # Circuit breaker: если OPEN и timeout не истёк → немедленный fallback
-        if not self._cb_check_before_request():
-            raise RuntimeError("AI circuit breaker OPEN — запросы временно заблокированы")
-
         if not bypass_limit:
             allowed, reason = await _can_use_remote_ai(chat_id)
             if not allowed:
@@ -942,7 +815,6 @@ class OpenRouterProvider:
                     logger.warning("AI model switched to fallback for runtime stability: %r", model_id)
                     self._model = model_id
                 logger.info("AI response <- tokens=%s chat_id=%s", tokens, chat_id)
-                self._cb_record_success()
                 return content, tokens
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
@@ -976,18 +848,13 @@ class OpenRouterProvider:
                     used_fallback_model = True
                     continue
                 if error_hint:
-                    self._cb_record_failure()
                     raise RuntimeError(f"AI API вернул ошибку {status_code}: {error_hint}") from exc
-                self._cb_record_failure()
                 raise RuntimeError(f"AI API вернул ошибку {status_code}") from exc
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 if attempt >= self._retries:
-                    self._cb_record_failure()
                     raise RuntimeError("Сбой соединения с AI API") from exc
             except (ValueError, KeyError, TypeError) as exc:
-                self._cb_record_failure()
                 raise RuntimeError("Некорректный ответ AI API") from exc
-        self._cb_record_failure()
         raise RuntimeError("AI API недоступен")
 
     async def probe(self) -> AiProbeResult:
@@ -1113,7 +980,7 @@ class OpenRouterProvider:
         _prev_hint = _LAST_STYLE_HINT_BY_USER.get(_last_hint_key)
         _hint_pool = [h for h in style_hints if h != _prev_hint] or list(style_hints)
         chosen_hint = random.choice(_hint_pool).strip()
-        _style_hint_set(_last_hint_key, chosen_hint)
+        _LAST_STYLE_HINT_BY_USER[_last_hint_key] = chosen_hint
 
         resident_context = build_resident_context(safe_prompt, context=context)
 
@@ -1434,7 +1301,7 @@ class AiModuleClient:
         if user_id is not None:
             enriched_context = await _enrich_context(enriched_context, chat_id, user_id, topic_id)
         try:
-            reply = await asyncio.wait_for(
+            return await asyncio.wait_for(
                 self._provider.assistant_reply(
                     prompt, enriched_context, chat_id=chat_id,
                     user_id=user_id, topic_id=topic_id,
@@ -1449,18 +1316,7 @@ class AiModuleClient:
             places_context = await _get_places_context(prompt)
             rag_text = await _get_rag_context(chat_id, prompt)
             faq_answer = await _get_faq_answer(chat_id, prompt)
-            reply = build_local_assistant_reply(prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer)
-
-        # Дедупликация: если ответ слишком похож на предыдущий в этом топике
-        # (< 5 мин назад) — варьируем с fallback-фразой.
-        if _reply_is_duplicate(chat_id, topic_id, reply):
-            logger.info(
-                "DEDUP: похожий ответ уже был в этом топике, варьируем. chat=%s topic=%s",
-                chat_id, topic_id,
-            )
-            reply = random.choice(_FALLBACK_VARIANTS)
-        _reply_record(chat_id, topic_id, reply)
-        return reply
+            return build_local_assistant_reply(prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer)
 
     async def assistant_reply_with_history(
         self,
@@ -2272,12 +2128,8 @@ _ADMIN_ALERT_NOTIFIER: Callable[[str], Awaitable[None]] | None = None
 _LAST_ERROR: str | None = None
 _LAST_ERROR_AT: datetime | None = None
 
-# Флаг однократного предупреждения об 80% лимита за день (сбрасывается при рестарте/новом дне)
-_AI_LIMIT_ALERT_SENT_DATE: str | None = None
-
 
 async def _can_use_remote_ai(chat_id: int) -> tuple[bool, str | None]:
-    global _AI_LIMIT_ALERT_SENT_DATE
     date_key = now_tz().date().isoformat()
     async for session in get_session():
         allowed, reason = await can_consume_ai(
@@ -2287,23 +2139,6 @@ async def _can_use_remote_ai(chat_id: int) -> tuple[bool, str | None]:
             request_limit=settings.ai_daily_request_limit,
             token_limit=settings.ai_daily_token_limit,
         )
-        # Однократное предупреждение при достижении 80% дневного лимита запросов
-        if allowed and _AI_LIMIT_ALERT_SENT_DATE != date_key:
-            usage = await get_usage_stats(session, date_key=date_key, chat_id=chat_id)
-            threshold = 0.8 * settings.ai_daily_request_limit
-            if usage.requests_used >= threshold and _ADMIN_ALERT_NOTIFIER is not None:
-                _AI_LIMIT_ALERT_SENT_DATE = date_key
-                pct = int(usage.requests_used / settings.ai_daily_request_limit * 100)
-                asyncio.ensure_future(
-                    _ADMIN_ALERT_NOTIFIER(
-                        f"⚠️ AI лимит запросов: использовано {usage.requests_used}/"
-                        f"{settings.ai_daily_request_limit} ({pct}%) за сегодня"
-                    )
-                )
-                logger.warning(
-                    "AI usage warning: %d/%d requests used today (%d%%)",
-                    usage.requests_used, settings.ai_daily_request_limit, pct,
-                )
         return allowed, reason
     return False, "не удалось получить сессию БД"
 
