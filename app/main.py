@@ -974,28 +974,15 @@ async def on_startup(bot: Bot) -> None:
                 len(settings.bot_token),
             )
             break
-    try:
-        await init_db(engine)
-    except Exception:
-        logger.exception(
-            "Критическая ошибка: не удалось инициализировать БД. "
-            "Проверьте DATABASE_URL и права на директорию данных."
-        )
-        raise  # без БД бот работать не может
+    await init_db(engine)
     try:
         await cleanup_database()
     except Exception:  # noqa: BLE001 - не блокируем старт из-за не-критичной очистки
         logger.exception("Очистка БД при старте завершилась с ошибкой.")
     # Применяем миграции
-    try:
-        async for session in get_session():
-            await apply_v11_stats_reset(session)
-    except Exception:  # noqa: BLE001
-        logger.exception("Не удалось выполнить миграцию v1.1 (некритично, продолжаем).")
-    try:
-        await heartbeat_job(bot)
-    except Exception:  # noqa: BLE001
-        logger.exception("Ошибка heartbeat при старте (некритично, продолжаем).")
+    async for session in get_session():
+        await apply_v11_stats_reset(session)
+    await heartbeat_job(bot)
     if telegram_available:
         # Публичные команды для всех пользователей
         await bot.set_my_commands(
@@ -1091,10 +1078,7 @@ async def on_startup(bot: Bot) -> None:
     await _sync_places_from_sheets()
 
     # Возобновляем рулетку, если бот перезагрузился в игровое время
-    try:
-        await roulette.resume_roulette_if_needed(bot)
-    except Exception:  # noqa: BLE001
-        logger.exception("Не удалось возобновить рулетку при старте (некритично, продолжаем).")
+    await roulette.resume_roulette_if_needed(bot)
 
     # Инициализируем AI-клиент и логируем режим работы
     get_ai_client()
