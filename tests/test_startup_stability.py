@@ -91,6 +91,67 @@ def test_on_startup_does_not_crash_when_cleanup_fails(monkeypatch) -> None:
     asyncio.run(_run())
 
 
+def test_on_startup_collects_degradations_for_noncritical_steps(monkeypatch) -> None:
+    async def _run() -> None:
+        bot = AsyncMock()
+
+        class _DummyAiClient:
+            async def probe(self):
+                return type("Probe", (), {"ok": True, "latency_ms": 10, "details": "ok"})()
+
+        class _DummySession:
+            async def commit(self) -> None:
+                return None
+
+        class _DummyResidentKbLoader:
+            def __call__(self) -> None:
+                return None
+
+            def cache_clear(self) -> None:
+                return None
+
+        async def _session_gen():
+            yield _DummySession()
+
+        monkeypatch.setattr("app.main.init_db", AsyncMock())
+        monkeypatch.setattr(
+            "app.main.cleanup_database",
+            AsyncMock(side_effect=RuntimeError("cleanup failed")),
+        )
+        monkeypatch.setattr(
+            "app.main.apply_v11_stats_reset",
+            AsyncMock(side_effect=RuntimeError("flags failed")),
+        )
+        monkeypatch.setattr(
+            "app.main.heartbeat_job",
+            AsyncMock(side_effect=RuntimeError("heartbeat failed")),
+        )
+        monkeypatch.setattr(
+            "app.main._sync_places_from_sheets",
+            AsyncMock(side_effect=RuntimeError("sync failed")),
+        )
+        monkeypatch.setattr(
+            "app.main.roulette.resume_roulette_if_needed",
+            AsyncMock(side_effect=RuntimeError("roulette failed")),
+        )
+        monkeypatch.setattr("app.main.load_resident_kb", _DummyResidentKbLoader())
+        monkeypatch.setattr("app.main.get_session", _session_gen)
+        monkeypatch.setattr("app.main.get_ai_client", lambda: _DummyAiClient())
+        monkeypatch.setattr("app.main.set_ai_admin_notifier", lambda _fn: None)
+
+        await on_startup(bot)
+
+        startup_msg = bot.send_message.await_args_list[-1].args[1]
+        assert "Деградации запуска:" in startup_msg
+        assert "cleanup_database" in startup_msg
+        assert "apply_v11_stats_reset" in startup_msg
+        assert "heartbeat_job" in startup_msg
+        assert "_sync_places_from_sheets" in startup_msg
+        assert "resume_roulette_if_needed" in startup_msg
+
+    asyncio.run(_run())
+
+
 def test_main_does_not_raise_when_polling_network_error(monkeypatch) -> None:
     async def _run() -> None:
         from app import main as main_module

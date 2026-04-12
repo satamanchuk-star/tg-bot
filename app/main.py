@@ -899,6 +899,13 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
 
 
 async def on_startup(bot: Bot) -> None:
+    startup_degradations: list[str] = []
+
+    def _mark_degradation(step: str, exc: Exception) -> None:
+        reason = f"{type(exc).__name__}: {exc}"
+        startup_degradations.append(f"{step} — {reason}")
+        logger.warning("Нестартовавший некритичный шаг '%s': %s", step, reason)
+
     async def _admin_notifier(text: str) -> None:
         await bot.send_message(settings.admin_log_chat_id, f"⚠️ {text}")
 
@@ -1027,8 +1034,8 @@ async def on_startup(bot: Bot) -> None:
     # Проверяем и прогреваем каноническую базу знаний жителей
     try:
         load_resident_kb()
-    except Exception:
-        logger.exception("Не удалось загрузить базу знаний жителей (resident_kb.json).")
+    except Exception as exc:
+        _mark_degradation("load_resident_kb", exc)
 
     # Очистка устаревших и seed инфраструктуры из JSON
     try:
@@ -1039,11 +1046,14 @@ async def on_startup(bot: Bot) -> None:
             if purged or seeded:
                 await session.commit()
                 logger.info("Инфраструктура: удалено %s, добавлено %s объектов.", purged, seeded)
-    except Exception:
-        logger.exception("Ошибка seed инфраструктуры.")
+    except Exception as exc:
+        _mark_degradation("seed_places", exc)
 
     # Импорт инфраструктуры из Google Sheets (если настроен сервисный аккаунт)
-    await _sync_places_from_sheets()
+    try:
+        await _sync_places_from_sheets()
+    except Exception as exc:  # noqa: BLE001 - деградация допустима
+        _mark_degradation("_sync_places_from_sheets", exc)
 
     # Возобновляем рулетку, если бот перезагрузился в игровое время
     try:
@@ -1052,21 +1062,26 @@ async def on_startup(bot: Bot) -> None:
         logger.exception("Не удалось возобновить рулетку при старте (некритично, продолжаем).")
 
     # Инициализируем AI-клиент и логируем режим работы
-    get_ai_client()
-    if settings.ai_enabled and settings.ai_key:
-        source_note = " (по умолчанию, AI_MODEL не задан)" if settings.ai_model_is_default else ""
-        ai_mode = f"AI: OpenRouter ({settings.ai_model}){source_note}"
-        probe = await get_ai_client().probe()
-        if probe.ok:
-            ai_probe_note = f"API: ✅ доступен ({probe.latency_ms} ms)"
+    try:
+        get_ai_client()
+        if settings.ai_enabled and settings.ai_key:
+            source_note = " (по умолчанию, AI_MODEL не задан)" if settings.ai_model_is_default else ""
+            ai_mode = f"AI: OpenRouter ({settings.ai_model}){source_note}"
+            probe = await get_ai_client().probe()
+            if probe.ok:
+                ai_probe_note = f"API: ✅ доступен ({probe.latency_ms} ms)"
+            else:
+                ai_probe_note = f"API: ❌ недоступен — {probe.details}"
+            logger.info("AI probe: ok=%s details=%s latency_ms=%s", probe.ok, probe.details, probe.latency_ms)
+        elif not settings.ai_enabled:
+            ai_mode = "AI: отключен (AI_ENABLED=false)"
+            ai_probe_note = ""
         else:
-            ai_probe_note = f"API: ❌ недоступен — {probe.details}"
-        logger.info("AI probe: ok=%s details=%s latency_ms=%s", probe.ok, probe.details, probe.latency_ms)
-    elif not settings.ai_enabled:
-        ai_mode = "AI: отключен (AI_ENABLED=false)"
-        ai_probe_note = ""
-    else:
-        ai_mode = "AI: отключен (AI_KEY не задан)"
+            ai_mode = "AI: отключен (AI_KEY не задан)"
+            ai_probe_note = ""
+    except Exception as exc:  # noqa: BLE001 - деградация допустима
+        _mark_degradation("ai_client_probe", exc)
+        ai_mode = "AI: деградация (инициализация не удалась)"
         ai_probe_note = ""
     logger.info("AI модуль: %s", ai_mode)
     if telegram_available:
@@ -1075,6 +1090,9 @@ async def on_startup(bot: Bot) -> None:
             lines.append(tg_probe_note)
         if ai_probe_note:
             lines.append(ai_probe_note)
+        if startup_degradations:
+            lines.append("Деградации запуска:")
+            lines.extend(f"• {degradation}" for degradation in startup_degradations)
         await bot.send_message(settings.admin_log_chat_id, "\n".join(lines))
 
 
