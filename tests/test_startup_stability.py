@@ -182,6 +182,36 @@ def test_on_startup_runs_places_sync_in_background(monkeypatch) -> None:
     asyncio.run(_run())
 
 
+def test_on_startup_limits_ai_probe_time(monkeypatch) -> None:
+    async def _run() -> None:
+        from app import main as main_module
+
+        bot = AsyncMock()
+
+        async def _empty_async_gen():
+            if False:
+                yield
+
+        class SlowClient:
+            async def probe(self):  # type: ignore[no-untyped-def]
+                await asyncio.sleep(0.2)
+                return None
+
+        monkeypatch.setattr(main_module, "STARTUP_AI_PROBE_TIMEOUT_SECONDS", 0.01)
+        monkeypatch.setattr(main_module, "init_db", AsyncMock())
+        monkeypatch.setattr(main_module, "cleanup_database", AsyncMock())
+        monkeypatch.setattr(main_module, "get_session", _empty_async_gen)
+        monkeypatch.setattr(main_module, "heartbeat_job", AsyncMock())
+        monkeypatch.setattr(main_module, "get_ai_client", lambda: SlowClient())
+        monkeypatch.setattr(main_module, "set_ai_admin_notifier", lambda _fn: None)
+        monkeypatch.setattr(main_module.settings, "ai_enabled", True)
+        monkeypatch.setattr(main_module.settings, "ai_key", "test-key")
+
+        await asyncio.wait_for(main_module.on_startup(bot), timeout=0.2)
+
+    asyncio.run(_run())
+
+
 def test_main_does_not_raise_when_polling_api_error(monkeypatch) -> None:
     async def _run() -> None:
         from app import main as main_module

@@ -257,8 +257,8 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("AI_MODEL", "ai_model"),
     )
     ai_max_tokens: int = 800
-    ai_timeout_seconds: int = 20
-    ai_retries: int = 2
+    ai_timeout_seconds: int = 12
+    ai_retries: int = 1
     ai_daily_request_limit: int = 2000
     ai_daily_token_limit: int = 400000
     ai_feature_moderation: bool = True
