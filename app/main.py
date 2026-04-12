@@ -722,6 +722,19 @@ async def _sync_places_from_sheets() -> None:
         logger.exception("Ошибка импорта инфраструктуры из Google Sheets.")
 
 
+def _run_background_task(coro: Awaitable[None], *, name: str) -> None:
+    """Запускает фоновую задачу и логирует исключения без падения процесса."""
+    task = asyncio.create_task(coro, name=name)
+
+    def _on_done(done_task: asyncio.Task[None]) -> None:
+        try:
+            done_task.result()
+        except Exception:
+            logger.exception("Фоновая задача %s завершилась с ошибкой.", name)
+
+    task.add_done_callback(_on_done)
+
+
 async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
     scheduler.add_job(
@@ -1042,8 +1055,8 @@ async def on_startup(bot: Bot) -> None:
     except Exception:
         logger.exception("Ошибка seed инфраструктуры.")
 
-    # Импорт инфраструктуры из Google Sheets (если настроен сервисный аккаунт)
-    await _sync_places_from_sheets()
+    # Импорт инфраструктуры из Google Sheets не должен блокировать запуск polling.
+    _run_background_task(_sync_places_from_sheets(), name="startup_sync_places")
 
     # Возобновляем рулетку, если бот перезагрузился в игровое время
     try:

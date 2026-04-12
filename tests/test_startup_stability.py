@@ -153,6 +153,35 @@ def test_on_startup_does_not_crash_when_token_invalid(monkeypatch) -> None:
     asyncio.run(_run())
 
 
+def test_on_startup_runs_places_sync_in_background(monkeypatch) -> None:
+    async def _run() -> None:
+        bot = AsyncMock()
+
+        async def _empty_async_gen():
+            if False:
+                yield
+
+        scheduled_names: list[str | None] = []
+
+        def _fake_background_task(coro, *, name: str) -> None:
+            scheduled_names.append(name)
+            coro.close()
+
+        monkeypatch.setattr("app.main.init_db", AsyncMock())
+        monkeypatch.setattr("app.main.cleanup_database", AsyncMock())
+        monkeypatch.setattr("app.main.get_session", _empty_async_gen)
+        monkeypatch.setattr("app.main.heartbeat_job", AsyncMock())
+        monkeypatch.setattr("app.main.get_ai_client", lambda: object())
+        monkeypatch.setattr("app.main.set_ai_admin_notifier", lambda _fn: None)
+        monkeypatch.setattr("app.main._run_background_task", _fake_background_task)
+
+        await on_startup(bot)
+
+        assert scheduled_names == ["startup_sync_places"]
+
+    asyncio.run(_run())
+
+
 def test_main_does_not_raise_when_polling_api_error(monkeypatch) -> None:
     async def _run() -> None:
         from app import main as main_module
