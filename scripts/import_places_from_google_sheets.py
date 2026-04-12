@@ -128,7 +128,7 @@ def _load_rows() -> list[dict[str, str]]:
 
 async def run_import(*, dry_run: bool) -> ImportStats:
     logger.info("Старт импорта инфраструктуры из Google Sheets")
-    rows = _load_rows()
+    rows = await asyncio.to_thread(_load_rows)
     if not rows:
         logger.info("Импорт завершён: таблица пустая")
         return ImportStats()
