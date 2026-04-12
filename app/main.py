@@ -165,6 +165,7 @@ class RetryOnFloodSession(AiohttpSession):
 
 
 OFFLINE_THRESHOLD_MIN = 30
+STARTUP_AI_PROBE_TIMEOUT_SECONDS = 5
 
 
 async def init_db(async_engine: AsyncEngine) -> None:
@@ -1069,12 +1070,23 @@ async def on_startup(bot: Bot) -> None:
     if settings.ai_enabled and settings.ai_key:
         source_note = " (по умолчанию, AI_MODEL не задан)" if settings.ai_model_is_default else ""
         ai_mode = f"AI: OpenRouter ({settings.ai_model}){source_note}"
-        probe = await get_ai_client().probe()
-        if probe.ok:
-            ai_probe_note = f"API: ✅ доступен ({probe.latency_ms} ms)"
+        try:
+            probe = await asyncio.wait_for(
+                get_ai_client().probe(),
+                timeout=STARTUP_AI_PROBE_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            ai_probe_note = (
+                "API: ⚠️ проверка превышает лимит старта "
+                f"({STARTUP_AI_PROBE_TIMEOUT_SECONDS} c)"
+            )
+            logger.warning("AI probe timeout on startup after %s seconds.", STARTUP_AI_PROBE_TIMEOUT_SECONDS)
         else:
-            ai_probe_note = f"API: ❌ недоступен — {probe.details}"
-        logger.info("AI probe: ok=%s details=%s latency_ms=%s", probe.ok, probe.details, probe.latency_ms)
+            if probe.ok:
+                ai_probe_note = f"API: ✅ доступен ({probe.latency_ms} ms)"
+            else:
+                ai_probe_note = f"API: ❌ недоступен — {probe.details}"
+            logger.info("AI probe: ok=%s details=%s latency_ms=%s", probe.ok, probe.details, probe.latency_ms)
     elif not settings.ai_enabled:
         ai_mode = "AI: отключен (AI_ENABLED=false)"
         ai_probe_note = ""
