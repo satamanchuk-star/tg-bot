@@ -263,8 +263,11 @@ def test_openrouter_assistant_includes_resident_kb_in_context(monkeypatch) -> No
 
     monkeypatch.setattr(provider, "_chat_completion", _fake_completion)
 
-    asyncio.run(provider.assistant_reply("Какие в ЖК есть магазины?", [], chat_id=1))
-    asyncio.run(provider.aclose())
+    async def _run() -> None:
+        await provider.assistant_reply("Какие в ЖК есть магазины?", [], chat_id=1)
+        await provider.aclose()
+
+    asyncio.run(_run())
 
     assert len(captured) == 1
     system_text = " ".join(
