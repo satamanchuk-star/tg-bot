@@ -1093,16 +1093,15 @@ async def on_startup(bot: Bot) -> None:
         raise
     logger.info("⏱ init_db: %.2fs", _time.monotonic() - _step_t)
 
-    # ── БД: проверка целостности ─────────────────────────────────────────────
-    _step_t = _time.monotonic()
-    try:
-        await validate_db(engine)
-    except Exception:  # noqa: BLE001
-        logger.exception("Ошибка при проверке БД (некритично, продолжаем).")
-    logger.info("⏱ validate_db: %.2fs", _time.monotonic() - _step_t)
+    # ── БД: проверка целостности и очистка — в фон, не блокируем старт ────────
+    async def _bg_validate_and_cleanup() -> None:
+        try:
+            await validate_db(engine)
+        except Exception:  # noqa: BLE001
+            logger.exception("Ошибка при проверке БД (некритично).")
+        await cleanup_database()
 
-    # ── БД: очистка старых данных — в фон, не блокируем старт ───────────────
-    _run_background_task(cleanup_database(), name="startup_cleanup_database")
+    _run_background_task(_bg_validate_and_cleanup(), name="startup_validate_cleanup")
 
     # ── Миграции ─────────────────────────────────────────────────────────────
     _step_t = _time.monotonic()
@@ -1113,66 +1112,64 @@ async def on_startup(bot: Bot) -> None:
         logger.exception("Не удалось выполнить миграцию v1.1 (некритично, продолжаем).")
     logger.info("⏱ migrations: %.2fs", _time.monotonic() - _step_t)
 
-    # ── Heartbeat ────────────────────────────────────────────────────────────
-    _step_t = _time.monotonic()
-    try:
-        await heartbeat_job(bot)
-    except Exception:  # noqa: BLE001
-        logger.exception("Ошибка heartbeat при старте (некритично, продолжаем).")
-    logger.info("⏱ heartbeat: %.2fs", _time.monotonic() - _step_t)
+    # ── Heartbeat — в фон, не блокируем старт ───────────────────────────────
+    _run_background_task(heartbeat_job(bot), name="startup_heartbeat")
 
-    # ── Команды бота в меню Telegram ─────────────────────────────────────────
+    # ── Команды бота в меню Telegram — оба вызова параллельно ────────────────
     _step_t = _time.monotonic()
     if telegram_available:
-        # Публичные команды для всех пользователей
-        await bot.set_my_commands(
-            [
-                BotCommand(command="help", description="Справка и навигация по форуму"),
-                BotCommand(command="rules", description="Правила нашего сообщества"),
-                BotCommand(command="ai", description="Задать вопрос Жаботу"),
-                BotCommand(command="21", description="Играть в блэкджек"),
-                BotCommand(command="21top", description="Топ игроков недели"),
-                BotCommand(command="roulette", description="Играть в рулетку"),
-                BotCommand(command="bet", description="Сделать ставку в рулетке"),
-                BotCommand(command="score", description="Мои монеты и статистика"),
-                BotCommand(command="bal", description="Мой счёт в викторине"),
-                BotCommand(command="topumnij", description="Топ знатоков викторины"),
-            ],
-        )
-        # Команды для администраторов форума (видны только админам)
-        try:
+        async def _set_public_commands() -> None:
             await bot.set_my_commands(
                 [
-                    BotCommand(command="admin", description="📋 Меню всех админ-команд"),
-                    BotCommand(command="mute", description="Замьютить пользователя (реплай)"),
-                    BotCommand(command="unmute", description="Снять мут (реплай)"),
-                    BotCommand(command="ban", description="Забанить пользователя (реплай)"),
-                    BotCommand(command="unban", description="Снять бан (реплай)"),
-                    BotCommand(command="strike", description="Выдать страйк (реплай)"),
-                    BotCommand(command="addcoins", description="Начислить монеты (реплай)"),
-                    BotCommand(command="ai_status", description="Статус и диагностика ИИ"),
-                    BotCommand(command="ai_probe", description="AI probe — проверка 3 слоёв"),
-                    BotCommand(command="ai_on", description="Включить AI runtime"),
-                    BotCommand(command="ai_off", description="Выключить AI runtime"),
-                    BotCommand(command="training_on", description="Включить режим обучения"),
-                    BotCommand(command="training_off", description="Выключить режим обучения"),
-                    BotCommand(command="reload_profanity", description="Перечитать мат-словари"),
-                    BotCommand(command="reset_routing_state", description="Сбросить ожидания роутинга"),
-                    BotCommand(command="reset_stats", description="Сбросить статистику"),
-                    BotCommand(command="form", description="Форма для шлагбаума"),
-                    BotCommand(command="text", description="Текст от лица бота"),
-                    BotCommand(command="umnij_start", description="Запустить викторину"),
-                    BotCommand(command="rag_bot", description="Добавить запись в RAG базу"),
-                    BotCommand(command="rag_sync", description="Систематизировать RAG базу"),
-                    BotCommand(command="restart_jobs", description="Перезапуск зависших задач"),
-                    BotCommand(command="shutdown_bot", description="⚠️ Остановить бота"),
+                    BotCommand(command="help", description="Справка и навигация по форуму"),
+                    BotCommand(command="rules", description="Правила нашего сообщества"),
+                    BotCommand(command="ai", description="Задать вопрос Жаботу"),
+                    BotCommand(command="21", description="Играть в блэкджек"),
+                    BotCommand(command="21top", description="Топ игроков недели"),
+                    BotCommand(command="roulette", description="Играть в рулетку"),
+                    BotCommand(command="bet", description="Сделать ставку в рулетке"),
+                    BotCommand(command="score", description="Мои монеты и статистика"),
+                    BotCommand(command="bal", description="Мой счёт в викторине"),
+                    BotCommand(command="topumnij", description="Топ знатоков викторины"),
                 ],
-                scope=BotCommandScopeChatAdministrators(
-                    chat_id=settings.forum_chat_id,
-                ),
             )
-        except Exception:  # noqa: BLE001 - не блокируем старт, если не удалось зарегистрировать
-            logger.warning("Не удалось зарегистрировать админ-команды в Telegram меню.")
+
+        async def _set_admin_commands() -> None:
+            try:
+                await bot.set_my_commands(
+                    [
+                        BotCommand(command="admin", description="📋 Меню всех админ-команд"),
+                        BotCommand(command="mute", description="Замьютить пользователя (реплай)"),
+                        BotCommand(command="unmute", description="Снять мут (реплай)"),
+                        BotCommand(command="ban", description="Забанить пользователя (реплай)"),
+                        BotCommand(command="unban", description="Снять бан (реплай)"),
+                        BotCommand(command="strike", description="Выдать страйк (реплай)"),
+                        BotCommand(command="addcoins", description="Начислить монеты (реплай)"),
+                        BotCommand(command="ai_status", description="Статус и диагностика ИИ"),
+                        BotCommand(command="ai_probe", description="AI probe — проверка 3 слоёв"),
+                        BotCommand(command="ai_on", description="Включить AI runtime"),
+                        BotCommand(command="ai_off", description="Выключить AI runtime"),
+                        BotCommand(command="training_on", description="Включить режим обучения"),
+                        BotCommand(command="training_off", description="Выключить режим обучения"),
+                        BotCommand(command="reload_profanity", description="Перечитать мат-словари"),
+                        BotCommand(command="reset_routing_state", description="Сбросить ожидания роутинга"),
+                        BotCommand(command="reset_stats", description="Сбросить статистику"),
+                        BotCommand(command="form", description="Форма для шлагбаума"),
+                        BotCommand(command="text", description="Текст от лица бота"),
+                        BotCommand(command="umnij_start", description="Запустить викторину"),
+                        BotCommand(command="rag_bot", description="Добавить запись в RAG базу"),
+                        BotCommand(command="rag_sync", description="Систематизировать RAG базу"),
+                        BotCommand(command="restart_jobs", description="Перезапуск зависших задач"),
+                        BotCommand(command="shutdown_bot", description="⚠️ Остановить бота"),
+                    ],
+                    scope=BotCommandScopeChatAdministrators(
+                        chat_id=settings.forum_chat_id,
+                    ),
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("Не удалось зарегистрировать админ-команды в Telegram меню.")
+
+        await asyncio.gather(_set_public_commands(), _set_admin_commands())
     logger.info("⏱ set_commands: %.2fs", _time.monotonic() - _step_t)
 
     # ── Кэши и база знаний ───────────────────────────────────────────────────
@@ -1217,13 +1214,8 @@ async def on_startup(bot: Bot) -> None:
     # ── Google Sheets — в фон ────────────────────────────────────────────────
     _run_background_task(_sync_places_from_sheets(), name="startup_sync_places")
 
-    # ── Пропущенные лотереи ──────────────────────────────────────────────────
-    _step_t = _time.monotonic()
-    try:
-        await recover_missed_lottery_draws(bot)
-    except Exception:  # noqa: BLE001
-        logger.exception("Не удалось провести пропущенные розыгрыши лотереи (некритично, продолжаем).")
-    logger.info("⏱ lottery_recovery: %.2fs", _time.monotonic() - _step_t)
+    # ── Пропущенные лотереи — в фон, не блокируем старт ────────────────────
+    _run_background_task(recover_missed_lottery_draws(bot), name="startup_lottery_recovery")
 
     # ── Рулетка ──────────────────────────────────────────────────────────────
     _step_t = _time.monotonic()

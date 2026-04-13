@@ -49,8 +49,8 @@ def test_second_call_with_same_message_id_is_skipped(monkeypatch) -> None:
     first = asyncio.run(moderation.run_moderation(message, bot))
     second = asyncio.run(moderation.run_moderation(message, bot))
 
-    assert first is False
-    assert second is False
+    assert first == 0
+    assert second == 0
     assert ai_moderate.await_count == 1
 
 
@@ -67,7 +67,7 @@ def test_dedup_cache_is_trimmed_when_overflow(monkeypatch) -> None:
     monkeypatch.setattr(moderation, "get_ai_client", lambda: SimpleNamespace(moderate=ai_moderate))
     monkeypatch.setattr(moderation.settings, "ai_feature_moderation", True)
 
-    moderation._MODERATED_MSG_IDS.update(range(1, moderation._MODERATED_MSG_IDS_MAX + 2))
+    moderation._MODERATED_MSG_IDS.update({i: 0.0 for i in range(1, moderation._MODERATED_MSG_IDS_MAX + 2)})
     before = len(moderation._MODERATED_MSG_IDS)
 
     asyncio.run(moderation.run_moderation(_build_message(message_id=999999), AsyncMock()))
