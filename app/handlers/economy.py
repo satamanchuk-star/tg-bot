@@ -1,4 +1,4 @@
-"""Почему: лотерея и доработки бота — осмысленная трата монет жителями."""
+"""Почему: доработки бота — осмысленная трата монет жителями."""
 
 from __future__ import annotations
 
@@ -20,12 +20,6 @@ from app.services.improvements import (
     get_active_improvements,
     vote_for_improvement,
 )
-from app.services.lottery import (
-    TICKET_COST,
-    buy_ticket,
-    current_week_key,
-    get_current_pot,
-)
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -40,139 +34,6 @@ class _PendingImprovementFilter(BaseFilter):
         if message.from_user is None:
             return False
         return message.from_user.id in _PENDING_IMPROVEMENT
-
-
-# ──────────────────────────────────────────────────────────
-# ЛОТЕРЕЯ
-# ──────────────────────────────────────────────────────────
-
-@router.message(Command("лотерея", "lottery"))
-async def lottery_command(message: Message) -> None:
-    """Купить лотерейные билеты на текущую неделю. Пример: /лотерея 5"""
-    if message.from_user is None:
-        return
-
-    # Лотерея работает только в топике «Игры»
-    if (settings.topic_games is None
-            or message.chat.id != settings.forum_chat_id
-            or message.message_thread_id != settings.topic_games):
-        await message.reply("Билеты продаются только в топике «Игры» 🎮")
-        return
-
-    # Разбираем количество билетов из аргумента команды
-    count = 1
-    text = (message.text or "").strip()
-    parts = text.split(maxsplit=1)
-    if len(parts) > 1:
-        arg = parts[1].strip()
-        if arg.isdigit() and int(arg) > 0:
-            count = int(arg)
-        else:
-            await message.reply(
-                f"Укажите целое положительное число билетов.\n"
-                f"Пример: /лотерея 3"
-            )
-            return
-
-    # Ограничение: не более 50 билетов за раз
-    MAX_PER_COMMAND = 50
-    if count > MAX_PER_COMMAND:
-        await message.reply(f"Максимум {MAX_PER_COMMAND} билетов за один раз.")
-        return
-
-    user_id = message.from_user.id
-    user_name = message.from_user.full_name
-
-    async for session in get_session():
-        pot, participants, tickets_count = await get_current_pot(session, settings.forum_chat_id)
-
-        bought = 0
-        last_balance = 0
-        for _ in range(count):
-            result, extra = await buy_ticket(
-                session,
-                user_id=user_id,
-                chat_id=settings.forum_chat_id,
-                user_name=user_name,
-            )
-            if result is None:
-                # Монеты закончились — прерываем цикл
-                balance = int(extra.split(":")[1]) if ":" in extra else 0
-                if bought == 0:
-                    await message.reply(
-                        f"Недостаточно монет.\n"
-                        f"Цена билета: {TICKET_COST} монет, у вас: {balance}.\n"
-                        f"Зарабатывайте в /21, викторине и рулетке."
-                    )
-                    return
-                last_balance = balance
-                break
-            bought += 1
-            last_balance = extra  # new_balance при успехе
-
-        await session.commit()
-        new_pot = pot + TICKET_COST * bought
-        new_tickets = tickets_count + bought
-        is_new_participant = tickets_count == 0
-        new_participants = participants + (1 if is_new_participant else 0)
-
-    if bought < count:
-        await message.reply(
-            f"Куплено {bought} из {count} билетов — монеты закончились.\n\n"
-            f"Неделя: {current_week_key()}\n"
-            f"Банк: {new_pot} монет | Участников: {new_participants}\n"
-            f"Ваш остаток: {last_balance} монет\n\n"
-            f"Розыгрыш — воскресенье в 11:00. Узнать банк: /банк"
-        )
-    elif bought == 1:
-        await message.reply(
-            f"Билет #{new_tickets} куплен!\n\n"
-            f"Неделя: {current_week_key()}\n"
-            f"Банк: {new_pot} монет | Участников: {new_participants}\n"
-            f"Ваш остаток: {last_balance} монет\n\n"
-            f"Покупайте ещё — каждый билет увеличивает ваш шанс выиграть!\n"
-            f"Розыгрыш — воскресенье в 11:00. Узнать банк: /банк"
-        )
-    else:
-        await message.reply(
-            f"Куплено {bought} билетов (#{tickets_count + 1}–#{new_tickets})!\n\n"
-            f"Неделя: {current_week_key()}\n"
-            f"Банк: {new_pot} монет | Участников: {new_participants}\n"
-            f"Ваш остаток: {last_balance} монет\n\n"
-            f"Розыгрыш — воскресенье в 11:00. Узнать банк: /банк"
-        )
-
-
-@router.message(Command("банк", "jackpot"))
-async def jackpot_command(message: Message) -> None:
-    """Показывает текущий банк лотереи."""
-    # Работает только в топике «Игры»
-    if (settings.topic_games is None
-            or message.chat.id != settings.forum_chat_id
-            or message.message_thread_id != settings.topic_games):
-        await message.reply("Лотерея доступна только в топике «Игры» 🎮")
-        return
-
-    async for session in get_session():
-        pot, participants, tickets_count = await get_current_pot(session, settings.forum_chat_id)
-
-    if tickets_count == 0:
-        await message.reply(
-            f"Лотерея этой недели ещё не началась.\n\n"
-            f"Купите первый билет: /лотерея\n"
-            f"Цена: {TICKET_COST} монет — количество билетов не ограничено!\n"
-            f"Розыгрыш — воскресенье в 11:00."
-        )
-        return
-
-    await message.reply(
-        f"Лотерея недели {current_week_key()}\n\n"
-        f"Банк: {pot} монет\n"
-        f"Участников: {participants}\n"
-        f"Билетов куплено: {tickets_count}\n\n"
-        f"Купить ещё: /лотерея ({TICKET_COST} монет)\n"
-        f"Розыгрыш — воскресенье в 11:00."
-    )
 
 
 # ──────────────────────────────────────────────────────────
@@ -266,7 +127,7 @@ async def improvement_text_handler(message: Message, bot: Bot) -> None:
             await message.reply(
                 f"Недостаточно монет.\n"
                 f"Нужно: {IMPROVEMENT_CREATE_COST} монет, у вас: {balance}.\n"
-                f"Зарабатывайте в /21, викторине и рулетке."
+                f"Зарабатывайте в /21 и рулетке."
             )
             return
         improvement = result

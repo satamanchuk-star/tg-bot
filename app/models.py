@@ -351,20 +351,6 @@ class ModerationCalibration(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
-class LotteryTicket(Base):
-    """Почему: лотерея позволяет жителям тратить монеты с азартом и общим событием."""
-    __tablename__ = "lottery_tickets"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(Integer, index=True)
-    chat_id: Mapped[int] = mapped_column(Integer, index=True)
-    user_name: Mapped[str | None] = mapped_column(Text, nullable=True)
-    coins_bet: Mapped[int] = mapped_column(Integer)
-    # Ключ недели: "2026-W13" — для группировки розыгрышей
-    week_key: Mapped[str] = mapped_column(String(10), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-
 class BotImprovement(Base):
     """Почему: жители тратят монеты на реальные доработки бота через коллективное голосование."""
     __tablename__ = "bot_improvements"
