@@ -89,7 +89,11 @@ def _display_name(message: Message) -> str | None:
 async def announce_quiz_soon(bot: Bot) -> None:
     if settings.topic_games is None:
         return
-    await bot.send_message(settings.forum_chat_id, next(_MAIN_CHAT_INVITES))
+    # Анонс в General может упасть (топик закрыт) — не ломаем анонс в игровом топике
+    try:
+        await bot.send_message(settings.forum_chat_id, next(_MAIN_CHAT_INVITES))
+    except Exception:
+        logger.warning("Не удалось отправить анонс викторины в General-топик.")
     await bot.send_message(
         settings.forum_chat_id,
         next(_TOPIC_INVITES),

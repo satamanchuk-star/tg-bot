@@ -6,7 +6,7 @@ import logging
 import random
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import LotteryTicket, UserStat
@@ -136,3 +136,22 @@ async def draw_winner(
         "tickets": len(tickets),
         "week_key": week_key,
     }
+
+
+async def get_undrawn_week_keys(session: AsyncSession, chat_id: int) -> list[str]:
+    """Возвращает week_key прошлых недель, по которым не был проведён розыгрыш.
+
+    Логика: если для week_key есть билеты, но он не совпадает с текущей неделей,
+    значит розыгрыш был пропущен (бот не работал в воскресенье).
+    """
+    current_wk = current_week_key()
+    result = await session.execute(
+        select(LotteryTicket.week_key)
+        .where(
+            LotteryTicket.chat_id == chat_id,
+            LotteryTicket.week_key != current_wk,
+        )
+        .group_by(LotteryTicket.week_key)
+        .having(func.count(func.distinct(LotteryTicket.user_id)) >= MIN_PARTICIPANTS)
+    )
+    return [row[0] for row in result.fetchall()]

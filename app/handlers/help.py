@@ -1303,9 +1303,9 @@ async def mention_help(message: Message, bot: Bot) -> None:
         from app.handlers.moderation import run_moderation
 
         try:
-            moderated = await run_moderation(message, bot)
-            if moderated:
-                logger.info("OUT: MENTION_REPLY_BLOCKED_BY_MODERATION")
+            mod_severity = await run_moderation(message, bot)
+            if mod_severity >= 2:
+                logger.info("OUT: MENTION_REPLY_BLOCKED_BY_MODERATION (severity=%d)", mod_severity)
                 return  # сообщение нарушает правила, ассистент не отвечает
         except Exception:
             logger.exception("Ошибка модерации при обработке упоминания, продолжаем ответ.")

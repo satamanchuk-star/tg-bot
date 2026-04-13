@@ -606,7 +606,11 @@ async def announce_roulette_soon(bot: Bot) -> None:
     """Анонс рулетки за 5 минут до старта."""
     if settings.topic_games is None:
         return
-    await bot.send_message(settings.forum_chat_id, next(_ROULETTE_MAIN_CHAT_INVITES))
+    # Анонс в General может упасть (топик закрыт) — не ломаем анонс в игровом топике
+    try:
+        await bot.send_message(settings.forum_chat_id, next(_ROULETTE_MAIN_CHAT_INVITES))
+    except Exception:
+        logger.warning("Не удалось отправить анонс рулетки в General-топик.")
     await bot.send_message(
         settings.forum_chat_id,
         next(_ROULETTE_TOPIC_INVITES),

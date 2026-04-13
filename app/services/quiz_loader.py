@@ -11,7 +11,7 @@ from aiogram import Bot
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import QuizQuestion
+from app.models import QuizQuestion, QuizUsedQuestion
 
 _QUIZ_XLSX_PRIMARY = Path(__file__).resolve().parents[2] / "quiz_questions_normalized.xlsx"
 _QUIZ_XLSX_FALLBACK = Path(__file__).resolve().parents[2] / "viktorinavopros_QA.xlsx"
@@ -106,6 +106,9 @@ async def sync_questions_from_xlsx(session: AsyncSession) -> tuple[int, int]:
         unique.append((question, answer))
 
     await session.execute(delete(QuizQuestion))
+    # Сбрасываем список использованных вопросов, чтобы все загруженные
+    # вопросы снова стали доступны для викторины
+    await session.execute(delete(QuizUsedQuestion))
     for question, answer in unique:
         session.add(QuizQuestion(question=question, answer=answer))
     await session.commit()

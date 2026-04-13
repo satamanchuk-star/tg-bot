@@ -182,7 +182,7 @@ async def send_rules(message: Message) -> None:
     await message.reply("Пожалуйста, прочитай правила в закрепленном сообщении.")
 
 
-async def run_moderation(message: Message, bot: Bot) -> bool:
+async def run_moderation(message: Message, bot: Bot) -> int:
     """Проверяет сообщение на нарушения и применяет модерацию по severity.
 
     severity 0 (L0): ничего
@@ -192,19 +192,20 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
 
     Пороги счётчика: 3 → мут 24ч, 5 → бан.
 
-    Возвращает True, если сообщение было модерировано (severity >= 1).
+    Возвращает уровень severity (0 = не модерировано, 1/2/3 = уровень нарушения).
+    Вызывающий код может сам решать, блокировать ли ответ (обычно только при severity >= 2).
     """
     if message.chat.id != settings.forum_chat_id:
-        return False
+        return 0
     if message.from_user is None or message.text is None:
-        return False
+        return 0
 
     # Предотвращаем двойную модерацию одного сообщения (mention_help + moderate_message)
     if _is_already_moderated(message.message_id):
-        return False
+        return 0
 
     if await is_admin(bot, settings.forum_chat_id, message.from_user.id):
-        return False
+        return 0
 
     text = message.text
     user_id = message.from_user.id
@@ -218,7 +219,7 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
         )
         await _warn_user(message, "ссылки разрешены только в формате Telegram.", bot)
         await _store_mod_event(chat_id, user_id, "delete", 1, message_id=message.message_id)
-        return True
+        return 2
 
     # Загружаем контекст разговора из того же топика
     topic_context = await _get_topic_context(chat_id, message.message_thread_id)
@@ -253,17 +254,18 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
     if is_training_mode():
         if severity >= 1:
             await _send_training_sample(message, bot, severity, violation_type, confidence)
-        return False
+        return 0
 
     # L0: ничего
     if severity == 0:
         # Flood-проверка (не связана с AI severity)
-        return await _check_flood(message, bot)
+        flood = await _check_flood(message, bot)
+        return 2 if flood else 0
 
     # L1: мягкое предупреждение, без счётчика
     if severity == 1:
         await _warn_user(message, random.choice(_SOFT_WARNINGS), bot)
-        return True
+        return 1
 
     # L2: жёсткое предупреждение + счётчик +1, без удаления
     if severity == 2:
@@ -277,7 +279,7 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
         warn_text = random.choice(_HARD_WARNINGS).format(count=strike_count)
         await _warn_user(message, warn_text, bot)
         await _apply_strike_threshold(bot, message, user_id, strike_count)
-        return True
+        return 2
 
     # L3: удаление + счётчик +1 + немедленный мут + уведомление админа
     if severity >= 3:
@@ -319,9 +321,9 @@ async def run_moderation(message: Message, bot: Bot) -> bool:
             log_ctx="L3 admin notify",
         )
         await _apply_strike_threshold(bot, message, user_id, strike_count)
-        return True
+        return 3
 
-    return False
+    return 0
 
 
 async def _apply_strike_threshold(bot: Bot, message: Message, user_id: int, strike_count: int) -> None:
