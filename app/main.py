@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from logging.handlers import RotatingFileHandler
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -68,6 +69,29 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+def _setup_file_logging() -> None:
+    """Добавляет RotatingFileHandler — пишем лог в файл рядом с БД."""
+    log_dir = settings.data_dir
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "bot.log"
+    handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,  # 10 МБ на файл
+        backupCount=5,
+        encoding="utf-8",
+    )
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter(
+        fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    logging.getLogger().addHandler(handler)
+    logger.info("Файловый лог: %s (ротация 10 МБ × 5 файлов)", log_file)
+
+
+_setup_file_logging()
 
 HEARTBEAT_INTERVAL_MIN = 10
 STOP_FLAG = settings.data_dir / ".stopped"
@@ -334,6 +358,40 @@ async def init_db(async_engine: AsyncEngine) -> None:
 
 
         await conn.run_sync(_ensure_columns)
+
+
+async def validate_db(async_engine: AsyncEngine) -> None:
+    """Проверяет целостность БД и логирует ключевые параметры при старте."""
+    logger.info("=== Проверка БД ===")
+    async with async_engine.begin() as conn:
+        if settings.database_url.startswith("sqlite+"):
+            # Целостность файла
+            rows = (await conn.execute(text("PRAGMA integrity_check"))).fetchall()
+            status = rows[0][0] if rows else "unknown"
+            if status == "ok":
+                logger.info("БД integrity_check: ok")
+            else:
+                details = "; ".join(r[0] for r in rows)
+                logger.error("БД integrity_check ПРОВАЛЕНА: %s", details)
+
+            # Режим журнала (ожидаем WAL)
+            jm = (await conn.execute(text("PRAGMA journal_mode"))).scalar()
+            logger.info("БД journal_mode: %s", jm)
+
+            # Примерный размер
+            page_count = (await conn.execute(text("PRAGMA page_count"))).scalar() or 0
+            page_size = (await conn.execute(text("PRAGMA page_size"))).scalar() or 0
+            db_size_kb = page_count * page_size // 1024
+            logger.info("БД размер: ~%d КБ (%d страниц)", db_size_kb, page_count)
+
+        # Список таблиц
+        def _list_tables(sync_conn: object) -> list[str]:
+            return inspect(sync_conn).get_table_names()
+
+        tables = await conn.run_sync(_list_tables)
+        logger.info("БД таблицы (%d): %s", len(tables), ", ".join(sorted(tables)))
+
+    logger.info("=== Проверка БД завершена ===")
 
 
 async def apply_v11_stats_reset(session: AsyncSession) -> None:
@@ -1004,6 +1062,10 @@ async def on_startup(bot: Bot) -> None:
             "Проверьте DATABASE_URL и права на директорию данных."
         )
         raise
+    try:
+        await validate_db(engine)
+    except Exception:  # noqa: BLE001
+        logger.exception("Ошибка при проверке БД (некритично, продолжаем).")
     try:
         await cleanup_database()
     except Exception:  # noqa: BLE001 - не блокируем старт из-за не-критичной очистки
