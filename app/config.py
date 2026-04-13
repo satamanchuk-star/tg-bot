@@ -263,7 +263,6 @@ class Settings(BaseSettings):
     ai_daily_token_limit: int = 400000
     ai_feature_moderation: bool = True
     ai_feature_assistant: bool = True
-    ai_feature_quiz: bool = True
     ai_feature_web_search: bool = True
     ai_feature_daily_summary: bool = True
     # Проактивный режим: бот сам подсказывает, когда может помочь

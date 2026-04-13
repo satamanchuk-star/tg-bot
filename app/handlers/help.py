@@ -171,14 +171,10 @@ HELP_MENU_TEXT = (
     "• Упомяни меня или напиши вопрос — отвечу с помощью AI\n\n"
     "<b>Игры (зарабатывай монеты!)</b>\n"
     "• /21 — блэкджек (22:00–00:00)\n"
-    "• /umnij_start — викторина (20:00)\n"
     "• /roulette — рулетка (21:00–22:00)\n"
     "• /score — твой баланс и статистика\n"
     "• /21top — топ по монетам\n"
-    "• /topumnij — топ викторины\n\n"
     "<b>Трать монеты</b>\n"
-    "• /лотерея — купить билет (10 монет, розыгрыш каждое воскресенье в 11:00)\n"
-    "• /банк — текущий джекпот и участники\n"
     "• /доработка — предложить улучшение бота (1 раз в месяц, 50 монет)\n"
     "• /доработки — список активных доработок с голосованием\n\n"
     "Выберите тему форума или воспользуйтесь советником «Куда писать?»."
@@ -556,11 +552,7 @@ _ABILITIES_CONTEXT = """
 - /roulette — рулетка (каждый день 21:00–22:00, ставки от 10 монет)
 - /score — твой баланс монет и статистика
 - /21top — топ игроков по монетам
-- /topumnij — топ знатоков викторины
-
 ТРАТА МОНЕТ:
-- /лотерея — купить лотерейный билет (10 монет, количество не ограничено, розыгрыш каждое воскресенье в 11:00)
-- /банк — текущий джекпот и число участников лотереи
 - /доработка — предложить улучшение бота (50 монет, 1 раз в месяц)
 - /доработки — список активных предложений с голосованием (10 монет за голос)
 
@@ -1247,31 +1239,6 @@ async def mention_help(message: Message, bot: Bot) -> None:
         and message.message_thread_id == settings.topic_rides
     ):
         return
-
-    # Не отв��чаем на упоминания в игровом топике, если идёт викторина
-    if (
-        message.chat.id == settings.forum_chat_id
-        and settings.topic_games is not None
-        and message.message_thread_id == settings.topic_games
-    ):
-        try:
-            from app.handlers.quiz import _session_results, _question_started_at
-            from app.services.quiz import get_active_session
-            key = (settings.forum_chat_id, settings.topic_games)
-            # Быстрая проверка по in-memory состоянию
-            if key in _question_started_at and _question_started_at[key] is not None:
-                logger.info("OUT: MENTION_SKIPPED_QUIZ_ACTIVE (in-memory)")
-                return
-            # Проверка по БД на случай если in-memory не актуально
-            async for session in get_session():
-                quiz_session = await get_active_session(
-                    session, settings.forum_chat_id, settings.topic_games,
-                )
-                if quiz_session is not None:
-                    logger.info("OUT: MENTION_SKIPPED_QUIZ_ACTIVE (db)")
-                    return
-        except Exception:
-            logger.warning("Не удалось проверить активность викторины при упоминании")
 
     # Помечаем сообщение как обработанное, чтобы не обрабатывать дважды
     message_id = getattr(message, "message_id", None)
