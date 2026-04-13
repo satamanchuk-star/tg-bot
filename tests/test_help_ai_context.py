@@ -53,6 +53,7 @@ class _DummyIncomingMessage:
         self.entities = None
         self.caption_entities = None
         self.message_thread_id = None
+        self.reply_to_message = None
         self.replies: list[str] = []
         self._next_message_id = 1000
 
@@ -103,8 +104,9 @@ def test_ai_context_is_limited() -> None:
     context = _get_ai_context(10, 20)
 
     assert len(context) == AI_CHAT_HISTORY_LIMIT
-    assert context[0] == "user: q10"
-    assert context[-1] == "assistant: a19"
+    expected_first = AI_CHAT_HISTORY_LIMIT // 2
+    assert context[0] == f"user: q{expected_first}"
+    assert context[-1] == f"assistant: a{AI_CHAT_HISTORY_LIMIT - 1}"
 
 
 def test_extract_ai_prompt_from_command() -> None:

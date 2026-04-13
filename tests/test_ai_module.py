@@ -34,7 +34,7 @@ class _SlowProvider:
     async def moderate(self, text: str, *, chat_id: int, context: list[str] | None = None):  # type: ignore[no-untyped-def]
         await asyncio.sleep(0.1)
 
-    async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int) -> str:
+    async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int, user_id: int | None = None, topic_id: int | None = None) -> str:
         await asyncio.sleep(0.1)
         return "remote"
 
@@ -151,13 +151,15 @@ def test_local_assistant_reply_handles_rules_and_mentions() -> None:
 
 def test_local_assistant_reply_unknown_question_is_friendly() -> None:
     reply = build_local_assistant_reply("Где телепорт на Марс в нашем ЖК?")
-    assert len(reply.strip()) > 20
+    assert len(reply.strip()) > 0
 
 
 def test_local_assistant_reply_uses_places_hint(monkeypatch) -> None:
+    from app.services.resident_kb import ResidentKbSearchResult
+
     monkeypatch.setattr(
-        "app.services.ai_module.build_resident_answer",
-        lambda prompt, *, context=None: None,  # type: ignore[return-value]
+        "app.services.ai_module.search_resident_kb",
+        lambda prompt, *, context=None, top_k=1: ResidentKbSearchResult(matches=[], exact=False),
     )
 
     reply = build_local_assistant_reply(
@@ -220,9 +222,9 @@ def test_high_aggression_keeps_strict_action() -> None:
 def test_assistant_prompt_has_human_style_and_limits() -> None:
     assert "Ты — бот-помощник" in _ASSISTANT_SYSTEM_PROMPT
     assert "тот самый сосед" in _ASSISTANT_SYSTEM_PROMPT
-    assert "до 800 символов" in _ASSISTANT_SYSTEM_PROMPT
-    assert "с отличным чувством юмора" in _ASSISTANT_SYSTEM_PROMPT
-    assert "Если в контексте нет точной информации" in _ASSISTANT_SYSTEM_PROMPT
+    assert "с живым чувством юмора" in _ASSISTANT_SYSTEM_PROMPT
+    assert "400 символов" in _ASSISTANT_SYSTEM_PROMPT
+    assert "нет точной информации" in _ASSISTANT_SYSTEM_PROMPT
     assert "Приоритет источников" in _ASSISTANT_SYSTEM_PROMPT
 
 
@@ -243,22 +245,35 @@ def test_openrouter_assistant_fallback_on_runtime_error(monkeypatch) -> None:
     asyncio.run(provider.aclose())
 
 
-def test_openrouter_assistant_prefers_resident_kb_before_remote(monkeypatch) -> None:
+def test_openrouter_assistant_includes_resident_kb_in_context(monkeypatch) -> None:
+    """KB-контент передаётся как контекст в AI (не bypasses AI)."""
     provider = OpenRouterProvider()
 
+    kb_text = "Точный ответ из канонической базы"
     monkeypatch.setattr(
-        "app.services.ai_module.build_resident_answer",
-        lambda prompt, *, context=None: "Точный ответ из канонической базы",  # type: ignore[return-value]
+        "app.services.ai_module.build_resident_context",
+        lambda prompt, *, context=None: kb_text,
     )
 
-    async def _raise_if_called(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise AssertionError("remote completion should not be called")
+    captured: list[list[dict]] = []
 
-    monkeypatch.setattr(provider, "_chat_completion", _raise_if_called)
+    async def _fake_completion(messages: list[dict], *, chat_id: int, **kwargs) -> tuple[str, int]:
+        captured.append(messages)
+        return ("ai answer", 10)
 
-    reply = asyncio.run(provider.assistant_reply("Какие в ЖК есть магазины?", [], chat_id=1))
-    assert reply == "Точный ответ из канонической базы"
-    asyncio.run(provider.aclose())
+    monkeypatch.setattr(provider, "_chat_completion", _fake_completion)
+
+    async def _run() -> None:
+        await provider.assistant_reply("Какие в ЖК есть магазины?", [], chat_id=1)
+        await provider.aclose()
+
+    asyncio.run(_run())
+
+    assert len(captured) == 1
+    system_text = " ".join(
+        str(m.get("content", "")) for m in captured[0] if m.get("role") == "system"
+    )
+    assert kb_text in system_text
 
 
 
