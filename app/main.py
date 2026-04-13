@@ -190,6 +190,7 @@ class RetryOnFloodSession(AiohttpSession):
 
 OFFLINE_THRESHOLD_MIN = 30
 STARTUP_AI_PROBE_TIMEOUT_SECONDS = 5
+TG_PROBE_TIMEOUT_SECONDS = 10  # максимум ждём ответа при старте
 
 
 async def init_db(async_engine: AsyncEngine) -> None:
@@ -1023,7 +1024,11 @@ async def on_startup(bot: Bot) -> None:
     for attempt in range(1, 4):
         try:
             _t0 = _time.monotonic()
-            bot_me = await bot.get_me()  # заполняет bot.me с информацией о боте
+            # wait_for ограничивает время ожидания, иначе RetryOnFloodSession
+            # может ждать десятки секунд внутри при flood-control от Telegram.
+            bot_me = await asyncio.wait_for(
+                bot.get_me(), timeout=TG_PROBE_TIMEOUT_SECONDS
+            )
             _tg_latency_ms = int((_time.monotonic() - _t0) * 1000)
             telegram_available = True
             tg_probe_note = f"Telegram API: ✅ доступен ({_tg_latency_ms} ms)"
@@ -1035,6 +1040,22 @@ async def on_startup(bot: Bot) -> None:
             except Exception:  # noqa: BLE001
                 logger.warning("Не удалось прогреть кэш профиля бота в help-роутере.")
             break
+        except asyncio.TimeoutError:
+            if attempt >= 3:
+                tg_probe_note = (
+                    f"Telegram API: ⚠️ медленно (>{TG_PROBE_TIMEOUT_SECONDS} с)"
+                )
+                logger.warning(
+                    "Telegram API probe: таймаут %d с после 3 попыток.",
+                    TG_PROBE_TIMEOUT_SECONDS,
+                )
+                break
+            logger.warning(
+                "Telegram API probe: таймаут %d с, попытка %d/3. Повтор через 5 секунд.",
+                TG_PROBE_TIMEOUT_SECONDS,
+                attempt,
+            )
+            await asyncio.sleep(5)
         except TelegramNetworkError:
             if attempt >= 3:
                 tg_probe_note = "Telegram API: ❌ недоступен (нет соединения)"
