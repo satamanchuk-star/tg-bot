@@ -8,16 +8,19 @@ from xml.etree import ElementTree
 from zipfile import ZipFile
 
 from aiogram import Bot
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import QuizQuestion, QuizUsedQuestion
+from app.models import MigrationFlag, QuizQuestion, QuizUsedQuestion
 
 _QUIZ_XLSX_PRIMARY = Path(__file__).resolve().parents[2] / "quiz_questions_normalized.xlsx"
 _QUIZ_XLSX_FALLBACK = Path(__file__).resolve().parents[2] / "viktorinavopros_QA.xlsx"
 QUIZ_XLSX_PATH = _QUIZ_XLSX_PRIMARY if _QUIZ_XLSX_PRIMARY.exists() else _QUIZ_XLSX_FALLBACK
 QUIZ_TEXT_PATH = Path(__file__).resolve().parents[1] / "data" / "quiz_questions.txt"
 _NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+
+# Префикс флага хранит mtime файла; если флаг есть — файл не менялся
+_MTIME_FLAG_PREFIX = "quiz_mtime_"
 
 logger = logging.getLogger(__name__)
 
@@ -91,11 +94,24 @@ async def sync_questions_from_xlsx(session: AsyncSession) -> tuple[int, int]:
     if not QUIZ_XLSX_PATH.exists():
         return 0, 0
 
+    # Пропускаем импорт, если файл не менялся и вопросы уже есть в БД
+    current_mtime = str(int(QUIZ_XLSX_PATH.stat().st_mtime))
+    flag_key = f"{_MTIME_FLAG_PREFIX}{current_mtime}"
+    existing_flag = await session.get(MigrationFlag, flag_key)
+    if existing_flag is not None:
+        count = (await session.execute(select(func.count(QuizQuestion.id)))).scalar() or 0
+        if count > 0:
+            logger.info(
+                "Викторина: XLSX не изменился, пропускаем импорт (%d вопросов в БД).", count
+            )
+            return 0, 0
+
     try:
         source = _read_xlsx_questions(QUIZ_XLSX_PATH)
     except Exception:  # noqa: BLE001 - битый/неполный XLSX не должен валить бота
         logger.exception("Не удалось прочитать XLSX-файл викторины: %s", QUIZ_XLSX_PATH)
         return 0, 0
+
     unique: list[tuple[str, str]] = []
     seen: set[str] = set()
     for question, answer in source:
@@ -105,12 +121,21 @@ async def sync_questions_from_xlsx(session: AsyncSession) -> tuple[int, int]:
         seen.add(normalized)
         unique.append((question, answer))
 
+    # Удаляем старые mtime-флаги этого файла
+    await session.execute(
+        delete(MigrationFlag).where(MigrationFlag.key.like(f"{_MTIME_FLAG_PREFIX}%"))
+    )
+
     await session.execute(delete(QuizQuestion))
     # Сбрасываем список использованных вопросов, чтобы все загруженные
     # вопросы снова стали доступны для викторины
     await session.execute(delete(QuizUsedQuestion))
     for question, answer in unique:
         session.add(QuizQuestion(question=question, answer=answer))
+
+    # Сохраняем флаг текущего mtime — при следующем старте импорт пропустим
+    session.add(MigrationFlag(key=flag_key))
+
     await session.commit()
     return len(source), len(unique)
 

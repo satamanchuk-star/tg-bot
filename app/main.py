@@ -1016,6 +1016,10 @@ async def on_startup(bot: Bot) -> None:
     telegram_available = False
     tg_probe_note = ""
     import time as _time
+    _t_startup = _time.monotonic()
+
+    # ── Telegram API probe ────────────────────────────────────────────────────
+    _step_t = _time.monotonic()
     for attempt in range(1, 4):
         try:
             _t0 = _time.monotonic()
@@ -1054,6 +1058,10 @@ async def on_startup(bot: Bot) -> None:
                 len(settings.bot_token),
             )
             break
+    logger.info("⏱ tg_probe: %.2fs", _time.monotonic() - _step_t)
+
+    # ── БД: инициализация ────────────────────────────────────────────────────
+    _step_t = _time.monotonic()
     try:
         await init_db(engine)
     except Exception:
@@ -1062,24 +1070,38 @@ async def on_startup(bot: Bot) -> None:
             "Проверьте DATABASE_URL и права на директорию данных."
         )
         raise
+    logger.info("⏱ init_db: %.2fs", _time.monotonic() - _step_t)
+
+    # ── БД: проверка целостности ─────────────────────────────────────────────
+    _step_t = _time.monotonic()
     try:
         await validate_db(engine)
     except Exception:  # noqa: BLE001
         logger.exception("Ошибка при проверке БД (некритично, продолжаем).")
-    try:
-        await cleanup_database()
-    except Exception:  # noqa: BLE001 - не блокируем старт из-за не-критичной очистки
-        logger.exception("Очистка БД при старте завершилась с ошибкой.")
-    # Применяем миграции
+    logger.info("⏱ validate_db: %.2fs", _time.monotonic() - _step_t)
+
+    # ── БД: очистка старых данных — в фон, не блокируем старт ───────────────
+    _run_background_task(cleanup_database(), name="startup_cleanup_database")
+
+    # ── Миграции ─────────────────────────────────────────────────────────────
+    _step_t = _time.monotonic()
     try:
         async for session in get_session():
             await apply_v11_stats_reset(session)
     except Exception:  # noqa: BLE001
         logger.exception("Не удалось выполнить миграцию v1.1 (некритично, продолжаем).")
+    logger.info("⏱ migrations: %.2fs", _time.monotonic() - _step_t)
+
+    # ── Heartbeat ────────────────────────────────────────────────────────────
+    _step_t = _time.monotonic()
     try:
         await heartbeat_job(bot)
     except Exception:  # noqa: BLE001
         logger.exception("Ошибка heartbeat при старте (некритично, продолжаем).")
+    logger.info("⏱ heartbeat: %.2fs", _time.monotonic() - _step_t)
+
+    # ── Команды бота в меню Telegram ─────────────────────────────────────────
+    _step_t = _time.monotonic()
     if telegram_available:
         # Публичные команды для всех пользователей
         await bot.set_my_commands(
@@ -1116,8 +1138,6 @@ async def on_startup(bot: Bot) -> None:
                     BotCommand(command="reload_profanity", description="Перечитать мат-словари"),
                     BotCommand(command="reset_routing_state", description="Сбросить ожидания роутинга"),
                     BotCommand(command="reset_stats", description="Сбросить статистику"),
-    
-
                     BotCommand(command="form", description="Форма для шлагбаума"),
                     BotCommand(command="text", description="Текст от лица бота"),
                     BotCommand(command="umnij_start", description="Запустить викторину"),
@@ -1132,19 +1152,22 @@ async def on_startup(bot: Bot) -> None:
             )
         except Exception:  # noqa: BLE001 - не блокируем старт, если не удалось зарегистрировать
             logger.warning("Не удалось зарегистрировать админ-команды в Telegram меню.")
-    # Сброс кэшей при старте, чтобы не использовать устаревшие данные
+    logger.info("⏱ set_commands: %.2fs", _time.monotonic() - _step_t)
+
+    # ── Кэши и база знаний ───────────────────────────────────────────────────
+    _step_t = _time.monotonic()
     cleared = clear_assistant_cache()
     if cleared:
         logger.info("Сброшен AI-кэш: %d записей.", cleared)
     load_resident_kb.cache_clear()  # Сброс lru_cache, чтобы подхватить актуальный файл
-
-    # Проверяем и прогреваем каноническую базу знаний жителей
     try:
         load_resident_kb()
     except Exception:
         logger.exception("Не удалось загрузить базу знаний жителей (resident_kb.json).")
+    logger.info("⏱ resident_kb: %.2fs", _time.monotonic() - _step_t)
 
-    # Очистка устаревших и seed инфраструктуры из JSON
+    # ── Seed инфраструктуры из JSON ──────────────────────────────────────────
+    _step_t = _time.monotonic()
     try:
         from scripts.seed_places import purge_old_places, seed_places
         async for session in get_session():
@@ -1155,8 +1178,10 @@ async def on_startup(bot: Bot) -> None:
                 logger.info("Инфраструктура: удалено %s, добавлено %s объектов.", purged, seeded)
     except Exception:
         logger.exception("Ошибка seed инфраструктуры.")
+    logger.info("⏱ seed_places: %.2fs", _time.monotonic() - _step_t)
 
-    # Загрузка вопросов викторины из XLSX (при наличии файла)
+    # ── Вопросы викторины из XLSX ────────────────────────────────────────────
+    _step_t = _time.monotonic()
     try:
         from app.services.quiz_loader import sync_questions_from_xlsx
         async for session in get_session():
@@ -1166,24 +1191,31 @@ async def on_startup(bot: Bot) -> None:
             break
     except Exception:  # noqa: BLE001
         logger.exception("Не удалось загрузить вопросы викторины (некритично, продолжаем).")
+    logger.info("⏱ quiz_loader: %.2fs", _time.monotonic() - _step_t)
 
-    # Импорт инфраструктуры из Google Sheets не должен блокировать запуск polling.
+    # ── Google Sheets — в фон ────────────────────────────────────────────────
     _run_background_task(_sync_places_from_sheets(), name="startup_sync_places")
 
-    # Проверяем пропущенные розыгрыши лотереи
+    # ── Пропущенные лотереи ──────────────────────────────────────────────────
+    _step_t = _time.monotonic()
     try:
         await recover_missed_lottery_draws(bot)
     except Exception:  # noqa: BLE001
         logger.exception("Не удалось провести пропущенные розыгрыши лотереи (некритично, продолжаем).")
+    logger.info("⏱ lottery_recovery: %.2fs", _time.monotonic() - _step_t)
 
-    # Возобновляем рулетку, если бот перезагрузился в игровое время
+    # ── Рулетка ──────────────────────────────────────────────────────────────
+    _step_t = _time.monotonic()
     try:
         await roulette.resume_roulette_if_needed(bot)
     except Exception:  # noqa: BLE001
         logger.exception("Не удалось возобновить рулетку при старте (некритично, продолжаем).")
+    logger.info("⏱ roulette_resume: %.2fs", _time.monotonic() - _step_t)
 
-    # Инициализируем AI-клиент и логируем режим работы
+    # ── AI клиент + probe ────────────────────────────────────────────────────
+    _step_t = _time.monotonic()
     get_ai_client()
+    ai_probe_note = ""
     if settings.ai_enabled and settings.ai_key:
         source_note = " (по умолчанию, AI_MODEL не задан)" if settings.ai_model_is_default else ""
         ai_mode = f"AI: OpenRouter ({settings.ai_model}){source_note}"
@@ -1206,11 +1238,14 @@ async def on_startup(bot: Bot) -> None:
             logger.info("AI probe: ok=%s details=%s latency_ms=%s", probe.ok, probe.details, probe.latency_ms)
     elif not settings.ai_enabled:
         ai_mode = "AI: отключен (AI_ENABLED=false)"
-        ai_probe_note = ""
     else:
         ai_mode = "AI: отключен (AI_KEY не задан)"
-        ai_probe_note = ""
     logger.info("AI модуль: %s", ai_mode)
+    logger.info("⏱ ai_probe: %.2fs", _time.monotonic() - _step_t)
+
+    logger.info("⏱ ИТОГО on_startup: %.2fs", _time.monotonic() - _t_startup)
+
+    # ── Сообщение о запуске ──────────────────────────────────────────────────
     if telegram_available:
         lines = [f"🟢 Бот запущен", f"Версия: {settings.build_version}", ai_mode]
         if tg_probe_note:

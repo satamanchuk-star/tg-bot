@@ -65,6 +65,12 @@ async def seed_places(session: AsyncSession) -> int:
     if not data:
         return 0
 
+    # Один запрос вместо N+1: загружаем все существующие ключи разом
+    existing_rows = (
+        await session.execute(select(Place.name, Place.address, Place.category))
+    ).all()
+    existing_keys = {(row.name, row.address, row.category) for row in existing_rows}
+
     added = 0
     for item in data:
         name = item.get("name")
@@ -72,18 +78,7 @@ async def seed_places(session: AsyncSession) -> int:
         category = item.get("category")
         if not all((name, address, category)):
             continue
-
-        existing = (
-            await session.execute(
-                select(Place).where(
-                    Place.name == name,
-                    Place.address == address,
-                    Place.category == category,
-                )
-            )
-        ).scalar_one_or_none()
-
-        if existing is not None:
+        if (name, address, category) in existing_keys:
             continue
 
         place = Place(
