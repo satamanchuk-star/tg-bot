@@ -1489,21 +1489,22 @@ def local_moderation(text: str) -> ModerationDecision:
 def normalize_for_profanity(text: str) -> str:
     lowered = text.lower().replace("ё", "е")
     lowered = lowered.translate(_LATIN_TO_CYR).translate(_DIGIT_TO_CYR)
-    lowered = re.sub(r"[^а-яa-z0-9]+", "", lowered)
-    return lowered
+    lowered = re.sub(r"[^а-яa-z0-9\s]+", "", lowered)
+    return " ".join(lowered.split())
 
 
 def detect_profanity(normalized: str) -> bool:
     if not normalized:
         return False
 
-    if normalized in _PROFANITY_RUNTIME["exceptions"]:
-        return False
-
-    if any(word in normalized for word in _PROFANITY_RUNTIME["exact"]):
-        return True
-
-    return any(normalized.startswith(prefix) or prefix in normalized for prefix in _PROFANITY_RUNTIME["prefixes"])
+    for word in normalized.split():
+        if word in _PROFANITY_RUNTIME["exceptions"]:
+            continue
+        if word in _PROFANITY_RUNTIME["exact"]:
+            return True
+        if any(word.startswith(prefix) for prefix in _PROFANITY_RUNTIME["prefixes"]):
+            return True
+    return False
 
 
 def detect_aggression_level(text: str) -> Literal["low", "high"]:
