@@ -416,6 +416,44 @@ async def send_daily_response_report(bot: Bot) -> None:
             await asyncio.sleep(2)
 
 
+async def recover_missed_lottery_draws(bot: Bot) -> None:
+    """Проверяет и разыгрывает пропущенные лотереи прошлых недель (без анимации)."""
+    from app.services.lottery import draw_winner, get_undrawn_week_keys
+
+    topic = getattr(settings, "topic_games", None)
+
+    async for session in get_session():
+        missed_keys = await get_undrawn_week_keys(session, settings.forum_chat_id)
+        break
+    else:
+        return
+
+    for wk in missed_keys:
+        async for session in get_session():
+            result = await draw_winner(session, settings.forum_chat_id, wk)
+            await session.commit()
+            break
+        if result is None:
+            logger.info("Пропущенная лотерея %s: недостаточно участников, пропускаем.", wk)
+            continue
+        winner_name = result["winner_name"] or f"Участник #{result['winner_id']}"
+        text = (
+            f"Пропущенный розыгрыш лотереи {wk}\n\n"
+            f"Победитель: {winner_name}\n"
+            f"Приз: {result['prize']} монет\n"
+            f"Участников: {result['participants']} | Билетов: {result['tickets']}\n\n"
+            f"Розыгрыш был проведён автоматически при запуске бота."
+        )
+        if topic is not None:
+            try:
+                await bot.send_message(
+                    settings.forum_chat_id, text, message_thread_id=topic,
+                )
+            except Exception:
+                logger.warning("Не удалось отправить результат пропущенной лотереи %s в топик.", wk)
+        logger.info("Пропущенная лотерея %s: победитель %s, приз %d.", wk, winner_name, result["prize"])
+
+
 async def draw_weekly_lottery(bot: Bot) -> None:
     """Разыгрывает еженедельную лотерею в воскресенье в 11:00 с анимацией барабана."""
     from app.services.lottery import draw_winner, current_week_key, get_tickets_for_week
@@ -1056,8 +1094,25 @@ async def on_startup(bot: Bot) -> None:
     except Exception:
         logger.exception("Ошибка seed инфраструктуры.")
 
+    # Загрузка вопросов викторины из XLSX (при наличии файла)
+    try:
+        from app.services.quiz_loader import sync_questions_from_xlsx
+        async for session in get_session():
+            total, unique = await sync_questions_from_xlsx(session)
+            if total > 0:
+                logger.info("Викторина: загружено %d вопросов (%d уникальных) из XLSX.", total, unique)
+            break
+    except Exception:  # noqa: BLE001
+        logger.exception("Не удалось загрузить вопросы викторины (некритично, продолжаем).")
+
     # Импорт инфраструктуры из Google Sheets не должен блокировать запуск polling.
     _run_background_task(_sync_places_from_sheets(), name="startup_sync_places")
+
+    # Проверяем пропущенные розыгрыши лотереи
+    try:
+        await recover_missed_lottery_draws(bot)
+    except Exception:  # noqa: BLE001
+        logger.exception("Не удалось провести пропущенные розыгрыши лотереи (некритично, продолжаем).")
 
     # Возобновляем рулетку, если бот перезагрузился в игровое время
     try:
