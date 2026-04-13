@@ -1119,20 +1119,23 @@ async def on_startup(bot: Bot) -> None:
     _step_t = _time.monotonic()
     if telegram_available:
         async def _set_public_commands() -> None:
-            await bot.set_my_commands(
-                [
-                    BotCommand(command="help", description="Справка и навигация по форуму"),
-                    BotCommand(command="rules", description="Правила нашего сообщества"),
-                    BotCommand(command="ai", description="Задать вопрос Жаботу"),
-                    BotCommand(command="21", description="Играть в блэкджек"),
-                    BotCommand(command="21top", description="Топ игроков недели"),
-                    BotCommand(command="roulette", description="Играть в рулетку"),
-                    BotCommand(command="bet", description="Сделать ставку в рулетке"),
-                    BotCommand(command="score", description="Мои монеты и статистика"),
-                    BotCommand(command="bal", description="Мой счёт в викторине"),
-                    BotCommand(command="topumnij", description="Топ знатоков викторины"),
-                ],
-            )
+            try:
+                await bot.set_my_commands(
+                    [
+                        BotCommand(command="help", description="Справка и навигация по форуму"),
+                        BotCommand(command="rules", description="Правила нашего сообщества"),
+                        BotCommand(command="ai", description="Задать вопрос Жаботу"),
+                        BotCommand(command="21", description="Играть в блэкджек"),
+                        BotCommand(command="21top", description="Топ игроков недели"),
+                        BotCommand(command="roulette", description="Играть в рулетку"),
+                        BotCommand(command="bet", description="Сделать ставку в рулетке"),
+                        BotCommand(command="score", description="Мои монеты и статистика"),
+                        BotCommand(command="bal", description="Мой счёт в викторине"),
+                        BotCommand(command="topumnij", description="Топ знатоков викторины"),
+                    ],
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("Не удалось зарегистрировать публичные команды в Telegram меню.")
 
         async def _set_admin_commands() -> None:
             try:

@@ -177,7 +177,10 @@ def test_on_startup_runs_places_sync_in_background(monkeypatch) -> None:
 
         await on_startup(bot)
 
-        assert scheduled_names == ["startup_sync_places"]
+        assert "startup_sync_places" in scheduled_names
+        assert "startup_validate_cleanup" in scheduled_names
+        assert "startup_heartbeat" in scheduled_names
+        assert "startup_lottery_recovery" in scheduled_names
 
     asyncio.run(_run())
 
