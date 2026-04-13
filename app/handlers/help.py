@@ -1248,31 +1248,6 @@ async def mention_help(message: Message, bot: Bot) -> None:
     ):
         return
 
-    # Не отв��чаем на упоминания в игровом топике, если идёт викторина
-    if (
-        message.chat.id == settings.forum_chat_id
-        and settings.topic_games is not None
-        and message.message_thread_id == settings.topic_games
-    ):
-        try:
-            from app.handlers.quiz import _session_results, _question_started_at
-            from app.services.quiz import get_active_session
-            key = (settings.forum_chat_id, settings.topic_games)
-            # Быстрая проверка по in-memory состоянию
-            if key in _question_started_at and _question_started_at[key] is not None:
-                logger.info("OUT: MENTION_SKIPPED_QUIZ_ACTIVE (in-memory)")
-                return
-            # Проверка по БД на случай если in-memory не актуально
-            async for session in get_session():
-                quiz_session = await get_active_session(
-                    session, settings.forum_chat_id, settings.topic_games,
-                )
-                if quiz_session is not None:
-                    logger.info("OUT: MENTION_SKIPPED_QUIZ_ACTIVE (db)")
-                    return
-        except Exception:
-            logger.warning("Не удалось проверить активность викторины при упоминании")
-
     # Помечаем сообщение как обработанное, чтобы не обрабатывать дважды
     message_id = getattr(message, "message_id", None)
     if message_id is not None:

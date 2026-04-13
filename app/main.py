@@ -39,7 +39,6 @@ from app.handlers import (
     games,
     help as help_handler,
     moderation,
-    quiz,
     roulette,
     shop,
     text_publish,
@@ -211,32 +210,6 @@ async def init_db(async_engine: AsyncEngine) -> None:
                 if "display_name" not in columns:
                     sync_conn.execute(
                         text("ALTER TABLE user_stats ADD COLUMN display_name TEXT")
-                    )
-
-            # Миграция quiz_sessions
-            if inspector.has_table("quiz_sessions"):
-                columns = {
-                    column["name"]: column
-                    for column in inspector.get_columns("quiz_sessions")
-                }
-                if "used_question_ids" not in columns:
-                    sync_conn.execute(
-                        text(
-                            "ALTER TABLE quiz_sessions ADD COLUMN used_question_ids TEXT"
-                        )
-                    )
-                is_active_column = columns.get("is_active")
-                if (
-                    is_active_column
-                    and sync_conn.dialect.name == "postgresql"
-                    and isinstance(is_active_column["type"], Integer)
-                ):
-                    sync_conn.execute(
-                        text(
-                            "ALTER TABLE quiz_sessions "
-                            "ALTER COLUMN is_active "
-                            "TYPE BOOLEAN USING is_active::boolean"
-                        )
                     )
 
             # Миграция moderation_events
@@ -880,28 +853,6 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         hour="0,6,12,18",
         minute=30,
     )
-    # Викторина: анонс → правила → автостарт
-    scheduler.add_job(
-        quiz.announce_quiz_soon,
-        "cron",
-        hour=19,
-        minute=55,
-        args=[bot],
-    )
-    scheduler.add_job(
-        quiz.announce_quiz_rules,
-        "cron",
-        hour=19,
-        minute=59,
-        args=[bot],
-    )
-    scheduler.add_job(
-        quiz.start_quiz_auto,
-        "cron",
-        hour=20,
-        minute=0,
-        args=[bot],
-    )
     # Рулетка: анонс → правила → запуск первого раунда
     scheduler.add_job(
         roulette.announce_roulette_soon,
@@ -1130,8 +1081,6 @@ async def on_startup(bot: Bot) -> None:
                         BotCommand(command="roulette", description="Играть в рулетку"),
                         BotCommand(command="bet", description="Сделать ставку в рулетке"),
                         BotCommand(command="score", description="Мои монеты и статистика"),
-                        BotCommand(command="bal", description="Мой счёт в викторине"),
-                        BotCommand(command="topumnij", description="Топ знатоков викторины"),
                     ],
                 )
             except Exception:  # noqa: BLE001
@@ -1159,7 +1108,6 @@ async def on_startup(bot: Bot) -> None:
                         BotCommand(command="reset_stats", description="Сбросить статистику"),
                         BotCommand(command="form", description="Форма для шлагбаума"),
                         BotCommand(command="text", description="Текст от лица бота"),
-                        BotCommand(command="umnij_start", description="Запустить викторину"),
                         BotCommand(command="rag_bot", description="Добавить запись в RAG базу"),
                         BotCommand(command="rag_sync", description="Систематизировать RAG базу"),
                         BotCommand(command="restart_jobs", description="Перезапуск зависших задач"),
@@ -1200,19 +1148,6 @@ async def on_startup(bot: Bot) -> None:
     except Exception:
         logger.exception("Ошибка seed инфраструктуры.")
     logger.info("⏱ seed_places: %.2fs", _time.monotonic() - _step_t)
-
-    # ── Вопросы викторины из XLSX ────────────────────────────────────────────
-    _step_t = _time.monotonic()
-    try:
-        from app.services.quiz_loader import sync_questions_from_xlsx
-        async for session in get_session():
-            total, unique = await sync_questions_from_xlsx(session)
-            if total > 0:
-                logger.info("Викторина: загружено %d вопросов (%d уникальных) из XLSX.", total, unique)
-            break
-    except Exception:  # noqa: BLE001
-        logger.exception("Не удалось загрузить вопросы викторины (некритично, продолжаем).")
-    logger.info("⏱ quiz_loader: %.2fs", _time.monotonic() - _step_t)
 
     # ── Google Sheets — в фон ────────────────────────────────────────────────
     _run_background_task(_sync_places_from_sheets(), name="startup_sync_places")
@@ -1373,8 +1308,7 @@ async def main() -> None:
     dp.include_router(games.router)  # игры (команды /21, /score)
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     dp.include_router(shop.router)  # магазин монет (FSM, перед economy)
-    dp.include_router(economy_handler.router)  # лотерея и инициативы жителей (до quiz — catch-all в topic_games)
-    dp.include_router(quiz.router)  # викторина (команды /umnij_start, /bal, /topumnij)
+    dp.include_router(economy_handler.router)  # лотерея и инициативы жителей
     dp.include_router(roulette.router)  # рулетка (команда /bet)
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
