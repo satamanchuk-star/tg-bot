@@ -35,6 +35,7 @@ from app.services.roulette import (
     spin_wheel,
     update_roulette_stats,
 )
+from app.utils.safe_telegram import safe_call
 from app.utils.time import is_game_time_allowed
 
 logger = logging.getLogger(__name__)
@@ -669,142 +670,181 @@ async def resume_roulette_if_needed(bot: Bot) -> None:
             await close_round(session, stale, -1)  # -1 = раунд отменён
             await session.commit()
         break
+    # Проверяем доступность Telegram перед запуском нового раунда
+    try:
+        await asyncio.wait_for(bot.get_me(), timeout=5)
+    except Exception:
+        logger.warning("Рулетка: Telegram недоступен, откладываем возобновление.")
+        return
     logger.info("Рулетка: время игры (21-22), возобновляем раунды после перезагрузки.")
     await start_roulette_round(bot)
 
 
 async def _run_roulette_round(bot: Bot, chat_id: int, topic_id: int) -> None:
-    """Полный цикл одного раунда рулетки."""
-    try:
-        # 1. Создаём раунд
-        async for session in get_session():
-            rnd = await create_round(session, chat_id, topic_id)
-            round_id = rnd.id
-            await session.commit()
-            break
-
-        # 2. Объявляем приём ставок — общее сообщение с кнопкой
-        await bot.send_message(
-            chat_id,
-            f"Рулетка открыта! Приём ставок — {BETTING_DURATION_SEC} секунд.\n\n"
-            "Как ставить:\n"
-            "  Нажмите кнопку ниже\n"
-            "  /roulette — меню кнопками\n"
-            "  /bet <тип> <сумма> — текстом (любая сумма)\n\n"
-            "Типы: красное, чёрное, чёт, нечёт, число 0-36\n"
-            "Количество ставок не ограничено!",
-            message_thread_id=topic_id,
-            reply_markup=_shared_keyboard(),
-        )
-
-        # 3. Ждём приём ставок
-        await asyncio.sleep(BETTING_DURATION_SEC)
-
-        # 4. Закрываем ставки
-        spin_msg = await bot.send_message(
-            chat_id,
-            "Ставки закрыты! Крутим рулетку...",
-            message_thread_id=topic_id,
-        )
-
-        # 5. Анимация вращения (10 секунд)
-        spin_frames = [
-            "Крутим рулетку...\n⬜🔴⚫🔴⚫🟢⚫🔴",
-            "Крутим рулетку...\n🔴⚫🟢🔴⚫🔴⬜⚫",
-            "Крутим рулетку...\n⚫🔴⬜🟢⚫🔴⚫🔴",
-            "Крутим рулетку...\n🟢⚫🔴⚫🔴⬜⚫🔴",
-        ]
-        frame_delay = SPIN_DURATION_SEC / len(spin_frames)
-        for frame in spin_frames:
-            await asyncio.sleep(frame_delay)
-            try:
-                await spin_msg.edit_text(frame)
-            except Exception:
-                pass
-
-        # 6. Генерируем результат
-        result_number = spin_wheel()
-        result_color = get_number_color(result_number)
-        result_parity = get_number_parity(result_number)
-
-        parity_text = f"Чётность: {parity_name_ru(result_parity)}" if result_parity else "Зеро!"
-        await bot.send_message(
-            chat_id,
-            f"Выпало: {result_number} {color_emoji(result_color)}\n"
-            f"Цвет: {color_name_ru(result_color)}\n"
-            f"{parity_text}",
-            message_thread_id=topic_id,
-        )
-
-        # 7. Обрабатываем результаты
-        async for session in get_session():
-            rnd = await get_active_round(session, chat_id, topic_id)
-            if rnd is None:
-                return
-            await close_round(session, rnd, result_number)
-
-            bets = await get_round_bets(session, rnd.id)
-            if not bets:
+    """Полный цикл раундов рулетки (крутится пока _is_roulette_time())."""
+    while True:
+        round_id: int | None = None
+        try:
+            # 1. Создаём раунд
+            async for session in get_session():
+                rnd = await create_round(session, chat_id, topic_id)
+                round_id = rnd.id
                 await session.commit()
-                await bot.send_message(
+                break
+
+            # 2. Объявляем приём ставок — общее сообщение с кнопкой
+            await bot.send_message(
+                chat_id,
+                f"Рулетка открыта! Приём ставок — {BETTING_DURATION_SEC} секунд.\n\n"
+                "Как ставить:\n"
+                "  Нажмите кнопку ниже\n"
+                "  /roulette — меню кнопками\n"
+                "  /bet <тип> <сумма> — текстом (любая сумма)\n\n"
+                "Типы: красное, чёрное, чёт, нечёт, число 0-36\n"
+                "Количество ставок не ограничено!",
+                message_thread_id=topic_id,
+                reply_markup=_shared_keyboard(),
+            )
+
+            # 3. Ждём приём ставок
+            await asyncio.sleep(BETTING_DURATION_SEC)
+
+            # 4. Закрываем ставки
+            spin_msg = await bot.send_message(
+                chat_id,
+                "Ставки закрыты! Крутим рулетку...",
+                message_thread_id=topic_id,
+            )
+
+            # 5. Анимация вращения (10 секунд)
+            spin_frames = [
+                "Крутим рулетку...\n⬜🔴⚫🔴⚫🟢⚫🔴",
+                "Крутим рулетку...\n🔴⚫🟢🔴⚫🔴⬜⚫",
+                "Крутим рулетку...\n⚫🔴⬜🟢⚫🔴⚫🔴",
+                "Крутим рулетку...\n🟢⚫🔴⚫🔴⬜⚫🔴",
+            ]
+            frame_delay = SPIN_DURATION_SEC / len(spin_frames)
+            for frame in spin_frames:
+                await asyncio.sleep(frame_delay)
+                try:
+                    await spin_msg.edit_text(frame)
+                except Exception:
+                    pass
+
+            # 6. Генерируем результат
+            result_number = spin_wheel()
+            result_color = get_number_color(result_number)
+            result_parity = get_number_parity(result_number)
+
+            parity_text = f"Чётность: {parity_name_ru(result_parity)}" if result_parity else "Зеро!"
+            await safe_call(
+                bot.send_message(
                     chat_id,
-                    "В этом раунде никто не ставил.",
+                    f"Выпало: {result_number} {color_emoji(result_color)}\n"
+                    f"Цвет: {color_name_ru(result_color)}\n"
+                    f"{parity_text}",
                     message_thread_id=topic_id,
-                )
-            else:
-                winners_lines: list[str] = []
-                losers_lines: list[str] = []
+                ),
+                log_ctx="roulette_result",
+            )
 
-                # Группируем ставки по пользователю для статистики
-                user_results: dict[int, tuple[str | None, int, int]] = {}
+            # 7. Обрабатываем результаты
+            async for session in get_session():
+                rnd = await get_active_round(session, chat_id, topic_id)
+                if rnd is None:
+                    break
+                await close_round(session, rnd, result_number)
 
-                for bet in bets:
-                    winnings = calculate_winnings(bet.bet_type, bet.bet_value, bet.amount, result_number)
-                    name = bet.display_name or str(bet.user_id)
-                    bet_desc = format_bet_description(bet.bet_type, bet.bet_value)
+                bets = await get_round_bets(session, rnd.id)
+                if not bets:
+                    await session.commit()
+                    await safe_call(
+                        bot.send_message(
+                            chat_id,
+                            "В этом раунде никто не ставил.",
+                            message_thread_id=topic_id,
+                        ),
+                        log_ctx="roulette_no_bets",
+                    )
+                else:
+                    winners_lines: list[str] = []
+                    losers_lines: list[str] = []
 
-                    prev = user_results.get(bet.user_id, (name, 0, 0))
-                    if winnings > 0:
-                        await credit_coins(session, bet.user_id, chat_id, winnings, display_name=name)
-                        user_results[bet.user_id] = (name, prev[1] + winnings, prev[2])
-                        winners_lines.append(f"  @{name}: {bet_desc} ({bet.amount}) -> +{winnings} монет")
-                    else:
-                        user_results[bet.user_id] = (name, prev[1], prev[2] + bet.amount)
-                        losers_lines.append(f"  @{name}: {bet_desc} ({bet.amount}) — проигрыш")
+                    # Группируем ставки по пользователю для статистики
+                    user_results: dict[int, tuple[str | None, int, int]] = {}
 
-                # Обновляем статистику
-                for uid_key, (uname, won, lost) in user_results.items():
-                    await update_roulette_stats(session, uid_key, chat_id, won, lost, display_name=uname)
+                    for bet in bets:
+                        winnings = calculate_winnings(bet.bet_type, bet.bet_value, bet.amount, result_number)
+                        name = bet.display_name or str(bet.user_id)
+                        bet_desc = format_bet_description(bet.bet_type, bet.bet_value)
 
-                await session.commit()
+                        prev = user_results.get(bet.user_id, (name, 0, 0))
+                        if winnings > 0:
+                            await credit_coins(session, bet.user_id, chat_id, winnings, display_name=name)
+                            user_results[bet.user_id] = (name, prev[1] + winnings, prev[2])
+                            winners_lines.append(f"  @{name}: {bet_desc} ({bet.amount}) -> +{winnings} монет")
+                        else:
+                            user_results[bet.user_id] = (name, prev[1], prev[2] + bet.amount)
+                            losers_lines.append(f"  @{name}: {bet_desc} ({bet.amount}) — проигрыш")
 
-                # Публикуем результаты
-                result_lines = ["Результаты раунда:"]
-                if winners_lines:
-                    result_lines.append("\nПобедители:")
-                    result_lines.extend(winners_lines)
-                if losers_lines:
-                    result_lines.append("\nПроигрыши:")
-                    result_lines.extend(losers_lines)
+                    # Обновляем статистику
+                    for uid_key, (uname, won, lost) in user_results.items():
+                        await update_roulette_stats(session, uid_key, chat_id, won, lost, display_name=uname)
 
-                result_lines.append("\nБалансы:")
-                for uid_key, (uname, _, _) in user_results.items():
-                    st = await get_or_create_user_stats(session, uid_key, chat_id)
-                    result_lines.append(f"  @{uname}: {st.coins} монет")
+                    await session.commit()
 
-                await bot.send_message(
-                    chat_id,
-                    "\n".join(result_lines),
-                    message_thread_id=topic_id,
-                )
-            break
+                    # Публикуем результаты
+                    result_lines = ["Результаты раунда:"]
+                    if winners_lines:
+                        result_lines.append("\nПобедители:")
+                        result_lines.extend(winners_lines)
+                    if losers_lines:
+                        result_lines.append("\nПроигрыши:")
+                        result_lines.extend(losers_lines)
 
-        # 8. Если время ещё позволяет — запускаем новый раунд
+                    result_lines.append("\nБалансы:")
+                    for uid_key, (uname, _, _) in user_results.items():
+                        st = await get_or_create_user_stats(session, uid_key, chat_id)
+                        result_lines.append(f"  @{uname}: {st.coins} монет")
+
+                    await safe_call(
+                        bot.send_message(
+                            chat_id,
+                            "\n".join(result_lines),
+                            message_thread_id=topic_id,
+                        ),
+                        log_ctx="roulette_results",
+                    )
+                break
+
+        except asyncio.CancelledError:
+            logger.info("Раунд рулетки отменён.")
+            return
+        except Exception:
+            logger.exception("Ошибка в раунде рулетки.")
+            # Закрываем зависший раунд и возвращаем ставки
+            if round_id is not None:
+                try:
+                    async for session in get_session():
+                        rnd = await get_active_round(session, chat_id, topic_id)
+                        if rnd is not None:
+                            bets = await get_round_bets(session, rnd.id)
+                            for bet in bets:
+                                await credit_coins(
+                                    session, bet.user_id, chat_id, bet.amount,
+                                    display_name=bet.display_name,
+                                )
+                            await close_round(session, rnd, -1)
+                            await session.commit()
+                            logger.info(
+                                "Раунд #%s закрыт аварийно, ставки возвращены (%d).",
+                                round_id, len(bets),
+                            )
+                        break
+                except Exception:
+                    logger.exception("Не удалось закрыть зависший раунд #%s.", round_id)
+
+        # Пауза между раундами
         await asyncio.sleep(5)
-        if _is_roulette_time():
-            await _run_roulette_round(bot, chat_id, topic_id)
-
-    except asyncio.CancelledError:
-        logger.info("Раунд рулетки отменён.")
-    except Exception:
-        logger.exception("Ошибка в раунде рулетки.")
+        if not _is_roulette_time():
+            break

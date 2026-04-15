@@ -379,6 +379,27 @@ async def apply_v11_stats_reset(session: AsyncSession) -> None:
     logger.info("v1.1: статистика сброшена")
 
 
+async def drop_orphaned_tables(session: AsyncSession) -> None:
+    """Удаляет осиротевшие таблицы quiz_* и lottery_tickets."""
+    flag = await session.get(MigrationFlag, "drop_orphaned_quiz_lottery")
+    if flag:
+        return
+
+    orphaned = [
+        "lottery_tickets",
+        "quiz_daily_limits",
+        "quiz_questions",
+        "quiz_sessions",
+        "quiz_used_questions",
+        "quiz_user_stats",
+    ]
+    for table_name in orphaned:
+        await session.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+
+    session.add(MigrationFlag(key="drop_orphaned_quiz_lottery"))
+    await session.commit()
+    logger.info("Удалены осиротевшие таблицы: %s", ", ".join(orphaned))
+
 
 async def send_daily_summary(bot: Bot) -> None:
     if not settings.ai_feature_daily_summary:
@@ -843,8 +864,9 @@ async def on_startup(bot: Bot) -> None:
     try:
         async for session in get_session():
             await apply_v11_stats_reset(session)
+            await drop_orphaned_tables(session)
     except Exception:  # noqa: BLE001
-        logger.exception("Не удалось выполнить миграцию v1.1 (некритично, продолжаем).")
+        logger.exception("Не удалось выполнить миграции (некритично, продолжаем).")
     logger.info("⏱ migrations: %.2fs", _time.monotonic() - _step_t)
 
     # ── Heartbeat — в фон, не блокируем старт ───────────────────────────────
@@ -1095,38 +1117,53 @@ async def main() -> None:
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     # stats.router убран — статистика через middleware
 
+    POLLING_MAX_RETRIES = 5
+    POLLING_RETRY_DELAYS = (5, 10, 20, 30, 60)
+
     scheduler: AsyncIOScheduler | None = None
     try:
         await on_startup(bot)
         scheduler = await schedule_jobs(bot)
-        try:
-            await bot.delete_webhook(drop_pending_updates=True)
+        polling_attempt = 0
+        while True:
             try:
-                await dp.start_polling(
-                    bot,
-                    allowed_updates=[
-                        "message",
-                        "edited_message",
-                        "callback_query",
-                        "message_reaction",
-                    ],
+                await bot.delete_webhook(drop_pending_updates=True)
+                try:
+                    await dp.start_polling(
+                        bot,
+                        allowed_updates=[
+                            "message",
+                            "edited_message",
+                            "callback_query",
+                            "message_reaction",
+                        ],
+                    )
+                except TypeError:
+                    # Совместимость с тестовыми/облегчёнными dispatcher-реализациями.
+                    await dp.start_polling(bot)
+                break  # Нормальное завершение polling
+            except TelegramNetworkError as exc:
+                polling_attempt += 1
+                if polling_attempt > POLLING_MAX_RETRIES:
+                    logger.error(
+                        "Не удалось запустить polling после %d попыток: %s. Завершаем.",
+                        POLLING_MAX_RETRIES, exc,
+                    )
+                    break
+                delay = POLLING_RETRY_DELAYS[min(polling_attempt - 1, len(POLLING_RETRY_DELAYS) - 1)]
+                logger.warning(
+                    "Polling сбой (%s), попытка %d/%d. Повтор через %d сек.",
+                    exc, polling_attempt, POLLING_MAX_RETRIES, delay,
                 )
-            except TypeError:
-                # Совместимость с тестовыми/облегчёнными dispatcher-реализациями.
-                await dp.start_polling(bot)
-        except TelegramNetworkError as exc:
-            logger.error(
-                "Не удалось запустить polling: нет доступа к Telegram API (%s). "
-                "Проверьте DNS, сеть и доступность api.telegram.org.",
-                exc,
-            )
-        except TelegramAPIError as exc:
-            logger.error(
-                "Не удалось запустить polling: ошибка Telegram API (%s). "
-                "Проверьте BOT_TOKEN (len=%d) и настройки бота.",
-                exc,
-                len(settings.bot_token),
-            )
+                await asyncio.sleep(delay)
+            except TelegramAPIError as exc:
+                logger.error(
+                    "Не удалось запустить polling: ошибка Telegram API (%s). "
+                    "Проверьте BOT_TOKEN (len=%d) и настройки бота.",
+                    exc,
+                    len(settings.bot_token),
+                )
+                break  # API ошибка (неверный токен) — ретраи бесполезны
     finally:
         if scheduler is not None:
             scheduler.shutdown()
