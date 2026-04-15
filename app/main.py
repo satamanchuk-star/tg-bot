@@ -599,6 +599,14 @@ def _run_background_task(coro: Awaitable[None], *, name: str) -> None:
     task.add_done_callback(_on_done)
 
 
+def _cleanup_flood_tracker() -> None:
+    """Периодическая очистка FloodTracker от устаревших записей."""
+    from app.handlers.moderation import FLOOD_TRACKER
+    removed = FLOOD_TRACKER.cleanup()
+    if removed:
+        logger.debug("FloodTracker cleanup: удалено %d записей", removed)
+
+
 async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
     scheduler.add_job(
@@ -627,6 +635,7 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         heartbeat_job, "interval", minutes=HEARTBEAT_INTERVAL_MIN, args=[bot]
     )
     scheduler.add_job(check_game_timeouts, "interval", minutes=1, args=[bot])
+    scheduler.add_job(_cleanup_flood_tracker, "interval", minutes=10)
     scheduler.add_job(
         cleanup_blackjack_commands,
         "cron",

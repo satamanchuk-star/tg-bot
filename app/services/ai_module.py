@@ -167,7 +167,17 @@ def _cache_get(key: str) -> str | None:
     return answer
 
 
+def _cache_purge_expired() -> int:
+    """Удаляет все записи кэша с истёкшим TTL. Возвращает количество удалённых."""
+    now = time.time()
+    expired = [k for k, (_, ts) in _ASSISTANT_CACHE.items() if now - ts > _CACHE_TTL_SECONDS]
+    for k in expired:
+        del _ASSISTANT_CACHE[k]
+    return len(expired)
+
+
 def _cache_set(key: str, answer: str) -> None:
+    _cache_purge_expired()
     if len(_ASSISTANT_CACHE) >= _CACHE_MAX_SIZE:
         oldest_key = min(_ASSISTANT_CACHE, key=lambda k: _ASSISTANT_CACHE[k][1])
         _ASSISTANT_CACHE.pop(oldest_key, None)

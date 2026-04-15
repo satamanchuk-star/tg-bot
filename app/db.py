@@ -23,7 +23,14 @@ class Base(DeclarativeBase):
     """Базовый класс моделей."""
 
 
-engine: AsyncEngine = create_async_engine(settings.database_url, echo=False)
+_connect_args = {"timeout": 10} if settings.database_url.startswith("sqlite+") else {}
+
+engine: AsyncEngine = create_async_engine(
+    settings.database_url,
+    echo=False,
+    connect_args=_connect_args,
+    pool_pre_ping=True,
+)
 
 
 @event.listens_for(engine.sync_engine, "connect")

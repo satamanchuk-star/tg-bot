@@ -498,10 +498,10 @@ async def restart_jobs(message: Message, bot: Bot, state: FSMContext) -> None:
         await session.commit()
 
     # 2. Очищаем FSM (через storage)
-    storage = state.storage
-    # MemoryStorage хранит данные в _data dict
-    if hasattr(storage, "_data"):
-        storage._data.clear()
+    fsm_storage = state.storage
+    # MemoryStorage в aiogram 3.x хранит данные в атрибуте .storage (DefaultDict)
+    if hasattr(fsm_storage, "storage") and isinstance(fsm_storage.storage, dict):
+        fsm_storage.storage.clear()
         cleared.append("FSM-состояния")
 
     if cleared:

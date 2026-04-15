@@ -149,11 +149,11 @@ async def start_blackjack(message: Message) -> None:
         )
         await session.commit()
 
-    username = _display_name(message) or str(message.from_user.id)
-    text = "Игра 21 началась!\n" + format_game_state(
-        state.player_hand, state.dealer_hand, username, hide_dealer=True
-    )
-    await message.reply(text, reply_markup=game_keyboard())
+        username = _display_name(message) or str(message.from_user.id)
+        text = "Игра 21 началась!\n" + format_game_state(
+            state.player_hand, state.dealer_hand, username, hide_dealer=True
+        )
+        await message.reply(text, reply_markup=game_keyboard())
 
 
 @router.message(Command("score"))
@@ -176,9 +176,9 @@ async def show_score(message: Message) -> None:
             display_name=_display_name(message),
         )
         await session.commit()
-    await message.reply(
-        f"Монеты: {stats.coins}\nИгры: {stats.games_played}\nПобеды: {stats.wins}"
-    )
+        await message.reply(
+            f"Монеты: {stats.coins}\nИгры: {stats.games_played}\nПобеды: {stats.wins}"
+        )
 
 
 @router.message(Command("подарить", "gift"))
@@ -226,12 +226,12 @@ async def gift_coins_cmd(message: Message) -> None:
             await message.reply(error)
             return
         await session.commit()
-    sender_name = _display_name(message) or str(message.from_user.id)
-    recv_name = target_name or str(target_id)
-    await message.reply(
-        f"🎁 {sender_name} подарил(а) {amount} монет пользователю {recv_name}!\n"
-        f"Баланс: {sender_stats.coins} | {recv_name}: {receiver_stats.coins}"
-    )
+        sender_name = _display_name(message) or str(message.from_user.id)
+        recv_name = target_name or str(target_id)
+        await message.reply(
+            f"🎁 {sender_name} подарил(а) {amount} монет пользователю {recv_name}!\n"
+            f"Баланс: {sender_stats.coins} | {recv_name}: {receiver_stats.coins}"
+        )
 
 
 @router.message(Command("21top"))
@@ -248,18 +248,18 @@ async def show_leaderboard(message: Message) -> None:
     async for session in get_session():
         top_coins, top_games = await get_weekly_leaderboard(session, settings.forum_chat_id)
 
-    lines = ["🏆 Топ-5 по монетам:"]
-    for i, stat in enumerate(top_coins, 1):
-        name = stat.display_name or str(stat.user_id)
-        lines.append(f"{i}. @{name} — {stat.coins}")
+        lines = ["🏆 Топ-5 по монетам:"]
+        for i, stat in enumerate(top_coins, 1):
+            name = stat.display_name or str(stat.user_id)
+            lines.append(f"{i}. @{name} — {stat.coins}")
 
-    lines.append("")
-    lines.append("🎮 Топ-5 по играм:")
-    for i, stat in enumerate(top_games, 1):
-        name = stat.display_name or str(stat.user_id)
-        lines.append(f"{i}. @{name} — {stat.games_played}")
+        lines.append("")
+        lines.append("🎮 Топ-5 по играм:")
+        for i, stat in enumerate(top_games, 1):
+            name = stat.display_name or str(stat.user_id)
+            lines.append(f"{i}. @{name} — {stat.games_played}")
 
-    await message.reply("\n".join(lines))
+        await message.reply("\n".join(lines))
 
 
 @router.callback_query(F.data == "bj_hit")
@@ -337,10 +337,10 @@ async def on_hit(callback: CallbackQuery) -> None:
         await save_game(session, callback.from_user.id, settings.forum_chat_id, state)
         await session.commit()
 
-    username = _display_name_from_callback(callback) or str(callback.from_user.id)
-    text = format_game_state(state.player_hand, state.dealer_hand, username, hide_dealer=True)
-    await callback.message.edit_text(text, reply_markup=game_keyboard())
-    await callback.answer()
+        username = _display_name_from_callback(callback) or str(callback.from_user.id)
+        text = format_game_state(state.player_hand, state.dealer_hand, username, hide_dealer=True)
+        await callback.message.edit_text(text, reply_markup=game_keyboard())
+        await callback.answer()
 
 
 @router.callback_query(F.data == "bj_stand")
@@ -368,15 +368,15 @@ async def on_stand(callback: CallbackQuery) -> None:
         await end_game(session, callback.from_user.id, settings.forum_chat_id)
         await session.commit()
 
-    if result == "win":
-        result_text = "победа!" + (" +2 за ровно 21!" if blackjack else "")
-    elif result == "lose":
-        result_text = "проигрыш."
-    else:
-        result_text = "ничья."
+        if result == "win":
+            result_text = "победа!" + (" +2 за ровно 21!" if blackjack else "")
+        elif result == "lose":
+            result_text = "проигрыш."
+        else:
+            result_text = "ничья."
 
-    username = _display_name_from_callback(callback) or str(callback.from_user.id)
-    text = format_game_state(state.player_hand, state.dealer_hand, username, hide_dealer=False)
-    text += f"\n\n{result_text.capitalize()}\nТвой баланс: {stats.coins} монет"
-    await callback.message.edit_text(text, reply_markup=None)
-    await callback.answer()
+        username = _display_name_from_callback(callback) or str(callback.from_user.id)
+        text = format_game_state(state.player_hand, state.dealer_hand, username, hide_dealer=False)
+        text += f"\n\n{result_text.capitalize()}\nТвой баланс: {stats.coins} монет"
+        await callback.message.edit_text(text, reply_markup=None)
+        await callback.answer()
