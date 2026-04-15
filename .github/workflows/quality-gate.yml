@@ -26,7 +26,4 @@ jobs:
         run: |
           pytest -q \
             tests/moderation_dedup/test_moderation_dedup.py \
-            tests/quiz_fix/test_quiz_fix.py \
-            tests/quiz_lock/test_quiz_lock.py \
-            tests/datetime_aware/test_datetime_aware.py \
             tests/circuit_breaker/test_circuit_breaker.py

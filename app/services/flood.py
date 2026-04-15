@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 class FloodTracker:
@@ -24,3 +24,15 @@ class FloodTracker:
         while bucket and bucket[0] < cutoff:
             bucket.popleft()
         return len(bucket)
+
+    def cleanup(self) -> int:
+        """Удаляет устаревшие записи из трекера. Возвращает количество удалённых."""
+        now = datetime.now(timezone.utc)
+        cutoff = now - self.window
+        stale_keys = [
+            key for key, bucket in self._messages.items()
+            if not bucket or bucket[-1] < cutoff
+        ]
+        for key in stale_keys:
+            del self._messages[key]
+        return len(stale_keys)
