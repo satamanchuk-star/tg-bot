@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 class FloodTracker:
@@ -27,7 +27,7 @@ class FloodTracker:
 
     def cleanup(self) -> int:
         """Удаляет устаревшие записи из трекера. Возвращает количество удалённых."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         cutoff = now - self.window
         stale_keys = [
             key for key, bucket in self._messages.items()
