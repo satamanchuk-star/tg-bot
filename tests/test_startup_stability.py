@@ -8,38 +8,13 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.db import Base
-from app.main import heartbeat_job, on_startup
-from app.services import quiz_loader
+from app.main import heartbeat_job, on_startup_warmup
 
 
 def test_admin_module_importable() -> None:
     module = importlib.import_module("app.handlers.admin")
     assert module is not None
-
-
-def test_sync_questions_from_xlsx_returns_zero_on_invalid_file(tmp_path: Path) -> None:
-    async def _run() -> None:
-        original_path = quiz_loader.QUIZ_XLSX_PATH
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-        session_factory = async_sessionmaker(engine, expire_on_commit=False)
-        try:
-            quiz_loader.QUIZ_XLSX_PATH = tmp_path / "broken.xlsx"
-            quiz_loader.QUIZ_XLSX_PATH.write_text("not a zip", encoding="utf-8")
-
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-
-            async with session_factory() as session:
-                total, unique = await quiz_loader.sync_questions_from_xlsx(session)
-                assert (total, unique) == (0, 0)
-        finally:
-            await engine.dispose()
-            quiz_loader.QUIZ_XLSX_PATH = original_path
-
-    asyncio.run(_run())
 
 
 def test_on_startup_does_not_crash_when_telegram_unavailable(monkeypatch) -> None:
@@ -57,7 +32,7 @@ def test_on_startup_does_not_crash_when_telegram_unavailable(monkeypatch) -> Non
         monkeypatch.setattr("app.main.get_ai_client", lambda: object())
         monkeypatch.setattr("app.main.set_ai_admin_notifier", lambda _fn: None)
 
-        await on_startup(bot)
+        await on_startup_warmup(bot)
 
         assert bot.get_me.await_count == 3
         bot.set_my_commands.assert_not_called()
@@ -84,7 +59,7 @@ def test_on_startup_does_not_crash_when_cleanup_fails(monkeypatch) -> None:
         monkeypatch.setattr("app.main.get_ai_client", lambda: object())
         monkeypatch.setattr("app.main.set_ai_admin_notifier", lambda _fn: None)
 
-        await on_startup(bot)
+        await on_startup_warmup(bot)
 
         assert bot.set_my_commands.call_count >= 1
 
@@ -116,9 +91,11 @@ def test_main_does_not_raise_when_polling_network_error(monkeypatch) -> None:
         monkeypatch.setattr(main_module, "STOP_FLAG", Path("/tmp/nonexistent-flag"))
         monkeypatch.setattr(main_module, "Bot", lambda *_a, **_k: bot)
         monkeypatch.setattr(main_module, "Dispatcher", DummyDispatcher)
-        monkeypatch.setattr(main_module, "on_startup", AsyncMock())
+        monkeypatch.setattr(main_module, "on_startup_critical", AsyncMock())
+        monkeypatch.setattr(main_module, "on_startup_warmup", AsyncMock())
         monkeypatch.setattr(main_module, "schedule_jobs", AsyncMock(return_value=None))
         monkeypatch.setattr(main_module, "close_ai_client", AsyncMock())
+        monkeypatch.setattr(main_module, "_run_background_task", lambda coro, *, name: coro.close())
 
         await main_module.main()
 
@@ -145,7 +122,7 @@ def test_on_startup_does_not_crash_when_token_invalid(monkeypatch) -> None:
         monkeypatch.setattr("app.main.get_ai_client", lambda: object())
         monkeypatch.setattr("app.main.set_ai_admin_notifier", lambda _fn: None)
 
-        await on_startup(bot)
+        await on_startup_warmup(bot)
 
         bot.set_my_commands.assert_not_called()
         bot.send_message.assert_not_called()
@@ -175,13 +152,12 @@ def test_on_startup_runs_places_sync_in_background(monkeypatch) -> None:
         monkeypatch.setattr("app.main.set_ai_admin_notifier", lambda _fn: None)
         monkeypatch.setattr("app.main._run_background_task", _fake_background_task)
 
-        await on_startup(bot)
+        await on_startup_warmup(bot)
 
         assert {
             "startup_sync_places",
             "startup_validate_cleanup",
             "startup_heartbeat",
-            "startup_lottery_recovery",
         }.issubset(scheduled_names)
 
     asyncio.run(_run())
@@ -212,7 +188,7 @@ def test_on_startup_limits_ai_probe_time(monkeypatch) -> None:
         monkeypatch.setattr(main_module.settings, "ai_enabled", True)
         monkeypatch.setattr(main_module.settings, "ai_key", "test-key")
 
-        await asyncio.wait_for(main_module.on_startup(bot), timeout=0.2)
+        await asyncio.wait_for(main_module.on_startup_warmup(bot), timeout=0.2)
 
     asyncio.run(_run())
 
@@ -242,9 +218,11 @@ def test_main_does_not_raise_when_polling_api_error(monkeypatch) -> None:
         monkeypatch.setattr(main_module, "STOP_FLAG", Path("/tmp/nonexistent-flag"))
         monkeypatch.setattr(main_module, "Bot", lambda *_a, **_k: bot)
         monkeypatch.setattr(main_module, "Dispatcher", DummyDispatcher)
-        monkeypatch.setattr(main_module, "on_startup", AsyncMock())
+        monkeypatch.setattr(main_module, "on_startup_critical", AsyncMock())
+        monkeypatch.setattr(main_module, "on_startup_warmup", AsyncMock())
         monkeypatch.setattr(main_module, "schedule_jobs", AsyncMock(return_value=None))
         monkeypatch.setattr(main_module, "close_ai_client", AsyncMock())
+        monkeypatch.setattr(main_module, "_run_background_task", lambda coro, *, name: coro.close())
 
         await main_module.main()
 

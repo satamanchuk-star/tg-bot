@@ -520,7 +520,9 @@ _PENDING_FEEDBACK: dict[int, tuple[int, int, str, str, str]] = {}  # msg_id → 
 # Активное окно диалога: (chat_id, user_id, thread_id) → время последнего ответа бота
 # Если пользователь пишет в течение окна — продолжаем разговор без явного упоминания
 _ACTIVE_DIALOG: dict[tuple[int, int, int | None], datetime] = {}
-_ACTIVE_DIALOG_WINDOW = timedelta(minutes=4)
+# 90 секунд — достаточно чтобы продолжить диалог репликой без упоминания,
+# но недостаточно чтобы бот вмешивался в посторонние обсуждения.
+_ACTIVE_DIALOG_WINDOW = timedelta(seconds=90)
 _ACTIVE_DIALOG_MAX = 500
 
 
@@ -1228,8 +1230,13 @@ async def mention_help(message: Message, bot: Bot) -> None:
     else:
         logger.info("HANDLER: mention_help MATCH by id")
     if message.chat.id not in _ASSISTANT_CHAT_IDS:
+        logger.info(
+            "MENTION_SKIPPED reason=wrong_chat chat_id=%s",
+            message.chat.id,
+        )
         return
     if message.from_user is None:
+        logger.info("MENTION_SKIPPED reason=no_from_user chat_id=%s", message.chat.id)
         return
 
     # Не отвечаем на упоминания в топике «Попутчики»
@@ -1238,6 +1245,10 @@ async def mention_help(message: Message, bot: Bot) -> None:
         and settings.topic_rides is not None
         and message.message_thread_id == settings.topic_rides
     ):
+        logger.info(
+            "MENTION_SKIPPED reason=rides_topic thread_id=%s",
+            message.message_thread_id,
+        )
         return
 
     # Помечаем сообщение как обработанное, чтобы не обрабатывать дважды

@@ -765,7 +765,40 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     return scheduler
 
 
-async def on_startup(bot: Bot) -> None:
+async def on_startup_critical() -> None:
+    """Блокирующая часть инициализации: только то, без чего нельзя стартовать polling.
+
+    Всё тяжёлое (TG probe, set_commands, seed, resident_kb, AI probe, startup-notice)
+    вынесено в ``on_startup_warmup`` и запускается фоном после старта polling.
+    """
+    import time as _time
+    _step_t = _time.monotonic()
+    try:
+        await init_db(engine)
+    except Exception:
+        logger.exception(
+            "Критическая ошибка: не удалось инициализировать БД. "
+            "Проверьте DATABASE_URL и права на директорию данных."
+        )
+        raise
+    logger.info("⏱ init_db: %.2fs", _time.monotonic() - _step_t)
+
+    _step_t = _time.monotonic()
+    try:
+        async for session in get_session():
+            await apply_v11_stats_reset(session)
+            await drop_orphaned_tables(session)
+    except Exception:  # noqa: BLE001
+        logger.exception("Не удалось выполнить миграции (некритично, продолжаем).")
+    logger.info("⏱ migrations: %.2fs", _time.monotonic() - _step_t)
+
+
+async def on_startup_warmup(bot: Bot) -> None:
+    """Фоновый прогрев: probes, set_commands, seed, resident_kb, AI probe, уведомление.
+
+    Запускается параллельно со стартом polling — пользователи начинают получать ответы
+    сразу, а долгие сетевые probes и seed'ы происходят в фоне.
+    """
     async def _admin_notifier(text: str) -> None:
         await bot.send_message(settings.admin_log_chat_id, f"⚠️ {text}")
 
@@ -837,18 +870,6 @@ async def on_startup(bot: Bot) -> None:
             break
     logger.info("⏱ tg_probe: %.2fs", _time.monotonic() - _step_t)
 
-    # ── БД: инициализация ────────────────────────────────────────────────────
-    _step_t = _time.monotonic()
-    try:
-        await init_db(engine)
-    except Exception:
-        logger.exception(
-            "Критическая ошибка: не удалось инициализировать БД. "
-            "Проверьте DATABASE_URL и права на директорию данных."
-        )
-        raise
-    logger.info("⏱ init_db: %.2fs", _time.monotonic() - _step_t)
-
     # ── БД: проверка целостности и очистка — в фон, не блокируем старт ────────
     async def _bg_validate_and_cleanup() -> None:
         try:
@@ -858,16 +879,6 @@ async def on_startup(bot: Bot) -> None:
         await cleanup_database()
 
     _run_background_task(_bg_validate_and_cleanup(), name="startup_validate_cleanup")
-
-    # ── Миграции ─────────────────────────────────────────────────────────────
-    _step_t = _time.monotonic()
-    try:
-        async for session in get_session():
-            await apply_v11_stats_reset(session)
-            await drop_orphaned_tables(session)
-    except Exception:  # noqa: BLE001
-        logger.exception("Не удалось выполнить миграции (некритично, продолжаем).")
-    logger.info("⏱ migrations: %.2fs", _time.monotonic() - _step_t)
 
     # ── Heartbeat — в фон, не блокируем старт ───────────────────────────────
     _run_background_task(heartbeat_job(bot), name="startup_heartbeat")
@@ -1122,8 +1133,12 @@ async def main() -> None:
 
     scheduler: AsyncIOScheduler | None = None
     try:
-        await on_startup(bot)
+        # Блокирующая часть: только БД и миграции (несколько секунд).
+        await on_startup_critical()
         scheduler = await schedule_jobs(bot)
+        # Всё остальное — probes, seed, set_commands, AI probe, стартовое уведомление —
+        # в фон, чтобы polling начал принимать сообщения немедленно.
+        _run_background_task(on_startup_warmup(bot), name="startup_warmup")
         polling_attempt = 0
         while True:
             try:
