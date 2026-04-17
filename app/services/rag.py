@@ -69,8 +69,9 @@ _CATEGORY_RULES: list[tuple[str, tuple[str, ...]]] = [
     ("платежи", ("квитанц", "оплат", "тариф", "долг", "начислен")),
 ]
 
-# Дефолтный TTL для RAG-записей (90 дней)
-_DEFAULT_RAG_TTL_DAYS = 90
+# Дефолтный TTL для RAG-записей (180 дней): контактные/инфраструктурные
+# факты в ЖК меняются редко, поэтому хранение полгода разумнее 90 дней.
+_DEFAULT_RAG_TTL_DAYS = 180
 # Коэффициент затухания по времени (чем старше запись, тем ниже score)
 _TIME_DECAY_HALF_LIFE_DAYS = 60
 
@@ -178,11 +179,13 @@ def classify_rag_message(text: str) -> str:
 
 
 def build_semantic_key(text: str, category: str) -> str:
+    # 6 токенов вместо 4: меньше коллизий у близких по лексике,
+    # но разных по смыслу вопросов.
     tokens = [token for token in _tokenize(text) if token not in _STOP_WORDS]
     if not tokens:
         return f"{category}:пусто"
     uniq = sorted(set(tokens), key=lambda item: (-tokens.count(item), item))
-    core = uniq[:4]
+    core = uniq[:6]
     return f"{category}:{'|'.join(core)}"[:120]
 
 

@@ -1180,7 +1180,7 @@ async def ai_command(message: Message) -> None:
         try:
             await sent.edit_reply_markup(reply_markup=_feedback_keyboard(sent.message_id))
         except Exception:
-            pass  # Не критично если не удалось обновить кнопки
+            logger.debug("Не удалось обновить reply_markup фидбэк-кнопок.", exc_info=True)
     except Exception:
         logger.exception("Ошибка при обработке /ai команды.")
         await message.reply("Произошла ошибка при обработке запроса. Попробуйте позже.")
@@ -1420,7 +1420,7 @@ async def mention_help(message: Message, bot: Bot) -> None:
             try:
                 await sent.edit_reply_markup(reply_markup=_feedback_keyboard(sent.message_id))
             except Exception:
-                pass
+                logger.debug("Не удалось обновить reply_markup фидбэк-кнопок.", exc_info=True)
             # Открываем окно активного диалога: пользователь может продолжить без упоминания
             _open_active_dialog(message.chat.id, message.from_user.id, message.message_thread_id)
         except Exception:
@@ -1513,7 +1513,7 @@ async def ai_feedback_callback(callback: CallbackQuery) -> None:
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
-        pass
+        logger.debug("Не удалось убрать reply_markup после оценки.", exc_info=True)
 
     await callback.answer(f"Спасибо за оценку {emoji}")
 
