@@ -152,7 +152,14 @@ class RetryOnFloodSession(AiohttpSession):
 
     def __init__(self, proxy_manager: ProxyManager | None = None, **kwargs):
         proxy = proxy_manager.get_current() if proxy_manager else None
-        super().__init__(proxy=proxy, **kwargs)
+        try:
+            super().__init__(proxy=proxy, **kwargs)
+        except RuntimeError as exc:
+            # aiogram требует aiohttp-socks для любого прокси; если пакет не установлен
+            # или прокси битый — запускаемся без прокси, чтобы не уронить весь бот.
+            logger.warning("Не удалось инициализировать прокси (%s), запускаюсь без прокси", exc)
+            super().__init__(proxy=None, **kwargs)
+            proxy_manager = None
         self._proxy_manager = proxy_manager
 
     async def make_request(
@@ -179,7 +186,11 @@ class RetryOnFloodSession(AiohttpSession):
                 network_attempts += 1
                 if self._proxy_manager:
                     new_proxy = self._proxy_manager.rotate()
-                    self.proxy = new_proxy
+                    try:
+                        self.proxy = new_proxy
+                    except RuntimeError as proxy_exc:
+                        logger.warning("Не удалось сменить прокси (%s), отключаю ротацию", proxy_exc)
+                        self._proxy_manager = None
                 if network_attempts >= MAX_RETRIES_ON_NETWORK:
                     logger.warning(
                         "Сетевой сбой Telegram после %d попыток: %s",
