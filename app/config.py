@@ -246,6 +246,11 @@ class Settings(BaseSettings):
 
     timezone: str = "Europe/Moscow"
     build_version: str = "dev"
+
+    # Прокси для доступа к Telegram API (автоматический подбор из GitHub-списков)
+    proxy_enabled: bool = False
+    proxy_refresh_interval_min: int = 30
+
     ai_enabled: bool = True
     ai_api_url: str | None = None
     ai_key: str | None = Field(

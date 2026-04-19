@@ -56,6 +56,7 @@ from app.services.health import get_health_state, update_heartbeat, update_notic
 from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
 from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, get_and_clear_response_log, set_ai_admin_notifier
+from app.services.proxy import ProxyManager
 from app.services.daily_summary import build_ai_summary_context, build_daily_summary, build_response_report, render_daily_summary
 from app.services.daily_messages import send_morning_greeting, send_traffic_report
 from app.services.proactive import send_scheduled_greeting, send_weekly_update
@@ -138,15 +139,21 @@ MAX_RETRIES_ON_FLOOD = 3
 MAX_RETRIES_ON_NETWORK = 3
 NETWORK_RETRY_BACKOFF = (1.0, 2.0, 4.0)
 
+# Глобальный менеджер прокси; None если прокси не включены
+_proxy_manager: ProxyManager | None = None
+
 
 class RetryOnFloodSession(AiohttpSession):
-    """Автоматически повторяет запросы при TelegramRetryAfter и сетевых таймаутах.
+    """Повторяет запросы при флуд-контроле и сетевых сбоях; ротирует прокси при необходимости.
 
-    Сетевые сбои (TelegramNetworkError) происходят, когда HTTP-клиент Telegram
-    не успевает получить ответ: таймаут запроса, обрыв соединения, временная
-    недоступность api.telegram.org. Без ретраев любой такой сбой прерывает
-    обработку апдейта и превращается в шумное уведомление в лог-чате.
+    Если передан proxy_manager — при каждом сетевом сбое переключается на
+    следующий прокси из пула перед повтором запроса.
     """
+
+    def __init__(self, proxy_manager: ProxyManager | None = None, **kwargs):
+        proxy = proxy_manager.get_current() if proxy_manager else None
+        super().__init__(proxy=proxy, **kwargs)
+        self._proxy_manager = proxy_manager
 
     async def make_request(
         self,
@@ -170,6 +177,9 @@ class RetryOnFloodSession(AiohttpSession):
                 await asyncio.sleep(e.retry_after)
             except TelegramNetworkError as e:
                 network_attempts += 1
+                if self._proxy_manager:
+                    new_proxy = self._proxy_manager.rotate()
+                    self.proxy = new_proxy
                 if network_attempts >= MAX_RETRIES_ON_NETWORK:
                     logger.warning(
                         "Сетевой сбой Telegram после %d попыток: %s",
@@ -630,6 +640,12 @@ def _cleanup_flood_tracker() -> None:
 
 async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
+    if settings.proxy_enabled and _proxy_manager is not None:
+        scheduler.add_job(
+            _proxy_manager.refresh_and_find,
+            "interval",
+            minutes=settings.proxy_refresh_interval_min,
+        )
     scheduler.add_job(
         send_daily_summary,
         "cron",
@@ -1101,8 +1117,23 @@ async def main() -> None:
         )
         raise SystemExit(1)
 
+    # Инициализация прокси (до создания бота, чтобы сессия сразу получила адрес)
+    global _proxy_manager
+    if settings.proxy_enabled:
+        _proxy_manager = ProxyManager()
+        logger.info("Прокси включены, загружаю список…")
+        count = await _proxy_manager.refresh()
+        if count > 0:
+            found = await _proxy_manager.find_working()
+            if not found:
+                logger.warning("Рабочий прокси не найден, работаем без прокси")
+                _proxy_manager = None
+        else:
+            logger.warning("Не удалось загрузить прокси-листы, работаем без прокси")
+            _proxy_manager = None
+
     try:
-        bot = Bot(token=settings.bot_token, session=RetryOnFloodSession())
+        bot = Bot(token=settings.bot_token, session=RetryOnFloodSession(proxy_manager=_proxy_manager))
     except TokenValidationError:
         token_preview = settings.bot_token[:10] + "..." if len(settings.bot_token) > 10 else settings.bot_token
         logger.error(
