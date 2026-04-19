@@ -247,9 +247,15 @@ class Settings(BaseSettings):
     timezone: str = "Europe/Moscow"
     build_version: str = "dev"
 
-    # Прокси для доступа к Telegram API (автоматический подбор из GitHub-списков)
+    # Прокси для доступа к Telegram API.
+    # Поддерживается либо автоподбор HTTP/SOCKS-прокси из публичных GitHub-списков,
+    # либо ручной адрес через PROXY_MANUAL (имеет приоритет).
     proxy_enabled: bool = False
     proxy_refresh_interval_min: int = 30
+    proxy_manual: str | None = None  # напр. socks5://user:pass@host:1080
+    proxy_working_pool_size: int = 5
+    proxy_test_limit: int = 500
+    proxy_state_path: str = "data/working_proxies.json"
 
     ai_enabled: bool = True
     ai_api_url: str | None = None
