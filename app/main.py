@@ -651,7 +651,7 @@ def _cleanup_flood_tracker() -> None:
 
 async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
-    if settings.proxy_enabled and _proxy_manager is not None:
+    if _proxy_manager is not None:
         scheduler.add_job(
             _proxy_manager.refresh_and_find,
             "interval",
@@ -1130,18 +1130,40 @@ async def main() -> None:
 
     # Инициализация прокси (до создания бота, чтобы сессия сразу получила адрес)
     global _proxy_manager
-    if settings.proxy_enabled:
-        _proxy_manager = ProxyManager()
-        logger.info("Прокси включены, загружаю список…")
-        count = await _proxy_manager.refresh()
-        if count > 0:
-            found = await _proxy_manager.find_working()
-            if not found:
+    if settings.proxy_enabled or settings.proxy_manual:
+        _proxy_manager = ProxyManager(
+            bot_token=settings.bot_token,
+            working_pool_size=settings.proxy_working_pool_size,
+            test_limit=settings.proxy_test_limit,
+            state_path=Path(settings.proxy_state_path),
+            manual_proxy=settings.proxy_manual,
+        )
+        if settings.proxy_manual:
+            logger.info("Прокси: ручной адрес задан, автоподбор пропущен")
+            ok = await _proxy_manager.validate_working_pool()
+            if not ok:
+                logger.warning(
+                    "Ручной прокси не отвечает, всё равно пробуем через него "
+                    "(Telegram может быть временно недоступен для прокси)"
+                )
+        else:
+            logger.info("Прокси включены, ищу рабочие…")
+            # Сначала пробуем прокси, которые уже были рабочими в прошлом запуске
+            if _proxy_manager.count > 0:
+                await _proxy_manager.validate_working_pool()
+            if _proxy_manager.count < settings.proxy_working_pool_size:
+                count = await _proxy_manager.refresh()
+                if count > 0:
+                    await _proxy_manager.find_working()
+            if _proxy_manager.count == 0:
                 logger.warning("Рабочий прокси не найден, работаем без прокси")
                 _proxy_manager = None
-        else:
-            logger.warning("Не удалось загрузить прокси-листы, работаем без прокси")
-            _proxy_manager = None
+            else:
+                logger.info(
+                    "Прокси: в пуле %d рабочих, текущий %s",
+                    _proxy_manager.count,
+                    _proxy_manager.get_current(),
+                )
 
     try:
         bot = Bot(token=settings.bot_token, session=RetryOnFloodSession(proxy_manager=_proxy_manager))
