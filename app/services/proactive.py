@@ -21,14 +21,14 @@ from app.services.resident_kb import build_resident_answer, build_resident_conte
 
 logger = logging.getLogger(__name__)
 
-# Лимиты антиспама: максимум 1 проактивное сообщение в час на топик
+# Лимиты антиспама: максимум 1 проактивное сообщение в 30 минут на топик
 _LAST_PROACTIVE: dict[tuple[int, int | None], datetime] = {}
-_PROACTIVE_COOLDOWN = timedelta(hours=1)
+_PROACTIVE_COOLDOWN = timedelta(minutes=30)
 
 # Трекер активности топика: (chat_id, topic_id) → список timestamp'ов
 _TOPIC_ACTIVITY: dict[tuple[int, int | None], list[datetime]] = defaultdict(list)
 _ACTIVITY_WINDOW = timedelta(minutes=10)
-_ACTIVITY_THRESHOLD = 5  # Если больше 5 сообщений за 10 минут — не вмешиваемся
+_ACTIVITY_THRESHOLD = 8  # Если больше 8 сообщений за 10 минут — не вмешиваемся
 
 # --- Контекстные комментарии при высокой активности ---
 # Cooldown: максимум 1 комментарий в 25 минут на топик
