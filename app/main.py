@@ -38,6 +38,7 @@ from app.handlers import (
     games,
     help as help_handler,
     moderation,
+    personalization as personalization_handler,
     roulette,
     shop,
     text_publish,
@@ -59,6 +60,7 @@ from app.services.ai_module import clear_assistant_cache, close_ai_client, get_a
 from app.services.proxy import ProxyManager
 from app.services.daily_summary import build_ai_summary_context, build_daily_summary, build_response_report, render_daily_summary
 from app.services.daily_messages import send_morning_greeting, send_traffic_report
+from app.services.personalization import send_weekly_nudges
 from app.services.proactive import send_scheduled_greeting, send_weekly_update
 from app.services.resident_kb import load_resident_kb
 
@@ -349,6 +351,17 @@ async def init_db(async_engine: AsyncEngine) -> None:
 
             # Миграция resident_profiles (создаётся через create_all,
             # но проверяем на всякий случай)
+            if inspector.has_table("resident_profiles"):
+                columns = {
+                    column["name"]
+                    for column in inspector.get_columns("resident_profiles")
+                }
+                if "last_nudge_at" not in columns:
+                    sync_conn.execute(
+                        text(
+                            "ALTER TABLE resident_profiles ADD COLUMN last_nudge_at DATETIME"
+                        )
+                    )
 
 
         await conn.run_sync(_ensure_columns)
@@ -739,6 +752,18 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         "cron",
         day_of_week="mon",
         hour=10,
+        minute=0,
+        args=[bot],
+    )
+    # Еженедельные персональные DM-нажъмы (по фактам из ResidentProfile).
+    # Off-by-default через ai_feature_weekly_nudge — внутри функции стоит ранний return.
+    # Вторник 11:00 — середина рабочей недели, не путается с проактивными
+    # утренними/вечерними коммуникациями и понедельничным weekly update.
+    scheduler.add_job(
+        send_weekly_nudges,
+        "cron",
+        day_of_week="tue",
+        hour=11,
         minute=0,
         args=[bot],
     )
@@ -1189,6 +1214,7 @@ async def main() -> None:
     dp.include_router(economy_handler.router)  # инициативы жителей (доработки бота)
     dp.include_router(roulette.router)  # рулетка (команда /bet)
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
+    dp.include_router(personalization_handler.router)  # /off_nudges, /on_nudges (только в DM)
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     # stats.router убран — статистика через middleware
 
