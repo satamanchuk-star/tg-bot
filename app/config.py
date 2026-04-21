@@ -280,6 +280,11 @@ class Settings(BaseSettings):
     ai_feature_proactive: bool = True
     # Профили жителей: бот запоминает факты о пользователях из диалогов
     ai_feature_profiles: bool = True
+    # Еженедельные персональные косания в DM по фактам из профиля. Off-by-default:
+    # требует, чтобы пользователь ранее писал боту в личку (иначе TelegramForbidden).
+    ai_feature_weekly_nudge: bool = False
+    weekly_nudge_max_per_run: int = 20  # верхний лимит DM за один запуск джобы
+    weekly_nudge_min_days_between: int = 30  # одному пользователю — не чаще раза в N дней
     # Адаптация тона под настроение чата
     ai_feature_mood: bool = True
     # Тихое обучение модерации: бот НЕ модерирует, а отправляет подозрительные
