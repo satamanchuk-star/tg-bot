@@ -2,17 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import httpx
-from aiogram import Bot
 from bs4 import BeautifulSoup
-
-from app.config import settings
-from app.services.ai_module import get_ai_client
 
 logger = logging.getLogger(__name__)
 

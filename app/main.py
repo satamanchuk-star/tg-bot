@@ -42,6 +42,7 @@ from app.handlers import (
     roulette,
     shop,
     text_publish,
+    welcome,
 )
 from app.models import MigrationFlag, UserStat
 from app.services.topic_stats import bump_topic_stat
@@ -746,12 +747,12 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         minute=59,
         args=[bot],
     )
-    # Еженедельное обновление по понедельникам
+    # Недельный дайджест по воскресеньям (20:00)
     scheduler.add_job(
-        send_weekly_update,
+        send_weekly_digest,
         "cron",
-        day_of_week="mon",
-        hour=10,
+        day_of_week="sun",
+        hour=20,
         minute=0,
         args=[bot],
     )
@@ -1221,6 +1222,7 @@ async def main() -> None:
                             "edited_message",
                             "callback_query",
                             "message_reaction",
+                            "chat_member",
                         ],
                     )
                 except TypeError:

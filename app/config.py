@@ -345,7 +345,6 @@ class Settings(BaseSettings):
         "topic_neighbors",
         "topic_market",
         "topic_duplex",
-        "ai_greeting_topic_id",
         mode="before",
     )
     @classmethod
