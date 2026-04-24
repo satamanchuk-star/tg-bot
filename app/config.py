@@ -246,6 +246,17 @@ class Settings(BaseSettings):
 
     timezone: str = "Europe/Moscow"
     build_version: str = "dev"
+
+    # Прокси для доступа к Telegram API.
+    # Поддерживается либо автоподбор HTTP/SOCKS-прокси из публичных GitHub-списков,
+    # либо ручной адрес через PROXY_MANUAL (имеет приоритет).
+    proxy_enabled: bool = False
+    proxy_refresh_interval_min: int = 30
+    proxy_manual: str | None = None  # напр. socks5://user:pass@host:1080
+    proxy_working_pool_size: int = 5
+    proxy_test_limit: int = 500
+    proxy_state_path: str = "data/working_proxies.json"
+
     ai_enabled: bool = True
     ai_api_url: str | None = None
     ai_key: str | None = Field(
@@ -269,6 +280,11 @@ class Settings(BaseSettings):
     ai_feature_proactive: bool = True
     # Профили жителей: бот запоминает факты о пользователях из диалогов
     ai_feature_profiles: bool = True
+    # Еженедельные персональные косания в DM по фактам из профиля. Off-by-default:
+    # требует, чтобы пользователь ранее писал боту в личку (иначе TelegramForbidden).
+    ai_feature_weekly_nudge: bool = False
+    weekly_nudge_max_per_run: int = 20  # верхний лимит DM за один запуск джобы
+    weekly_nudge_min_days_between: int = 30  # одному пользователю — не чаще раза в N дней
     # Адаптация тона под настроение чата
     ai_feature_mood: bool = True
     # Тихое обучение модерации: бот НЕ модерирует, а отправляет подозрительные
@@ -280,8 +296,6 @@ class Settings(BaseSettings):
     ai_evening_greeting: bool = False  # Включить вечернее приветствие (20:00)
     # Утреннее приветствие с погодой и праздниками (8:00 в General)
     ai_daily_greeting: bool = False
-    # Трафик-отчёт в Попутчиках (7:00 утро / 19:00 вечер, пн-пт)
-    ai_traffic_report: bool = False
     ai_summary_hour: int = 21
     ai_summary_minute: int = 0
     ai_summary_topic_id: int | None = None
@@ -297,7 +311,6 @@ class Settings(BaseSettings):
     topic_building_2: int | None = None
     topic_building_3: int | None = None
     topic_complaints: int | None = None
-    topic_rides: int | None = None
     topic_smoke: int | None = None
     topic_pets: int | None = None
     topic_repair: int | None = None
@@ -319,7 +332,6 @@ class Settings(BaseSettings):
         "topic_building_2",
         "topic_building_3",
         "topic_complaints",
-        "topic_rides",
         "topic_smoke",
         "topic_pets",
         "topic_repair",
@@ -333,7 +345,6 @@ class Settings(BaseSettings):
         "topic_neighbors",
         "topic_market",
         "topic_duplex",
-        "ai_greeting_topic_id",
         mode="before",
     )
     @classmethod

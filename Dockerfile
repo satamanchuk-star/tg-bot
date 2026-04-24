@@ -11,7 +11,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 COPY scripts/ ./scripts/
 COPY data/ ./data/
-COPY quiz_questions_normalized.xlsx ./quiz_questions_normalized.xlsx
 
 # Копируем KB и seed в отдельную директорию, чтобы bind mount data/ не перекрывал их
 COPY data/resident_kb.json ./kb/resident_kb.json

@@ -21,14 +21,14 @@ from app.services.resident_kb import build_resident_answer, build_resident_conte
 
 logger = logging.getLogger(__name__)
 
-# Лимиты антиспама: максимум 1 проактивное сообщение в час на топик
+# Лимиты антиспама: максимум 1 проактивное сообщение в 30 минут на топик
 _LAST_PROACTIVE: dict[tuple[int, int | None], datetime] = {}
-_PROACTIVE_COOLDOWN = timedelta(hours=1)
+_PROACTIVE_COOLDOWN = timedelta(minutes=30)
 
 # Трекер активности топика: (chat_id, topic_id) → список timestamp'ов
 _TOPIC_ACTIVITY: dict[tuple[int, int | None], list[datetime]] = defaultdict(list)
 _ACTIVITY_WINDOW = timedelta(minutes=10)
-_ACTIVITY_THRESHOLD = 5  # Если больше 5 сообщений за 10 минут — не вмешиваемся
+_ACTIVITY_THRESHOLD = 8  # Если больше 8 сообщений за 10 минут — не вмешиваемся
 
 # --- Контекстные комментарии при высокой активности ---
 # Cooldown: максимум 1 комментарий в 25 минут на топик
@@ -208,8 +208,6 @@ def _init_excluded_topics() -> None:
         _EXCLUDED_TOPIC_IDS.add(settings.topic_rules)
     if settings.topic_important is not None:
         _EXCLUDED_TOPIC_IDS.add(settings.topic_important)
-    if settings.topic_rides is not None:
-        _EXCLUDED_TOPIC_IDS.add(settings.topic_rides)
 
 
 def _is_comment_cooldown(chat_id: int, topic_id: int | None) -> bool:
@@ -316,113 +314,3 @@ async def maybe_topic_comment(message: Message, bot: Bot) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# Плановые приветствия (утро / вечер)
-# ---------------------------------------------------------------------------
-
-_MORNING_SYSTEM_PROMPT = (
-    "Ты — дружелюбный бот жилого комплекса «Живописный». "
-    "Напиши короткое доброе утреннее приветствие для жителей форума (1-2 предложения). "
-    "Упомяни день недели или что-то приятное про начало дня. "
-    "Разговорный стиль, живо и тепло. Один эмодзи. НЕ пиши длинных текстов."
-)
-
-_EVENING_SYSTEM_PROMPT = (
-    "Ты — дружелюбный бот жилого комплекса «Живописный». "
-    "Напиши короткое доброе вечернее пожелание для жителей форума (1-2 предложения). "
-    "Пожелай хорошего вечера или спокойной ночи. "
-    "Разговорный стиль, тепло и уютно. Один эмодзи. НЕ пиши длинных текстов."
-)
-
-
-_WEEKLY_UPDATE_SYSTEM_PROMPT = (
-    "Ты — дружелюбный бот жилого комплекса «Живописный». "
-    "Напиши короткое еженедельное обращение к жителям на понедельник. "
-    "Включи:\n"
-    "1) Пожелание хорошей продуктивной недели — каждый раз в разном стиле.\n"
-    "2) Краткое напоминание о возможностях бота (2-3 пункта, чередуй каждую неделю):\n"
-    "   - Упомяни @бот для вопросов по ЖК\n"
-    "   - /help — навигация по форуму\n"
-    "   - /21 — блэкджек (22:00–00:00), зарабатывай монеты\n"
-    "   - /roulette — рулетка (21:00–22:00)\n"
-    "   - /доработка — предложить улучшение бота\n"
-    "3) Можно упомянуть сезонное (погода, праздники) или бытовое наблюдение.\n"
-    "Максимум 500 символов. Разговорный, дружелюбный тон. 1-2 эмодзи. "
-    "Не перечисляй ВСЕ команды — выбери 2-3 самых интересных."
-)
-
-
-async def send_weekly_update(bot: Bot) -> None:
-    """Отправляет еженедельное обновление в топик «Важное» по понедельникам."""
-    if not settings.ai_feature_proactive:
-        return
-
-    target_topic = settings.topic_important
-    if target_topic is None:
-        logger.info("Еженедельное обновление пропущено: topic_important не задан.")
-        return
-
-    try:
-        ai_client = get_ai_client()
-        provider = ai_client._provider
-        if not hasattr(provider, "_chat_completion"):
-            logger.info("Еженедельное обновление пропущено: нет remote AI провайдера.")
-            return
-        content, _ = await provider._chat_completion(
-            [
-                {"role": "system", "content": _WEEKLY_UPDATE_SYSTEM_PROMPT},
-                {"role": "user", "content": "Напиши еженедельное обращение к жителям"},
-            ],
-            chat_id=settings.forum_chat_id,
-        )
-        if content and content.strip():
-            await bot.send_message(
-                settings.forum_chat_id,
-                content.strip()[:600],
-                message_thread_id=target_topic,
-            )
-            logger.info("WEEKLY_UPDATE: sent to topic=%s", target_topic)
-    except Exception:
-        logger.warning("Не удалось отправить еженедельное обновление.")
-
-
-async def send_scheduled_greeting(bot: Bot, period: str) -> None:
-    """Отправляет плановое приветствие в форум (утро/вечер).
-
-    period: 'morning' или 'evening'
-    """
-    if not settings.ai_feature_proactive:
-        return
-
-    target_topic = getattr(settings, "ai_greeting_topic_id", None)
-    if target_topic is None:
-        # Фоллбек на topic_important
-        target_topic = settings.topic_important
-    if target_topic is None:
-        logger.info("Плановое приветствие пропущено: ai_greeting_topic_id не задан.")
-        return
-
-    system_prompt = _MORNING_SYSTEM_PROMPT if period == "morning" else _EVENING_SYSTEM_PROMPT
-
-    try:
-        ai_client = get_ai_client()
-        provider = ai_client._provider
-        if not hasattr(provider, "_chat_completion"):
-            logger.info("Плановое приветствие пропущено: нет remote AI провайдера.")
-            return
-        content, _ = await provider._chat_completion(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": "Напиши приветствие"},
-            ],
-            chat_id=settings.forum_chat_id,
-        )
-        if content and content.strip():
-            await bot.send_message(
-                settings.forum_chat_id,
-                content.strip()[:500],
-                message_thread_id=target_topic,
-            )
-            logger.info("GREETING: %s greeting sent to topic=%s", period, target_topic)
-    except Exception:
-        logger.warning("Не удалось отправить плановое приветствие (%s)", period)

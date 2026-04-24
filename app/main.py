@@ -38,10 +38,11 @@ from app.handlers import (
     games,
     help as help_handler,
     moderation,
-    reactions,
+    personalization as personalization_handler,
     roulette,
     shop,
     text_publish,
+    welcome,
 )
 from app.models import MigrationFlag, UserStat
 from app.services.topic_stats import bump_topic_stat
@@ -57,8 +58,10 @@ from app.services.health import get_health_state, update_heartbeat, update_notic
 from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
 from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, get_and_clear_response_log, set_ai_admin_notifier
+from app.services.proxy import ProxyManager
 from app.services.daily_summary import build_ai_summary_context, build_daily_summary, build_response_report, render_daily_summary
-from app.services.daily_messages import send_morning_greeting, send_traffic_report
+from app.services.daily_messages import send_morning_greeting
+from app.services.personalization import send_weekly_nudges
 from app.services.proactive import send_scheduled_greeting, send_weekly_update
 from app.services.resident_kb import load_resident_kb
 
@@ -139,15 +142,28 @@ MAX_RETRIES_ON_FLOOD = 3
 MAX_RETRIES_ON_NETWORK = 3
 NETWORK_RETRY_BACKOFF = (1.0, 2.0, 4.0)
 
+# Глобальный менеджер прокси; None если прокси не включены
+_proxy_manager: ProxyManager | None = None
+
 
 class RetryOnFloodSession(AiohttpSession):
-    """Автоматически повторяет запросы при TelegramRetryAfter и сетевых таймаутах.
+    """Повторяет запросы при флуд-контроле и сетевых сбоях; ротирует прокси при необходимости.
 
-    Сетевые сбои (TelegramNetworkError) происходят, когда HTTP-клиент Telegram
-    не успевает получить ответ: таймаут запроса, обрыв соединения, временная
-    недоступность api.telegram.org. Без ретраев любой такой сбой прерывает
-    обработку апдейта и превращается в шумное уведомление в лог-чате.
+    Если передан proxy_manager — при каждом сетевом сбое переключается на
+    следующий прокси из пула перед повтором запроса.
     """
+
+    def __init__(self, proxy_manager: ProxyManager | None = None, **kwargs):
+        proxy = proxy_manager.get_current() if proxy_manager else None
+        try:
+            super().__init__(proxy=proxy, **kwargs)
+        except RuntimeError as exc:
+            # aiogram требует aiohttp-socks для любого прокси; если пакет не установлен
+            # или прокси битый — запускаемся без прокси, чтобы не уронить весь бот.
+            logger.warning("Не удалось инициализировать прокси (%s), запускаюсь без прокси", exc)
+            super().__init__(proxy=None, **kwargs)
+            proxy_manager = None
+        self._proxy_manager = proxy_manager
 
     async def make_request(
         self,
@@ -171,6 +187,13 @@ class RetryOnFloodSession(AiohttpSession):
                 await asyncio.sleep(e.retry_after)
             except TelegramNetworkError as e:
                 network_attempts += 1
+                if self._proxy_manager:
+                    new_proxy = self._proxy_manager.rotate()
+                    try:
+                        self.proxy = new_proxy
+                    except RuntimeError as proxy_exc:
+                        logger.warning("Не удалось сменить прокси (%s), отключаю ротацию", proxy_exc)
+                        self._proxy_manager = None
                 if network_attempts >= MAX_RETRIES_ON_NETWORK:
                     logger.warning(
                         "Сетевой сбой Telegram после %d попыток: %s",
@@ -329,6 +352,17 @@ async def init_db(async_engine: AsyncEngine) -> None:
 
             # Миграция resident_profiles (создаётся через create_all,
             # но проверяем на всякий случай)
+            if inspector.has_table("resident_profiles"):
+                columns = {
+                    column["name"]
+                    for column in inspector.get_columns("resident_profiles")
+                }
+                if "last_nudge_at" not in columns:
+                    sync_conn.execute(
+                        text(
+                            "ALTER TABLE resident_profiles ADD COLUMN last_nudge_at DATETIME"
+                        )
+                    )
 
 
         await conn.run_sync(_ensure_columns)
@@ -631,6 +665,12 @@ def _cleanup_flood_tracker() -> None:
 
 async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
+    if _proxy_manager is not None:
+        scheduler.add_job(
+            _proxy_manager.refresh_and_find,
+            "interval",
+            minutes=settings.proxy_refresh_interval_min,
+        )
     scheduler.add_job(
         send_daily_summary,
         "cron",
@@ -707,12 +747,24 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         minute=59,
         args=[bot],
     )
-    # Еженедельное обновление по понедельникам
+    # Недельный дайджест по воскресеньям (20:00)
     scheduler.add_job(
-        send_weekly_update,
+        send_weekly_digest,
         "cron",
-        day_of_week="mon",
-        hour=10,
+        day_of_week="sun",
+        hour=20,
+        minute=0,
+        args=[bot],
+    )
+    # Еженедельные персональные DM-нажъмы (по фактам из ResidentProfile).
+    # Off-by-default через ai_feature_weekly_nudge — внутри функции стоит ранний return.
+    # Вторник 11:00 — середина рабочей недели, не путается с проактивными
+    # утренними/вечерними коммуникациями и понедельничным weekly update.
+    scheduler.add_job(
+        send_weekly_nudges,
+        "cron",
+        day_of_week="tue",
+        hour=11,
         minute=0,
         args=[bot],
     )
@@ -741,26 +793,6 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
             hour=8,
             minute=0,
             args=[bot],
-        )
-    # Утренний трафик в Попутчиках (7:00 пн-пт)
-    if settings.ai_traffic_report:
-        scheduler.add_job(
-            send_traffic_report,
-            "cron",
-            hour=7,
-            minute=0,
-            day_of_week="mon-fri",
-            args=[bot, "morning"],
-        )
-    # Вечерний трафик в Попутчиках (19:00 пн-пт)
-    if settings.ai_traffic_report:
-        scheduler.add_job(
-            send_traffic_report,
-            "cron",
-            hour=19,
-            minute=0,
-            day_of_week="mon-fri",
-            args=[bot, "evening"],
         )
     scheduler.start()
     return scheduler
@@ -1102,8 +1134,45 @@ async def main() -> None:
         )
         raise SystemExit(1)
 
+    # Инициализация прокси (до создания бота, чтобы сессия сразу получила адрес)
+    global _proxy_manager
+    if settings.proxy_enabled or settings.proxy_manual:
+        _proxy_manager = ProxyManager(
+            bot_token=settings.bot_token,
+            working_pool_size=settings.proxy_working_pool_size,
+            test_limit=settings.proxy_test_limit,
+            state_path=Path(settings.proxy_state_path),
+            manual_proxy=settings.proxy_manual,
+        )
+        if settings.proxy_manual:
+            logger.info("Прокси: ручной адрес задан, автоподбор пропущен")
+            ok = await _proxy_manager.validate_working_pool()
+            if not ok:
+                logger.warning(
+                    "Ручной прокси не отвечает, всё равно пробуем через него "
+                    "(Telegram может быть временно недоступен для прокси)"
+                )
+        else:
+            logger.info("Прокси включены, ищу рабочие…")
+            # Сначала пробуем прокси, которые уже были рабочими в прошлом запуске
+            if _proxy_manager.count > 0:
+                await _proxy_manager.validate_working_pool()
+            if _proxy_manager.count < settings.proxy_working_pool_size:
+                count = await _proxy_manager.refresh()
+                if count > 0:
+                    await _proxy_manager.find_working()
+            if _proxy_manager.count == 0:
+                logger.warning("Рабочий прокси не найден, работаем без прокси")
+                _proxy_manager = None
+            else:
+                logger.info(
+                    "Прокси: в пуле %d рабочих, текущий %s",
+                    _proxy_manager.count,
+                    _proxy_manager.get_current(),
+                )
+
     try:
-        bot = Bot(token=settings.bot_token, session=RetryOnFloodSession())
+        bot = Bot(token=settings.bot_token, session=RetryOnFloodSession(proxy_manager=_proxy_manager))
     except TokenValidationError:
         token_preview = settings.bot_token[:10] + "..." if len(settings.bot_token) > 10 else settings.bot_token
         logger.error(
@@ -1126,7 +1195,7 @@ async def main() -> None:
     dp.include_router(economy_handler.router)  # инициативы жителей (доработки бота)
     dp.include_router(roulette.router)  # рулетка (команда /bet)
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
-    dp.include_router(reactions.router)   # emoji-реакции (catch-all, до модерации)
+    dp.include_router(personalization_handler.router)  # /off_nudges, /on_nudges (только в DM)
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     # stats.router убран — статистика через middleware
 
@@ -1153,6 +1222,7 @@ async def main() -> None:
                             "edited_message",
                             "callback_query",
                             "message_reaction",
+                            "chat_member",
                         ],
                     )
                 except TypeError:
