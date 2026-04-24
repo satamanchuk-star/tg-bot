@@ -1,10 +1,9 @@
-"""Ежедневные сообщения: утреннее приветствие с погодой/праздниками и трафик в Попутчиках."""
+"""Ежедневные сообщения: утреннее приветствие с погодой/праздниками."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import xml.etree.ElementTree as ET
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -46,26 +45,6 @@ _MORNING_GREETING_SYSTEM_PROMPT = (
     "Стиль: тёплый, живой, как сосед который выглянул в окно и делится впечатлениями.\n"
     "Каждый раз пиши по-разному — не повторяй шаблоны.\n"
     "1-2 эмодзи максимум. Разговорный русский. НЕ пиши длинных текстов."
-)
-
-_MORNING_TRAFFIC_SYSTEM_PROMPT = (
-    "Ты — дружелюбный бот жилого комплекса «Живописный» (Бутово).\n"
-    "Напиши утренний отчёт о дорожной ситуации для соседей-попутчиков (2-4 предложения).\n"
-    "Контекст: утро, люди едут на работу ИЗ ЖК до метро Аннино и до МКАД.\n"
-    "Тон: бодрый утром, сочувственный если пробки, позитивный если свободно.\n"
-    "Дай практичный совет: когда лучше выехать, стоит ли подождать.\n"
-    "Каждый раз пиши по-разному. 1 эмодзи. Разговорный русский.\n"
-    "Начни с короткого 'Доброе утро!' или аналога."
-)
-
-_EVENING_TRAFFIC_SYSTEM_PROMPT = (
-    "Ты — дружелюбный бот жилого комплекса «Живописный» (Бутово).\n"
-    "Напиши вечерний отчёт о дорожной ситуации для соседей-попутчиков (2-4 предложения).\n"
-    "Контекст: вечер, люди едут домой В ЖК от метро Аннино и от МКАД.\n"
-    "Тон: сочувственный если пробки, позитивный если свободно, тёплый вечерний.\n"
-    "Дай практичный совет: стоит ли ещё подождать, или дороги уже свободнее.\n"
-    "Каждый раз пиши по-разному. 1 эмодзи. Разговорный русский.\n"
-    "Начни с короткого 'Добрый вечер!' или аналога."
 )
 
 
@@ -180,39 +159,6 @@ async def fetch_holidays() -> str:
     return ""
 
 
-async def fetch_traffic_score() -> str:
-    """Получает балл пробок Москвы из Яндекс-информера."""
-    try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(_FETCH_TIMEOUT),
-            follow_redirects=True,
-        ) as client:
-            resp = await client.get(
-                "https://export.yandex.ru/bar/reginfo.xml",
-                params={"region": "213"},
-                headers={"User-Agent": _USER_AGENT},
-            )
-            resp.raise_for_status()
-
-        root = ET.fromstring(resp.text)
-        traffic_el = root.find(".//traffic")
-        if traffic_el is not None:
-            level = traffic_el.findtext("level", "")
-            hint = traffic_el.findtext("hint", "") or traffic_el.findtext("text", "")
-            if level:
-                result = f"Пробки в Москве: {level}/10"
-                if hint:
-                    result += f" ({hint})"
-                logger.info("Трафик получен: %s", result)
-                return result
-
-    except (httpx.HTTPError, httpx.TimeoutException) as exc:
-        logger.warning("Не удалось получить трафик из Яндекс-информера: %s", exc)
-    except Exception:
-        logger.exception("Ошибка при получении трафика.")
-    return ""
-
-
 # ---------------------------------------------------------------------------
 # Отправка сообщений
 # ---------------------------------------------------------------------------
@@ -271,95 +217,3 @@ async def send_morning_greeting(bot: Bot) -> None:
 
     except Exception:
         logger.warning("Не удалось отправить утреннее приветствие.", exc_info=True)
-
-
-_YANDEX_MAPS_TRAFFIC_URL = (
-    "https://yandex.ru/maps/213/moscow/?ll=37.6037,55.5814&z=13&l=trf"
-)
-
-
-def _fallback_traffic_text(period: str, weekday: str, yandex_score: str) -> str:
-    """Шаблонный текст, если LLM недоступен."""
-    header = (
-        "🚗 Доброе утро, попутчики!"
-        if period == "morning"
-        else "🚗 Добрый вечер, попутчики!"
-    )
-    score_line = yandex_score or "Балл пробок Москвы: данные недоступны"
-    return (
-        f"{header}\n{weekday.capitalize()}. {score_line}.\n\n"
-        f"🗺️ Яндекс.Карты: {_YANDEX_MAPS_TRAFFIC_URL}"
-    )
-
-
-async def send_traffic_report(bot: Bot, period: str) -> None:
-    """Отправляет отчёт о пробках в Попутчики (7:00 утро / 19:00 вечер).
-
-    period: 'morning' или 'evening'
-    """
-    if not settings.ai_traffic_report:
-        return
-    if settings.topic_rides is None:
-        logger.info("Трафик-отчёт пропущен: topic_rides не задан.")
-        return
-
-    try:
-        traffic = await fetch_traffic_score()
-
-        now = datetime.now(ZoneInfo(settings.timezone))
-        weekday = _WEEKDAYS_RU[now.weekday()]
-
-        if period == "morning":
-            system_prompt = _MORNING_TRAFFIC_SYSTEM_PROMPT
-            direction_info = (
-                f"День: {weekday}\n"
-                f"Дорожная обстановка: {traffic or 'данные недоступны'}\n"
-                "Направления: из ЖК «Живописный» до метро Аннино и из ЖК до МКАД.\n"
-                "Напиши утренний отчёт о пробках для попутчиков."
-            )
-        else:
-            system_prompt = _EVENING_TRAFFIC_SYSTEM_PROMPT
-            direction_info = (
-                f"День: {weekday}\n"
-                f"Дорожная обстановка: {traffic or 'данные недоступны'}\n"
-                "Направления: от метро Аннино до ЖК «Живописный» и от МКАД до ЖК.\n"
-                "Напиши вечерний отчёт о пробках для попутчиков."
-            )
-
-        # Пробуем сгенерировать через LLM. Если провайдера нет или он
-        # упал/вернул пусто — отправим шаблонный текст с цифрами.
-        content: str | None = None
-        try:
-            ai_client = get_ai_client()
-            provider = ai_client._provider
-            if hasattr(provider, "_chat_completion"):
-                llm_content, _ = await provider._chat_completion(
-                    [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": direction_info},
-                    ],
-                    chat_id=settings.forum_chat_id,
-                    bypass_limit=True,
-                )
-                if llm_content and llm_content.strip():
-                    content = llm_content.strip()[:600]
-            else:
-                logger.info("Трафик-отчёт: remote AI провайдер недоступен, fallback.")
-        except Exception:
-            logger.warning("Трафик-отчёт: ошибка LLM, fallback.", exc_info=True)
-
-        if not content:
-            content = _fallback_traffic_text(period, weekday, traffic)
-            log_label = "fallback-шаблон"
-        else:
-            log_label = "AI-текст"
-
-        await bot.send_message(
-            settings.forum_chat_id,
-            content[:900],
-            message_thread_id=settings.topic_rides,
-        )
-        logger.info("TRAFFIC_REPORT: %s %s отправлен в Попутчики", period, log_label)
-
-    except Exception:
-        logger.warning("Не удалось отправить трафик-отчёт (%s).", period, exc_info=True)

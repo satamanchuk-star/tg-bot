@@ -34,7 +34,6 @@ _TOPIC_TITLES: dict[str, str] = {
     "topic_building_2": "Корпус 2",
     "topic_building_3": "Корпус 3",
     "topic_complaints": "Жалобы",
-    "topic_rides": "Попутки",
     "topic_smoke": "Курение",
     "topic_pets": "Питомцы",
     "topic_repair": "Ремонт",

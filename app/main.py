@@ -59,7 +59,7 @@ from app.utils.time import now_tz
 from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, get_and_clear_response_log, set_ai_admin_notifier
 from app.services.proxy import ProxyManager
 from app.services.daily_summary import build_ai_summary_context, build_daily_summary, build_response_report, render_daily_summary
-from app.services.daily_messages import send_morning_greeting, send_traffic_report
+from app.services.daily_messages import send_morning_greeting
 from app.services.personalization import send_weekly_nudges
 from app.services.proactive import send_scheduled_greeting, send_weekly_update
 from app.services.resident_kb import load_resident_kb
@@ -792,26 +792,6 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
             hour=8,
             minute=0,
             args=[bot],
-        )
-    # Утренний трафик в Попутчиках (7:00 пн-пт)
-    if settings.ai_traffic_report:
-        scheduler.add_job(
-            send_traffic_report,
-            "cron",
-            hour=7,
-            minute=0,
-            day_of_week="mon-fri",
-            args=[bot, "morning"],
-        )
-    # Вечерний трафик в Попутчиках (19:00 пн-пт)
-    if settings.ai_traffic_report:
-        scheduler.add_job(
-            send_traffic_report,
-            "cron",
-            hour=19,
-            minute=0,
-            day_of_week="mon-fri",
-            args=[bot, "evening"],
         )
     scheduler.start()
     return scheduler

@@ -296,8 +296,6 @@ class Settings(BaseSettings):
     ai_evening_greeting: bool = False  # Включить вечернее приветствие (20:00)
     # Утреннее приветствие с погодой и праздниками (8:00 в General)
     ai_daily_greeting: bool = False
-    # Трафик-отчёт в Попутчиках (7:00 утро / 19:00 вечер, пн-пт)
-    ai_traffic_report: bool = False
     ai_summary_hour: int = 21
     ai_summary_minute: int = 0
     ai_summary_topic_id: int | None = None
@@ -313,7 +311,6 @@ class Settings(BaseSettings):
     topic_building_2: int | None = None
     topic_building_3: int | None = None
     topic_complaints: int | None = None
-    topic_rides: int | None = None
     topic_smoke: int | None = None
     topic_pets: int | None = None
     topic_repair: int | None = None
@@ -335,7 +332,6 @@ class Settings(BaseSettings):
         "topic_building_2",
         "topic_building_3",
         "topic_complaints",
-        "topic_rides",
         "topic_smoke",
         "topic_pets",
         "topic_repair",

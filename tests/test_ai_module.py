@@ -12,10 +12,8 @@ from app.services.ai_module import (
     local_moderation,
     get_ai_diagnostics,
     is_assistant_topic_allowed,
-    local_quiz_answer_decision,
     mask_personal_data,
     normalize_for_profanity,
-    parse_quiz_answer_response,
     _extract_search_words,
     _extract_response_content,
     _normalize_model_id,
@@ -37,16 +35,6 @@ class _SlowProvider:
     async def assistant_reply(self, prompt: str, context: list[str], *, chat_id: int, user_id: int | None = None, topic_id: int | None = None) -> str:
         await asyncio.sleep(0.1)
         return "remote"
-
-    async def evaluate_quiz_answer(  # type: ignore[no-untyped-def]
-        self,
-        question: str,
-        correct_answer: str,
-        user_answer: str,
-        *,
-        chat_id: int,
-    ):
-        await asyncio.sleep(0.1)
 
     async def generate_daily_summary(self, context: str, *, chat_id: int) -> str:
         await asyncio.sleep(0.1)
@@ -117,17 +105,6 @@ def test_assistant_topic_restrictions() -> None:
     assert is_assistant_topic_allowed("Как решить проблему со шлагбаумом?")
     assert is_assistant_topic_allowed("Какие правила по шуму в ЖК?")
     assert not is_assistant_topic_allowed("Дай финансовый совет")
-
-
-def test_parse_quiz_answer_response() -> None:
-    decision = parse_quiz_answer_response({"is_correct": True, "confidence": 0.9})
-    assert decision.is_correct is True
-    assert decision.is_close is True
-
-
-def test_local_quiz_answer_close_match() -> None:
-    decision = local_quiz_answer_decision("домофон в подъезде", "домофон")
-    assert decision.is_close is True
 
 
 def test_probe_returns_stub_status() -> None:
