@@ -47,7 +47,6 @@ def _build_topic_name_map() -> dict[int, str]:
         (settings.topic_pets, "Питомцы"),
         (settings.topic_parents, "Мамы и папы"),
         (settings.topic_realty, "Недвижимость"),
-        (settings.topic_rides, "Попутчики"),
         (settings.topic_services, "Услуги"),
         (settings.topic_uk, "УК"),
         (settings.topic_smoke, "Курилка"),

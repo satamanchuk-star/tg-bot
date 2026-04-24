@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 _SOFT_TIMEOUT_BASE = settings.ai_timeout_seconds + 2
 _MODERATION_SOFT_TIMEOUT_SECONDS = _SOFT_TIMEOUT_BASE
 _ASSISTANT_SOFT_TIMEOUT_SECONDS = _SOFT_TIMEOUT_BASE
-_QUIZ_SOFT_TIMEOUT_SECONDS = _SOFT_TIMEOUT_BASE
 _SUMMARY_SOFT_TIMEOUT_SECONDS = _SOFT_TIMEOUT_BASE
 _RAG_CATEGORIZE_SOFT_TIMEOUT_SECONDS = _SOFT_TIMEOUT_BASE
 
@@ -612,15 +611,6 @@ class ModerationDecision:
 
 
 @dataclass(slots=True)
-class QuizAnswerDecision:
-    is_correct: bool
-    is_close: bool
-    confidence: float
-    reason: str
-    used_fallback: bool
-
-
-@dataclass(slots=True)
 class AiProbeResult:
     ok: bool
     details: str
@@ -666,15 +656,6 @@ class AiProvider(Protocol):
         user_id: int | None = None, topic_id: int | None = None,
     ) -> str: ...
 
-    async def evaluate_quiz_answer(
-        self,
-        question: str,
-        correct_answer: str,
-        user_answer: str,
-        *,
-        chat_id: int,
-    ) -> QuizAnswerDecision: ...
-
     async def generate_daily_summary(self, context: str, *, chat_id: int) -> str | None: ...
 
     async def categorize_rag_entry(self, text: str, *, chat_id: int) -> RagCategorizationResult: ...
@@ -714,18 +695,6 @@ class StubAiProvider:
             except Exception:
                 pass
         return build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer, web_hint=web_hint, user_id=user_id, topic_id=topic_id)
-
-    async def evaluate_quiz_answer(
-        self,
-        question: str,
-        correct_answer: str,
-        user_answer: str,
-        *,
-        chat_id: int,
-    ) -> QuizAnswerDecision:
-        decision = local_quiz_answer_decision(correct_answer, user_answer)
-        decision.used_fallback = True
-        return decision
 
     async def generate_daily_summary(self, context: str, *, chat_id: int) -> str | None:
         return None
@@ -1115,43 +1084,6 @@ class OpenRouterProvider:
             _log_response_event("ai_error_local_fallback", safe_prompt, user_id, topic_id, used_ai=False)
             return build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer)
 
-    async def evaluate_quiz_answer(
-        self,
-        question: str,
-        correct_answer: str,
-        user_answer: str,
-        *,
-        chat_id: int,
-    ) -> QuizAnswerDecision:
-        try:
-            content, _ = await self._chat_completion(
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Оцени ответ на вопрос викторины и верни только JSON: "
-                            '{"is_correct":bool,"is_close":bool,"confidence":0..1,"reason":"..."}'
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Вопрос: {question}\n"
-                            f"Эталон: {correct_answer}\n"
-                            f"Ответ пользователя: {user_answer}"
-                        )[:2500],
-                    },
-                ],
-                chat_id=chat_id,
-            )
-            data = json.loads(content)
-            return parse_quiz_answer_response(data)
-        except (RuntimeError, ValueError, TypeError, json.JSONDecodeError) as exc:
-            self._record_runtime_error(exc)
-            decision = local_quiz_answer_decision(correct_answer, user_answer)
-            decision.used_fallback = True
-            return decision
-
     async def generate_daily_summary(self, context: str, *, chat_id: int) -> str | None:
         try:
             content, _ = await self._chat_completion(
@@ -1346,33 +1278,6 @@ class AiModuleClient:
         if history_summary:
             base_context = [history_summary, *base_context]
         return await self.assistant_reply(prompt, base_context, chat_id=chat_id, user_id=user_id)
-
-    async def evaluate_quiz_answer(
-        self,
-        question: str,
-        correct_answer: str,
-        user_answer: str,
-        *,
-        chat_id: int,
-    ) -> QuizAnswerDecision:
-        try:
-            return await asyncio.wait_for(
-                self._provider.evaluate_quiz_answer(
-                    question,
-                    correct_answer,
-                    user_answer,
-                    chat_id=chat_id,
-                ),
-                timeout=_QUIZ_SOFT_TIMEOUT_SECONDS,
-            )
-        except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
-            logger.warning(
-                "AI quiz timeout after %s seconds; using local fallback.",
-                _QUIZ_SOFT_TIMEOUT_SECONDS,
-            )
-            decision = local_quiz_answer_decision(correct_answer, user_answer)
-            decision.used_fallback = True
-            return decision
 
     async def generate_daily_summary(self, context: str, *, chat_id: int) -> str | None:
         try:
@@ -1913,49 +1818,6 @@ def build_local_assistant_reply(
     _log_response_event("fallback", normalized_prompt, user_id, topic_id)
     return _pick_fallback_variant(normalized_prompt)
 
-
-
-def parse_quiz_answer_response(data: dict[str, object]) -> QuizAnswerDecision:
-    is_correct = bool(data.get("is_correct", False))
-    is_close = bool(data.get("is_close", False))
-    confidence = max(0.0, min(1.0, float(data.get("confidence", 0.5))))
-    reason = str(data.get("reason", ""))[:300]
-    if is_correct:
-        is_close = True
-    return QuizAnswerDecision(
-        is_correct=is_correct,
-        is_close=is_close,
-        confidence=confidence,
-        reason=reason,
-        used_fallback=False,
-    )
-
-def _normalize_quiz_text(text: str) -> str:
-    normalized = re.sub(r"[^\w\s]+", " ", text.lower().replace("ё", "е"))
-    return " ".join(normalized.split())
-
-
-def local_quiz_answer_decision(correct_answer: str, user_answer: str) -> QuizAnswerDecision:
-    correct = _normalize_quiz_text(correct_answer)
-    answer = _normalize_quiz_text(user_answer)
-    if not correct or not answer:
-        return QuizAnswerDecision(False, False, 0.0, "пустой ответ", False)
-
-    if correct == answer:
-        return QuizAnswerDecision(True, True, 0.95, "точное совпадение", False)
-
-    correct_words = set(correct.split())
-    answer_words = set(answer.split())
-    overlap = len(correct_words & answer_words)
-    if not correct_words:
-        return QuizAnswerDecision(False, False, 0.0, "нет эталона", False)
-
-    ratio = overlap / len(correct_words)
-    if ratio >= 0.8:
-        return QuizAnswerDecision(True, True, 0.8, "почти полный смысловой матч", False)
-    if ratio >= 0.3:
-        return QuizAnswerDecision(False, True, 0.6, "частично близкий ответ", False)
-    return QuizAnswerDecision(False, False, 0.2, "не совпадает", False)
 
 
 async def _get_faq_answer(chat_id: int, query: str) -> str | None:
