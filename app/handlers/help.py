@@ -168,7 +168,7 @@ class BotMentionFilter(BaseFilter):
         is_active_dialog = False
         if not has_direct_mention and not is_reply_to_bot and message.from_user:
             stripped = text.strip() if text else ""
-            if len(stripped) >= 5 and not stripped.startswith("/"):
+            if len(stripped) >= 3 and not stripped.startswith("/"):
                 if _is_in_active_dialog(message.chat.id, message.from_user.id, message.message_thread_id):
                     is_active_dialog = True
 
