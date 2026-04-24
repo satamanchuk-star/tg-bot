@@ -63,7 +63,6 @@ from app.services.proxy import ProxyManager
 from app.services.daily_summary import build_ai_summary_context, build_daily_summary, build_response_report, render_daily_summary
 from app.services.daily_messages import send_morning_greeting
 from app.services.personalization import send_weekly_nudges
-from app.services.proactive import send_scheduled_greeting, send_weekly_update
 from app.services.sheets import sync_places_from_sheet
 from app.services.resident_kb import load_resident_kb
 
@@ -192,8 +191,11 @@ class RetryOnFloodSession(AiohttpSession):
                 if self._proxy_manager:
                     new_proxy = self._proxy_manager.rotate()
                     try:
+                        # Закрываем текущую сессию — следующий вызов super().make_request
+                        # создаст новую с обновлённым proxy (AiohttpSession ленив).
+                        await self.close()
                         self.proxy = new_proxy
-                    except RuntimeError as proxy_exc:
+                    except Exception as proxy_exc:
                         logger.warning("Не удалось сменить прокси (%s), отключаю ротацию", proxy_exc)
                         self._proxy_manager = None
                 if network_attempts >= MAX_RETRIES_ON_NETWORK:
@@ -770,23 +772,6 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         minute=0,
         args=[bot],
     )
-    # Плановые приветствия жителей
-    if settings.ai_morning_greeting:
-        scheduler.add_job(
-            send_scheduled_greeting,
-            "cron",
-            hour=9,
-            minute=0,
-            args=[bot, "morning"],
-        )
-    if settings.ai_evening_greeting:
-        scheduler.add_job(
-            send_scheduled_greeting,
-            "cron",
-            hour=20,
-            minute=0,
-            args=[bot, "evening"],
-        )
     # Утреннее приветствие с погодой и праздниками (8:00 каждый день)
     if settings.ai_daily_greeting:
         scheduler.add_job(
@@ -1141,7 +1126,6 @@ async def main() -> None:
     global _proxy_manager
     if settings.proxy_enabled or settings.proxy_manual:
         _proxy_manager = ProxyManager(
-            bot_token=settings.bot_token,
             working_pool_size=settings.proxy_working_pool_size,
             test_limit=settings.proxy_test_limit,
             state_path=Path(settings.proxy_state_path),
