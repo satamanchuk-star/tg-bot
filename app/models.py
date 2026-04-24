@@ -269,6 +269,9 @@ class ResidentProfile(Base):
     chat_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     facts_json: Mapped[str] = mapped_column(Text, default="{}")
+    # Когда боту последний раз отправили еженедельный персональный нажъм. NULL —
+    # ни разу не отправляли. Используется для rate-limit выборки кандидатов.
+    last_nudge_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc),
     )
