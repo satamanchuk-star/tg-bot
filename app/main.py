@@ -41,6 +41,7 @@ from app.handlers import (
     personalization as personalization_handler,
     roulette,
     shop,
+    suggest,
     text_publish,
     welcome,
 )
@@ -63,6 +64,7 @@ from app.services.daily_summary import build_ai_summary_context, build_daily_sum
 from app.services.daily_messages import send_morning_greeting
 from app.services.personalization import send_weekly_nudges
 from app.services.proactive import send_scheduled_greeting, send_weekly_update
+from app.services.sheets import sync_places_from_sheet
 from app.services.resident_kb import load_resident_kb
 
 logging.basicConfig(
@@ -931,6 +933,7 @@ async def on_startup_warmup(bot: Bot) -> None:
                         BotCommand(command="roulette", description="Играть в рулетку"),
                         BotCommand(command="bet", description="Сделать ставку в рулетке"),
                         BotCommand(command="score", description="Мои монеты и статистика"),
+                        BotCommand(command="предложить", description="Предложить место в инфраструктуре ЖК"),
                     ],
                 )
             except Exception:  # noqa: BLE001
@@ -1194,6 +1197,7 @@ async def main() -> None:
     dp.include_router(shop.router)  # магазин монет (FSM, перед economy)
     dp.include_router(economy_handler.router)  # инициативы жителей (доработки бота)
     dp.include_router(roulette.router)  # рулетка (команда /bet)
+    dp.include_router(suggest.router)   # предложить место в инфраструктуру ЖК
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
     dp.include_router(personalization_handler.router)  # /off_nudges, /on_nudges (только в DM)
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
