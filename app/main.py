@@ -40,6 +40,7 @@ from app.handlers import (
     moderation,
     roulette,
     shop,
+    suggest,
     text_publish,
 )
 from app.models import MigrationFlag, UserStat
@@ -59,6 +60,7 @@ from app.services.ai_module import clear_assistant_cache, close_ai_client, get_a
 from app.services.daily_summary import build_ai_summary_context, build_daily_summary, build_response_report, render_daily_summary
 from app.services.daily_messages import send_morning_greeting, send_traffic_report
 from app.services.proactive import send_scheduled_greeting, send_weekly_update
+from app.services.sheets import sync_places_from_sheet
 from app.services.resident_kb import load_resident_kb
 
 logging.basicConfig(
@@ -706,6 +708,14 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         minute=59,
         args=[bot],
     )
+    # Ежедневная синхронизация мест из Google Sheets (04:00)
+    if settings.google_service_account_file:
+        scheduler.add_job(
+            sync_places_from_sheet,
+            "cron",
+            hour=4,
+            minute=0,
+        )
     # Еженедельное обновление по понедельникам
     scheduler.add_job(
         send_weekly_update,
@@ -898,6 +908,7 @@ async def on_startup_warmup(bot: Bot) -> None:
                         BotCommand(command="roulette", description="Играть в рулетку"),
                         BotCommand(command="bet", description="Сделать ставку в рулетке"),
                         BotCommand(command="score", description="Мои монеты и статистика"),
+                        BotCommand(command="предложить", description="Предложить место в инфраструктуре ЖК"),
                     ],
                 )
             except Exception:  # noqa: BLE001
@@ -1124,6 +1135,7 @@ async def main() -> None:
     dp.include_router(shop.router)  # магазин монет (FSM, перед economy)
     dp.include_router(economy_handler.router)  # инициативы жителей (доработки бота)
     dp.include_router(roulette.router)  # рулетка (команда /bet)
+    dp.include_router(suggest.router)   # предложить место в инфраструктуру ЖК
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     # stats.router убран — статистика через middleware

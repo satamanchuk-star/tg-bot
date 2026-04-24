@@ -37,11 +37,15 @@ _SUMMARY_SOFT_TIMEOUT_SECONDS = _SOFT_TIMEOUT_BASE
 _RAG_CATEGORIZE_SOFT_TIMEOUT_SECONDS = _SOFT_TIMEOUT_BASE
 
 # ---------------------------------------------------------------------------
-# Кэш ответов ассистента (in-memory, TTL 24ч)
+# Кэш ответов ассистента (in-memory, TTL 1ч)
 # ---------------------------------------------------------------------------
 _ASSISTANT_CACHE: dict[str, tuple[str, float]] = {}
+# Параллельный индекс для семантического поиска: ключ → набор значимых токенов
+_ASSISTANT_CACHE_TOKENS: dict[str, frozenset[str]] = {}
 _CACHE_TTL_SECONDS = 3600  # 1 час — короткий TTL для разнообразия ответов
 _CACHE_MAX_SIZE = 200
+# Минимальный порог Jaccard для признания запроса «достаточно похожим»
+_CACHE_SIMILARITY_THRESHOLD = 0.65
 
 _CACHE_STOP_WORDS = {
     "это", "как", "что", "когда", "где", "или", "для", "если", "чтобы",
@@ -156,13 +160,50 @@ def _normalize_cache_key(text: str) -> str:
     return "|".join(tokens)
 
 
+def _key_to_tokens(key: str) -> frozenset[str]:
+    return frozenset(key.split("|")) if key else frozenset()
+
+
+def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _cache_find_similar(tokens: frozenset[str]) -> str | None:
+    """Ищет семантически похожий ответ в кэше по Jaccard-сходству токенов."""
+    if not tokens or not _ASSISTANT_CACHE_TOKENS:
+        return None
+    now = time.time()
+    best_score = _CACHE_SIMILARITY_THRESHOLD
+    best_key: str | None = None
+    for cached_key, cached_tokens in _ASSISTANT_CACHE_TOKENS.items():
+        entry = _ASSISTANT_CACHE.get(cached_key)
+        if entry is None:
+            continue
+        _, ts = entry
+        if now - ts > _CACHE_TTL_SECONDS:
+            continue
+        score = _jaccard(tokens, cached_tokens)
+        if score > best_score:
+            best_score = score
+            best_key = cached_key
+    if best_key:
+        answer, _ = _ASSISTANT_CACHE[best_key]
+        return answer
+    return None
+
+
 def _cache_get(key: str) -> str | None:
     entry = _ASSISTANT_CACHE.get(key)
     if entry is None:
-        return None
+        # Точного совпадения нет — ищем семантически похожий ответ
+        tokens = _key_to_tokens(key)
+        return _cache_find_similar(tokens)
     answer, timestamp = entry
     if time.time() - timestamp > _CACHE_TTL_SECONDS:
         _ASSISTANT_CACHE.pop(key, None)
+        _ASSISTANT_CACHE_TOKENS.pop(key, None)
         return None
     return answer
 
@@ -173,6 +214,7 @@ def _cache_purge_expired() -> int:
     expired = [k for k, (_, ts) in _ASSISTANT_CACHE.items() if now - ts > _CACHE_TTL_SECONDS]
     for k in expired:
         del _ASSISTANT_CACHE[k]
+        _ASSISTANT_CACHE_TOKENS.pop(k, None)
     return len(expired)
 
 
@@ -181,13 +223,16 @@ def _cache_set(key: str, answer: str) -> None:
     if len(_ASSISTANT_CACHE) >= _CACHE_MAX_SIZE:
         oldest_key = min(_ASSISTANT_CACHE, key=lambda k: _ASSISTANT_CACHE[k][1])
         _ASSISTANT_CACHE.pop(oldest_key, None)
+        _ASSISTANT_CACHE_TOKENS.pop(oldest_key, None)
     _ASSISTANT_CACHE[key] = (answer, time.time())
+    _ASSISTANT_CACHE_TOKENS[key] = _key_to_tokens(key)
 
 
 def clear_assistant_cache() -> int:
     """Очищает кэш ответов ассистента. Возвращает количество удалённых записей."""
     count = len(_ASSISTANT_CACHE)
     _ASSISTANT_CACHE.clear()
+    _ASSISTANT_CACHE_TOKENS.clear()
     return count
 
 
