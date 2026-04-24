@@ -41,6 +41,7 @@ from app.handlers import (
     roulette,
     shop,
     text_publish,
+    welcome,
 )
 from app.models import MigrationFlag, UserStat
 from app.services.topic_stats import bump_topic_stat
@@ -57,8 +58,8 @@ from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
 from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, get_and_clear_response_log, set_ai_admin_notifier
 from app.services.daily_summary import build_ai_summary_context, build_daily_summary, build_response_report, render_daily_summary
-from app.services.daily_messages import send_morning_greeting, send_traffic_report
-from app.services.proactive import send_scheduled_greeting, send_weekly_update
+from app.services.daily_messages import send_traffic_report
+from app.services.weekly_digest import send_weekly_digest
 from app.services.resident_kb import load_resident_kb
 
 logging.basicConfig(
@@ -706,41 +707,15 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         minute=59,
         args=[bot],
     )
-    # Еженедельное обновление по понедельникам
+    # Недельный дайджест по воскресеньям (20:00)
     scheduler.add_job(
-        send_weekly_update,
+        send_weekly_digest,
         "cron",
-        day_of_week="mon",
-        hour=10,
+        day_of_week="sun",
+        hour=20,
         minute=0,
         args=[bot],
     )
-    # Плановые приветствия жителей
-    if settings.ai_morning_greeting:
-        scheduler.add_job(
-            send_scheduled_greeting,
-            "cron",
-            hour=9,
-            minute=0,
-            args=[bot, "morning"],
-        )
-    if settings.ai_evening_greeting:
-        scheduler.add_job(
-            send_scheduled_greeting,
-            "cron",
-            hour=20,
-            minute=0,
-            args=[bot, "evening"],
-        )
-    # Утреннее приветствие с погодой и праздниками (8:00 каждый день)
-    if settings.ai_daily_greeting:
-        scheduler.add_job(
-            send_morning_greeting,
-            "cron",
-            hour=8,
-            minute=0,
-            args=[bot],
-        )
     # Утренний трафик в Попутчиках (7:00 пн-пт)
     if settings.ai_traffic_report:
         scheduler.add_job(
@@ -1125,6 +1100,7 @@ async def main() -> None:
     dp.include_router(economy_handler.router)  # инициативы жителей (доработки бота)
     dp.include_router(roulette.router)  # рулетка (команда /bet)
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
+    dp.include_router(welcome.router)      # приветствие новых участников
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     # stats.router убран — статистика через middleware
 
@@ -1151,6 +1127,7 @@ async def main() -> None:
                             "edited_message",
                             "callback_query",
                             "message_reaction",
+                            "chat_member",
                         ],
                     )
                 except TypeError:

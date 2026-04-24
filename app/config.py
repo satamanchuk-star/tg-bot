@@ -274,12 +274,6 @@ class Settings(BaseSettings):
     # Тихое обучение модерации: бот НЕ модерирует, а отправляет подозрительные
     # сообщения в лог-чат с кнопками для подтверждения действия администратором.
     moderation_training_mode: bool = False
-    # Плановые приветствия в форуме
-    ai_greeting_topic_id: int | None = None  # Топик для утреннего/вечернего приветствия
-    ai_morning_greeting: bool = False  # Включить утреннее приветствие (9:00)
-    ai_evening_greeting: bool = False  # Включить вечернее приветствие (20:00)
-    # Утреннее приветствие с погодой и праздниками (8:00 в General)
-    ai_daily_greeting: bool = False
     # Трафик-отчёт в Попутчиках (7:00 утро / 19:00 вечер, пн-пт)
     ai_traffic_report: bool = False
     ai_summary_hour: int = 21
@@ -333,7 +327,6 @@ class Settings(BaseSettings):
         "topic_neighbors",
         "topic_market",
         "topic_duplex",
-        "ai_greeting_topic_id",
         mode="before",
     )
     @classmethod
