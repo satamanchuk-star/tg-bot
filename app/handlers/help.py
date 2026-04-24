@@ -146,7 +146,7 @@ class BotMentionFilter(BaseFilter):
             stripped = text.strip()
             stripped_lower = stripped.lower()
             if (
-                len(stripped) >= 7
+                len(stripped) >= 4
                 and not stripped.startswith("/")
                 and stripped_lower not in _REPLY_REACTION_PHRASES
             ):
@@ -157,7 +157,7 @@ class BotMentionFilter(BaseFilter):
         is_active_dialog = False
         if not has_direct_mention and not is_reply_to_bot and message.from_user:
             stripped = text.strip() if text else ""
-            if len(stripped) >= 5 and not stripped.startswith("/"):
+            if len(stripped) >= 3 and not stripped.startswith("/"):
                 if _is_in_active_dialog(message.chat.id, message.from_user.id, message.message_thread_id):
                     is_active_dialog = True
 
@@ -295,23 +295,23 @@ HINT_COOLDOWN = timedelta(seconds=30)
 HELP_DELETE_TIMEOUT = timedelta(minutes=2)
 AI_MENTION_COOLDOWN = timedelta(seconds=20)
 
-# Дедупликация: предотвращаем повторные ответы на одинаковые вопросы
-_RECENT_RESPONSES: dict[tuple[int, str], datetime] = {}  # (chat_id, norm_prompt) → время
-_DEDUP_WINDOW = timedelta(minutes=5)
+# Дедупликация: предотвращаем повторные ответы одному пользователю на одинаковые вопросы
+_RECENT_RESPONSES: dict[tuple[int, int, str], datetime] = {}  # (chat_id, user_id, norm_prompt) → время
+_DEDUP_WINDOW = timedelta(minutes=2)
 _DEDUP_MAX = 300
 # Множество обработанных message_id для предотвращения двойной обработки
 _PROCESSED_MSG_IDS: set[int] = set()
 _PROCESSED_MSG_IDS_MAX = 500
 
 
-def _is_duplicate_prompt(chat_id: int, prompt: str) -> bool:
-    """Проверяет, отвечал ли бот на такой же запрос в этом чате недавно."""
+def _is_duplicate_prompt(chat_id: int, user_id: int, prompt: str) -> bool:
+    """Проверяет, отвечал ли бот этому пользователю на такой же запрос недавно."""
     if not prompt:
         return False
     normalized = _normalize_cache_key(prompt)
     if not normalized:
         return False
-    key = (chat_id, normalized)
+    key = (chat_id, user_id, normalized)
     now = datetime.now(timezone.utc)
 
     # Очистка устаревших записей
@@ -326,14 +326,14 @@ def _is_duplicate_prompt(chat_id: int, prompt: str) -> bool:
     return False
 
 
-def _mark_prompt_answered(chat_id: int, prompt: str) -> None:
+def _mark_prompt_answered(chat_id: int, user_id: int, prompt: str) -> None:
     """Помечает запрос как отвеченный для дедупликации."""
     if not prompt:
         return
     normalized = _normalize_cache_key(prompt)
     if not normalized:
         return
-    _RECENT_RESPONSES[(chat_id, normalized)] = datetime.now(timezone.utc)
+    _RECENT_RESPONSES[(chat_id, user_id, normalized)] = datetime.now(timezone.utc)
 
 
 def _mark_message_processed(message_id: int) -> None:
@@ -1120,7 +1120,7 @@ async def ai_command(message: Message) -> None:
             )
 
     # Дедупликация: проверяем, не отвечали ли недавно на такой же запрос
-    if _is_duplicate_prompt(message.chat.id, prompt):
+    if _is_duplicate_prompt(message.chat.id, message.from_user.id, prompt):
         logger.info("OUT: AI_CMD_SKIPPED_DUPLICATE prompt=%r", prompt[:80])
         await message.reply(
             "Э, я же только что отвечал! Промотай чат вверх или переформулируй вопрос 😄"
@@ -1155,7 +1155,7 @@ async def ai_command(message: Message) -> None:
         )
 
         # Помечаем запрос как отвеченный для дедупликации
-        _mark_prompt_answered(message.chat.id, prompt)
+        _mark_prompt_answered(message.chat.id, message.from_user.id, prompt)
 
         # Извлечение фактов о пользователе (фоново, не блокирует ответ)
         asyncio.create_task(
@@ -1335,7 +1335,7 @@ async def mention_help(message: Message, bot: Bot) -> None:
         dialog_depth = sum(1 for line in context[-10:] if line.startswith("assistant:"))
 
         # Дедупликация: применяем её ТОЛЬКО если нет активного диалога.
-        if dialog_depth == 0 and _is_duplicate_prompt(message.chat.id, prompt):
+        if dialog_depth == 0 and _is_duplicate_prompt(message.chat.id, message.from_user.id, prompt):
             logger.info("OUT: MENTION_REPLY_SKIPPED_DUPLICATE prompt=%r", prompt[:80])
             await message.reply(
                 "Э, я же только что отвечал! Промотай чат вверх или переформулируй вопрос 😄"
@@ -1396,7 +1396,7 @@ async def mention_help(message: Message, bot: Bot) -> None:
             )
 
             # Помечаем запрос как отвеченный для дедупликации
-            _mark_prompt_answered(message.chat.id, prompt)
+            _mark_prompt_answered(message.chat.id, message.from_user.id, prompt)
 
             # Извлечение фактов о пользователе (фоново)
             asyncio.create_task(

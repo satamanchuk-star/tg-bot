@@ -38,6 +38,7 @@ from app.handlers import (
     games,
     help as help_handler,
     moderation,
+    reactions,
     roulette,
     shop,
     text_publish,
@@ -1125,6 +1126,7 @@ async def main() -> None:
     dp.include_router(economy_handler.router)  # инициативы жителей (доработки бота)
     dp.include_router(roulette.router)  # рулетка (команда /bet)
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
+    dp.include_router(reactions.router)   # emoji-реакции (catch-all, до модерации)
     dp.include_router(moderation.router)  # модерация (catch-all, пропускает FSM)
     # stats.router убран — статистика через middleware
 
