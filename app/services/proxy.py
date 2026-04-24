@@ -44,9 +44,9 @@ _SOURCES: dict[str, tuple[str, ...]] = {
 }
 
 _FETCH_TIMEOUT = 15.0
-_TEST_TIMEOUT = 8.0
-_CONCURRENCY = 80
-_SCAN_GLOBAL_TIMEOUT = 90.0
+_TEST_TIMEOUT = 6.0
+_CONCURRENCY = 30  # меньше параллельных соединений — меньше нагрузка на сервер
+_SCAN_GLOBAL_TIMEOUT = 120.0
 
 
 def _parse_proxy_line(line: str, scheme: str) -> Optional[str]:
@@ -81,13 +81,11 @@ class ProxyManager:
     def __init__(
         self,
         *,
-        bot_token: Optional[str] = None,
         working_pool_size: int = 5,
         test_limit: int = 500,
         state_path: Optional[Path] = None,
         manual_proxy: Optional[str] = None,
     ) -> None:
-        self._bot_token = bot_token
         self._pool_size = max(1, working_pool_size)
         self._test_limit = max(50, test_limit)
         self._state_path = state_path
@@ -280,12 +278,10 @@ class ProxyManager:
         return out
 
     async def _test_proxy(self, proxy_url: str) -> bool:
-        # getMe с токеном даёт однозначный ответ: 200 — прокси работает и токен валиден;
-        # 401/404 — прокси работает (Telegram ответил). Главное — не exception/5xx.
-        if self._bot_token:
-            url = f"https://api.telegram.org/bot{self._bot_token}/getMe"
-        else:
-            url = "https://api.telegram.org"
+        # Проверяем доступность api.telegram.org без токена — любой HTTP-ответ (200-499)
+        # означает что прокси работает и Telegram отвечает. Используем HEAD чтобы не
+        # тратить трафик и не триггерить rate-limit по токену.
+        url = "https://api.telegram.org"
         try:
             connector = ProxyConnector.from_url(proxy_url)
         except Exception:
@@ -295,7 +291,7 @@ class ProxyManager:
             async with aiohttp.ClientSession(
                 connector=connector, timeout=timeout,
             ) as session:
-                async with session.get(url) as resp:
+                async with session.head(url) as resp:
                     return 200 <= resp.status < 500
         except Exception:
             return False
