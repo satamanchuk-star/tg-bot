@@ -254,6 +254,7 @@ def invalidate_cache_by_keywords(keywords: list[str]) -> int:
     ]
     for k in to_delete:
         _ASSISTANT_CACHE.pop(k, None)
+        _ASSISTANT_CACHE_TOKENS.pop(k, None)
     return len(to_delete)
 
 
