@@ -1,8 +1,10 @@
-"""Ежедневные сообщения: погода и праздники для недельного дайджеста."""
+"""Ежедневные сообщения: утреннее приветствие с погодой/праздниками."""
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 from bs4 import BeautifulSoup
@@ -18,6 +20,32 @@ _USER_AGENT = (
 
 # Координаты ЖК Живописный (Бутово)
 _ZHK_LAT, _ZHK_LON = 55.5697, 37.5419
+
+# Дни недели на русском
+_WEEKDAYS_RU = [
+    "понедельник", "вторник", "среда", "четверг",
+    "пятница", "суббота", "воскресенье",
+]
+
+# ---------------------------------------------------------------------------
+# Системные промпты
+# ---------------------------------------------------------------------------
+
+_MORNING_GREETING_SYSTEM_PROMPT = (
+    "Ты — дружелюбный бот жилого комплекса «Живописный» (Бутово).\n"
+    "Напиши утреннее приветствие для соседей (3-5 предложений).\n"
+    "Включи информацию о погоде, если она есть в контексте.\n"
+    "Упомяни 1-2 праздника дня, если они указаны.\n"
+    "Дай практичный совет по погоде (зонт, куртка, солнцезащитные очки и т.д.).\n"
+    "Стиль: тёплый, живой, как сосед который выглянул в окно и делится впечатлениями.\n"
+    "Каждый раз пиши по-разному — не повторяй шаблоны.\n"
+    "1-2 эмодзи максимум. Разговорный русский. НЕ пиши длинных текстов."
+)
+
+
+# ---------------------------------------------------------------------------
+# Скрапинг данных
+# ---------------------------------------------------------------------------
 
 async def fetch_weather() -> str:
     """Получает текущую погоду через wttr.in JSON API."""
@@ -126,3 +154,61 @@ async def fetch_holidays() -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Отправка сообщений
+# ---------------------------------------------------------------------------
+
+async def send_morning_greeting(bot: Bot) -> None:
+    """Отправляет утреннее приветствие с погодой и праздниками в General (8:00)."""
+    if not settings.ai_daily_greeting:
+        return
+
+    try:
+        weather, holidays = await asyncio.gather(
+            fetch_weather(),
+            fetch_holidays(),
+            return_exceptions=True,
+        )
+        # Обработка исключений из gather
+        if isinstance(weather, BaseException):
+            logger.warning("Ошибка получения погоды: %s", weather)
+            weather = ""
+        if isinstance(holidays, BaseException):
+            logger.warning("Ошибка получения праздников: %s", holidays)
+            holidays = ""
+
+        now = datetime.now(ZoneInfo(settings.timezone))
+        weekday = _WEEKDAYS_RU[now.weekday()]
+        date_str = now.strftime("%d.%m.%Y")
+
+        user_message = (
+            f"Дата: {date_str}, {weekday}\n"
+            f"Погода: {weather or 'данные недоступны'}\n"
+            f"Праздники сегодня: {holidays or 'обычный день, без праздников'}\n"
+            "Напиши утреннее приветствие соседям."
+        )
+
+        ai_client = get_ai_client()
+        provider = ai_client._provider
+        if not hasattr(provider, "_chat_completion"):
+            logger.info("Утреннее приветствие пропущено: нет remote AI провайдера.")
+            return
+
+        content, _ = await provider._chat_completion(
+            [
+                {"role": "system", "content": _MORNING_GREETING_SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            chat_id=settings.forum_chat_id,
+            bypass_limit=True,
+        )
+
+        if content and content.strip():
+            await bot.send_message(
+                settings.forum_chat_id,
+                content.strip()[:800],
+            )
+            logger.info("DAILY_GREETING: утреннее приветствие отправлено в General")
+
+    except Exception:
+        logger.warning("Не удалось отправить утреннее приветствие.", exc_info=True)

@@ -286,6 +286,17 @@ def build_resident_answer(query: str, *, context: list[str] | None = None) -> st
     return "\n\n".join(unique_answers[:2])[:1200]
 
 
+def get_entries_by_category(category: str, *, limit: int = 5) -> list[ResidentKbEntry]:
+    """Возвращает записи KB одной категории, отсортированные по приоритету."""
+
+    if not category:
+        return []
+    normalized = category.lower().strip()
+    matched = [e for e in load_resident_kb() if e.category.lower().strip() == normalized]
+    matched.sort(key=lambda e: (-e.priority, e.id))
+    return matched[:limit]
+
+
 def build_resident_context(query: str, *, context: list[str] | None = None, top_k: int = 6) -> str:
     result = search_resident_kb(query, context=context, top_k=top_k)
     if not result.matches:
