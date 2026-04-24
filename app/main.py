@@ -63,6 +63,7 @@ from app.services.proxy import ProxyManager
 from app.services.daily_summary import build_ai_summary_context, build_daily_summary, build_response_report, render_daily_summary
 from app.services.daily_messages import send_morning_greeting
 from app.services.personalization import send_weekly_nudges
+from app.services.weekly_digest import send_weekly_digest
 from app.services.sheets import sync_places_from_sheet
 from app.services.resident_kb import load_resident_kb
 
