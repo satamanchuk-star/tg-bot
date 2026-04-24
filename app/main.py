@@ -63,7 +63,6 @@ from app.services.proxy import ProxyManager
 from app.services.daily_summary import build_ai_summary_context, build_daily_summary, build_response_report, render_daily_summary
 from app.services.daily_messages import send_morning_greeting
 from app.services.personalization import send_weekly_nudges
-from app.services.proactive import send_scheduled_greeting, send_weekly_update
 from app.services.sheets import sync_places_from_sheet
 from app.services.resident_kb import load_resident_kb
 
@@ -770,23 +769,6 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         minute=0,
         args=[bot],
     )
-    # Плановые приветствия жителей
-    if settings.ai_morning_greeting:
-        scheduler.add_job(
-            send_scheduled_greeting,
-            "cron",
-            hour=9,
-            minute=0,
-            args=[bot, "morning"],
-        )
-    if settings.ai_evening_greeting:
-        scheduler.add_job(
-            send_scheduled_greeting,
-            "cron",
-            hour=20,
-            minute=0,
-            args=[bot, "evening"],
-        )
     # Утреннее приветствие с погодой и праздниками (8:00 каждый день)
     if settings.ai_daily_greeting:
         scheduler.add_job(
