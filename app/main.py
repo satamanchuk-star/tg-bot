@@ -191,8 +191,11 @@ class RetryOnFloodSession(AiohttpSession):
                 if self._proxy_manager:
                     new_proxy = self._proxy_manager.rotate()
                     try:
+                        # Закрываем текущую сессию — следующий вызов super().make_request
+                        # создаст новую с обновлённым proxy (AiohttpSession ленив).
+                        await self.close()
                         self.proxy = new_proxy
-                    except RuntimeError as proxy_exc:
+                    except Exception as proxy_exc:
                         logger.warning("Не удалось сменить прокси (%s), отключаю ротацию", proxy_exc)
                         self._proxy_manager = None
                 if network_attempts >= MAX_RETRIES_ON_NETWORK:
@@ -1123,7 +1126,6 @@ async def main() -> None:
     global _proxy_manager
     if settings.proxy_enabled or settings.proxy_manual:
         _proxy_manager = ProxyManager(
-            bot_token=settings.bot_token,
             working_pool_size=settings.proxy_working_pool_size,
             test_limit=settings.proxy_test_limit,
             state_path=Path(settings.proxy_state_path),

@@ -12,6 +12,9 @@ services:
       - AI_API_URL=${AI_API_URL:-https://openrouter.ai/api/v1}
       - AI_KEY=${AI_KEY:-}
       - AI_MODEL=${AI_MODEL:-anthropic/claude-haiku-4.5}
+      # Прокси для Telegram API. Формат: socks5://user:pass@ip:1080
+      # Оставьте пустым если прокси не нужен.
+      - PROXY_MANUAL=${PROXY_MANUAL:-}
 
   watchtower:
     image: containrrr/watchtower
