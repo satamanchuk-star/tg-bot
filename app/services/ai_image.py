@@ -39,6 +39,11 @@ IMAGE_PROMPT_WRAPPERS: dict[str, str] = {
         "Create a noticeable but non-aggressive warning image for a residential complex chat. "
         "Topic: {prompt}"
     ),
+    "smoke": (
+        "Create a humorous and friendly illustration for a residential complex 'Smoke Room' chat. "
+        "Reflect the main topic of today's discussion with light, warm humor. "
+        "No politics, no 18+ content, no real faces, no personal data. Topic: {prompt}"
+    ),
 }
 
 # ---------------------------------------------------------------------------

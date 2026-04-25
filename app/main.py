@@ -678,6 +678,16 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
             minute=settings.ai_summary_minute,
             args=[bot],
         )
+    # Ежедневная картинка по главной теме курилки
+    if settings.ai_digest_image_enabled and settings.ai_image_enabled:
+        from app.services.daily_messages import send_smoke_topic_image
+        scheduler.add_job(
+            send_smoke_topic_image,
+            "cron",
+            hour=settings.ai_smoke_image_hour,
+            minute=settings.ai_smoke_image_minute,
+            args=[bot],
+        )
     scheduler.start()
     return scheduler
 
