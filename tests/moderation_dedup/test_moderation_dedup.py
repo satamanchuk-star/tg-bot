@@ -20,10 +20,11 @@ def clear_moderated_cache() -> None:
 
 
 def _build_message(message_id: int) -> SimpleNamespace:
+    # Текст длиннее 60 символов и 8 слов, чтобы пройти _can_skip_ai_moderation pre-filter
     return SimpleNamespace(
         chat=SimpleNamespace(id=12345),
         from_user=SimpleNamespace(id=777, mention_html=lambda: "@u"),
-        text="обычное сообщение",
+        text="обычное тестовое сообщение для проверки системы дедупликации модерации сообщений",
         message_id=message_id,
         message_thread_id=99,
         delete=AsyncMock(),
