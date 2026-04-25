@@ -880,8 +880,27 @@ async def on_startup_warmup(bot: Bot) -> None:
     get_ai_client()
     ai_probe_note = ""
     if settings.ai_enabled and settings.ai_key:
-        source_note = " (по умолчанию, AI_MODEL не задан)" if settings.ai_model_is_default else ""
-        ai_mode = f"AI: OpenRouter ({settings.ai_model}){source_note}"
+        _model_roles: dict[str, list[str]] = {}
+        for _role, _model in [
+            ("main", settings.ai_main_model),
+            ("faq", settings.ai_faq_model),
+            ("reply", settings.ai_reply_model),
+            ("digest", settings.ai_digest_model),
+            ("gate_extract", settings.ai_gate_extract_model),
+            ("fallback", settings.ai_fallback_model),
+            ("classifier", settings.ai_classifier_model),
+            ("spam", settings.ai_spam_model),
+            ("topic", settings.ai_topic_model),
+            ("gate_intent", settings.ai_gate_intent_model),
+            ("code", settings.ai_code_model),
+            ("premium", settings.ai_premium_model),
+        ]:
+            _model_roles.setdefault(_model, []).append(_role)
+        _model_lines = "\n".join(
+            f"  · {_m.split('/')[-1]} ({', '.join(_r)})"
+            for _m, _r in _model_roles.items()
+        )
+        ai_mode = f"AI: OpenRouter\n{_model_lines}"
         try:
             probe = await asyncio.wait_for(
                 get_ai_client().probe(),
