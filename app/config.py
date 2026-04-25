@@ -286,6 +286,35 @@ class Settings(BaseSettings):
     weekly_nudge_min_days_between: int = 30  # одному пользователю — не чаще раза в N дней
     # Адаптация тона под настроение чата
     ai_feature_mood: bool = True
+
+    # --- Multi-model routing ---
+    ai_classifier_model: str = "qwen/qwen3-30b-a3b-instruct-2507"
+    ai_spam_model: str = "qwen/qwen3-30b-a3b-instruct-2507"
+    ai_topic_model: str = "qwen/qwen3-30b-a3b-instruct-2507"
+    ai_gate_intent_model: str = "qwen/qwen3-30b-a3b-instruct-2507"
+    ai_main_model: str = "deepseek/deepseek-v3.2"
+    ai_faq_model: str = "deepseek/deepseek-v3.2"
+    ai_reply_model: str = "deepseek/deepseek-v3.2"
+    ai_digest_model: str = "deepseek/deepseek-v3.2"
+    ai_gate_extract_model: str = "deepseek/deepseek-v3.2"
+    ai_code_model: str = "qwen/qwen3-coder-30b-a3b-instruct"
+    ai_premium_model: str = "anthropic/claude-3.5-haiku"
+    ai_fallback_model: str = "deepseek/deepseek-v3.2"
+
+    # --- Image generation ---
+    ai_image_enabled: bool = False
+    ai_image_model: str = "google/gemini-2.5-flash-image"
+    ai_image_admin_only: bool = True
+    ai_image_daily_limit: int = 10
+    ai_image_max_prompt_chars: int = 1000
+    ai_digest_image_enabled: bool = False
+
+    # --- Extended limits ---
+    ai_max_daily_cost_usd: float = 2.0
+    ai_classifier_max_output_tokens: int = 120
+    ai_reply_max_output_tokens: int = 500
+    ai_digest_max_output_tokens: int = 700
+
     # Тихое обучение модерации: бот НЕ модерирует, а отправляет подозрительные
     # сообщения в лог-чат с кнопками для подтверждения действия администратором.
     moderation_training_mode: bool = False
