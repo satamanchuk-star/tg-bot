@@ -209,8 +209,8 @@ def _init_excluded_topics() -> None:
     if settings.topic_important is not None:
         _EXCLUDED_TOPIC_IDS.add(settings.topic_important)
     # Попутчики — бот молчит полностью
-    if settings.topic_popuchiki is not None:
-        _EXCLUDED_TOPIC_IDS.add(settings.topic_popuchiki)
+    if settings.topic_rides is not None:
+        _EXCLUDED_TOPIC_IDS.add(settings.topic_rides)
 
 
 def _is_comment_cooldown(chat_id: int, topic_id: int | None) -> bool:

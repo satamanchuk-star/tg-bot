@@ -133,8 +133,8 @@ class BotMentionFilter(BaseFilter):
             return False
         # Топик «Попутчики» — бот не отвечает вообще, даже при прямом упоминании
         if (
-            settings.topic_popuchiki is not None
-            and message.message_thread_id == settings.topic_popuchiki
+            settings.topic_rides is not None
+            and message.message_thread_id == settings.topic_rides
         ):
             return False
         # Пропускаем уже обработанные сообщения

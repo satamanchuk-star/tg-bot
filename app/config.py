@@ -316,7 +316,7 @@ class Settings(BaseSettings):
     topic_neighbors: int | None = None
     topic_market: int | None = None
     topic_duplex: int | None = None
-    topic_popuchiki: int | None = None
+    topic_rides: int | None = None  # топик «Попутчики» — бот там молчит
 
     @field_validator(
         "topic_rules",
@@ -338,7 +338,7 @@ class Settings(BaseSettings):
         "topic_neighbors",
         "topic_market",
         "topic_duplex",
-        "topic_popuchiki",
+        "topic_rides",
         mode="before",
     )
     @classmethod
