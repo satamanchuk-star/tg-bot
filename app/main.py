@@ -668,6 +668,16 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
             minute=0,
             args=[bot],
         )
+    # Ежедневная AI-сводка сообщений форума
+    if settings.ai_feature_daily_summary:
+        from app.services.daily_messages import send_daily_digest
+        scheduler.add_job(
+            send_daily_digest,
+            "cron",
+            hour=settings.ai_summary_hour,
+            minute=settings.ai_summary_minute,
+            args=[bot],
+        )
     scheduler.start()
     return scheduler
 

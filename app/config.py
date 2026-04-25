@@ -320,6 +320,11 @@ class Settings(BaseSettings):
     moderation_training_mode: bool = False
     # Утреннее приветствие с погодой и праздниками (8:00 в General)
     ai_daily_greeting: bool = False
+    # Ежедневная AI-сводка сообщений форума
+    ai_feature_daily_summary: bool = True
+    ai_summary_hour: int = 21
+    ai_summary_minute: int = 0
+    ai_summary_topic_id: int | None = None
     db_logs_retention_days: int = 14
     db_stats_retention_days: int = 45
     google_sheets_spreadsheet_id: str = "1OsPh54Bn5fdkfsEJyKcbYZTcHnue3EWQ"

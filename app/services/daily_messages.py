@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import httpx
+from aiogram import Bot
 from bs4 import BeautifulSoup
+
+from app.config import settings
+from app.services.ai_module import get_ai_client
 
 logger = logging.getLogger(__name__)
 
@@ -212,3 +217,66 @@ async def send_morning_greeting(bot: Bot) -> None:
 
     except Exception:
         logger.warning("Не удалось отправить утреннее приветствие.", exc_info=True)
+
+
+async def send_daily_digest(bot: Bot) -> None:
+    """Ежедневная AI-сводка сообщений форума (время задаётся AI_SUMMARY_HOUR/MINUTE)."""
+    if not settings.ai_feature_daily_summary or not settings.ai_enabled:
+        return
+
+    from datetime import date
+    from sqlalchemy import select
+    from app.db import get_session
+    from app.models import MessageLog
+
+    tz = ZoneInfo(settings.timezone)
+    today = date.today()
+    today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=tz)
+
+    rows: list[str] = []
+    try:
+        async for session in get_session():
+            result = await session.execute(
+                select(MessageLog.text)
+                .where(
+                    MessageLog.chat_id == settings.forum_chat_id,
+                    MessageLog.created_at >= today_start,
+                    MessageLog.severity <= 0,
+                    MessageLog.text.isnot(None),
+                )
+                .order_by(MessageLog.created_at.asc())
+                .limit(200)
+            )
+            rows = [r[0] for r in result.fetchall() if r[0] and r[0].strip()]
+            break
+    except Exception:
+        logger.exception("send_daily_digest: ошибка при чтении сообщений из БД.")
+        return
+
+    if not rows:
+        logger.info("send_daily_digest: нет сообщений за сегодня, пропускаем.")
+        return
+
+    context = "\n".join(rows)[:4000]
+    try:
+        summary = await get_ai_client().generate_daily_summary(
+            context, chat_id=settings.forum_chat_id,
+        )
+    except Exception:
+        logger.exception("send_daily_digest: ошибка AI.")
+        return
+
+    if not summary or not summary.strip():
+        logger.warning("send_daily_digest: AI вернул пустой ответ.")
+        return
+
+    target_chat = settings.admin_log_chat_id
+    thread_id = settings.ai_summary_topic_id
+    try:
+        if thread_id:
+            await bot.send_message(target_chat, summary.strip(), message_thread_id=thread_id)
+        else:
+            await bot.send_message(target_chat, summary.strip())
+        logger.info("send_daily_digest: сводка отправлена.")
+    except Exception:
+        logger.exception("send_daily_digest: не удалось отправить сводку.")

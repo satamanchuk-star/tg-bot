@@ -529,6 +529,32 @@ _ACTIVE_DIALOG: dict[tuple[int, int, int | None], datetime] = {}
 _ACTIVE_DIALOG_WINDOW = timedelta(minutes=4)
 _ACTIVE_DIALOG_MAX = 500
 
+# Паттерны для распознавания запроса на генерацию картинки в натуральной речи
+_IMAGE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"сделай\s+мем\b", re.IGNORECASE), "meme"),
+    (re.compile(r"сделай\s+постер\b", re.IGNORECASE), "poster"),
+    (re.compile(r"сделай\s+открытк\w*\b", re.IGNORECASE), "welcome"),
+    (re.compile(r"сделай\s+(?:картинк\w*|иллюстраци\w*|изображени\w*)\b", re.IGNORECASE), "meme"),
+    (re.compile(r"нарисуй\b", re.IGNORECASE), "meme"),
+    (re.compile(r"сгенерируй\s+(?:картинк\w*|мем\b|изображени\w*)\b", re.IGNORECASE), "meme"),
+    (re.compile(r"создай\s+(?:картинк\w*|мем\b)\b", re.IGNORECASE), "meme"),
+]
+_IMAGE_REPLY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"сделай\s+(?:про\s+это|из\s+этого|на\s+это\s+сообщение)\s+мем\b", re.IGNORECASE), "meme"),
+    (re.compile(r"сделай\s+(?:про\s+это|из\s+этого|на\s+это\s+сообщение)\s+(?:картинк\w*|постер\b|открытк\w*)\b", re.IGNORECASE), "meme"),
+    (re.compile(r"нарисуй\s+(?:про\s+это|из\s+этого|это)\b", re.IGNORECASE), "meme"),
+]
+
+
+def _detect_image_request(prompt: str) -> tuple[str, str] | None:
+    """Возвращает (command, stripped_prompt) или None если запрос не на картинку."""
+    for pattern, cmd in _IMAGE_PATTERNS:
+        m = pattern.search(prompt)
+        if m:
+            text = (prompt[:m.start()] + prompt[m.end():]).strip()
+            return cmd, text
+    return None
+
 
 async def _get_menu_text(bot: Bot, user_id: int | None) -> str:
     """Возвращает текст меню, добавляя админ-справку при необходимости."""
@@ -1409,6 +1435,54 @@ async def mention_help(message: Message, bot: Bot) -> None:
                         break
                 except Exception:
                     logger.warning("Не удалось обработать коррекцию.")
+
+    # Генерация картинки по натуральной речи (только для администраторов)
+    if prompt and settings.ai_image_enabled:
+        img_result = _detect_image_request(prompt)
+        if img_result is None and message.reply_to_message:
+            for _pat, _cmd in _IMAGE_REPLY_PATTERNS:
+                if _pat.search(prompt):
+                    _reply_src = (
+                        message.reply_to_message.text
+                        or message.reply_to_message.caption
+                        or ""
+                    ).strip()
+                    img_result = (_cmd, _reply_src[:settings.ai_image_max_prompt_chars])
+                    break
+
+        if img_result is not None:
+            from app.utils.admin import is_admin as _is_admin
+            if await _is_admin(bot, message.chat.id, message.from_user.id):
+                _img_cmd, _img_prompt = img_result
+                if not _img_prompt:
+                    await message.reply("Напиши что именно нарисовать после команды.")
+                    return
+                from app.services.ai_image import generate_image, is_daily_limit_reached
+                if is_daily_limit_reached():
+                    await message.reply("Дневной лимит изображений исчерпан.")
+                    return
+                _status_msg = await message.reply("Генерирую картинку...")
+                try:
+                    from aiogram.types import BufferedInputFile
+                    _img_bytes = await generate_image(
+                        _img_cmd, _img_prompt,
+                        chat_id=message.chat.id,
+                        user_id=message.from_user.id,
+                    )
+                    try:
+                        await message.reply_photo(BufferedInputFile(_img_bytes, "image.png"))
+                    except Exception:
+                        await message.reply_document(BufferedInputFile(_img_bytes, "image.png"))
+                except Exception:
+                    logger.exception("Ошибка генерации картинки по натуральному запросу.")
+                    await message.reply("Не удалось сгенерировать картинку. Попробуй позже.")
+                finally:
+                    try:
+                        await _status_msg.delete()
+                    except Exception:
+                        pass
+                return
+            # Не-администратор: падаем в обычный ответ ассистента
 
     if prompt:
         # Загружаем историю диалога заранее — нужна и для дедупа, и для дальнейшей логики.

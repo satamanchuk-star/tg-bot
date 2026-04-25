@@ -40,6 +40,18 @@ _topic_hint_last_user: dict[int, float] = {}   # user_id → timestamp
 _topic_hint_last_key: dict[str, float] = {}     # topic_key → timestamp
 _TOPIC_HINT_COOLDOWN = 600.0
 
+# Ключевые слова для фильтрации AI-вызова в топике шлагбаума
+_GATE_KEYWORDS = frozenset([
+    "шлагбаум", "барьер", "ворота", "въезд", "выезд", "пропуск",
+    "пустил", "не открыл", "не пускает", "не пропускает",
+    "машин", "авто", "номер", "заявк", "записать", "запись",
+])
+
+
+def _has_gate_keywords(text: str) -> bool:
+    tl = text.lower()
+    return any(kw in tl for kw in _GATE_KEYWORDS)
+
 # Runtime-флаг режима обучения (переопределяет settings.moderation_training_mode)
 _TRAINING_MODE_OVERRIDE: bool | None = None
 
@@ -275,29 +287,30 @@ async def run_moderation(message: Message, bot: Bot) -> int:
             and settings.ai_enabled
         ):
             try:
-                from app.services.ai_tasks import detect_gate_intent, extract_gate_request
-                intent = await detect_gate_intent(text, chat_id=chat_id, user_id=user_id)
-                if intent.is_gate_problem and intent.confidence >= 0.75:
-                    fields = await extract_gate_request(text, chat_id=chat_id, user_id=user_id)
-                    if fields.missing_fields:
-                        missing_str = ", ".join(fields.missing_fields)
-                        await safe_call(
-                            message.reply(f"Чтобы передать заявку, уточни: {missing_str}"),
-                            log_ctx="gate_missing_fields",
-                        )
-                    elif fields.confidence >= 0.70:
-                        gate_log = (
-                            f"🚗 Заявка по шлагбауму\n"
-                            f"Дата/время: {fields.date_time or 'не указано'}\n"
-                            f"Номер авто: {fields.car_number or 'не указан'}\n"
-                            f"В базе пропусков: {fields.in_pass_base or 'неизвестно'}\n"
-                            f"Проблема: {fields.problem_description}\n"
-                            f"От: user_id={user_id}"
-                        )
-                        await safe_call(
-                            bot.send_message(settings.admin_log_chat_id, gate_log),
-                            log_ctx="gate_request_log",
-                        )
+                if _has_gate_keywords(text):
+                    from app.services.ai_tasks import detect_gate_intent, extract_gate_request
+                    intent = await detect_gate_intent(text, chat_id=chat_id, user_id=user_id)
+                    if intent.is_gate_problem and intent.confidence >= 0.75:
+                        fields = await extract_gate_request(text, chat_id=chat_id, user_id=user_id)
+                        if fields.missing_fields:
+                            missing_str = ", ".join(fields.missing_fields)
+                            await safe_call(
+                                message.reply(f"Чтобы передать заявку, уточни: {missing_str}"),
+                                log_ctx="gate_missing_fields",
+                            )
+                        elif fields.confidence >= 0.70:
+                            gate_log = (
+                                f"🚗 Заявка по шлагбауму\n"
+                                f"Дата/время: {fields.date_time or 'не указано'}\n"
+                                f"Номер авто: {fields.car_number or 'не указан'}\n"
+                                f"В базе пропусков: {fields.in_pass_base or 'неизвестно'}\n"
+                                f"Проблема: {fields.problem_description}\n"
+                                f"От: user_id={user_id}"
+                            )
+                            await safe_call(
+                                bot.send_message(settings.admin_log_chat_id, gate_log),
+                                log_ctx="gate_request_log",
+                            )
             except Exception:  # noqa: BLE001
                 pass
 
