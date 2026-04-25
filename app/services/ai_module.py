@@ -775,7 +775,16 @@ class OpenRouterProvider:
             return {"role": "system", "content": f"{static_text}\n\n{dynamic_text}"}
         return {"role": "system", "content": static_text}
 
-    async def _chat_completion(self, messages: list[dict], *, chat_id: int, temperature: float = 0.8, bypass_limit: bool = False) -> tuple[str, int]:
+    async def _chat_completion(
+        self,
+        messages: list[dict],
+        *,
+        chat_id: int,
+        temperature: float = 0.8,
+        bypass_limit: bool = False,
+        model: str | None = None,
+        response_format: dict | None = None,
+    ) -> tuple[str, int]:
         if not settings.ai_key:
             raise RuntimeError("AI_KEY не задан")
         if not bypass_limit:
@@ -783,16 +792,20 @@ class OpenRouterProvider:
             if not allowed:
                 raise RuntimeError(f"AI лимит: {reason or 'превышен'}")
 
-        payload = {
+        payload: dict[str, object] = {
             "temperature": temperature,
             "max_tokens": settings.ai_max_tokens,
             "messages": messages,
         }
+        if response_format:
+            payload["response_format"] = response_format
         headers = {
             "Authorization": f"Bearer {settings.ai_key}",
             "Content-Type": "application/json",
         }
-        model_id = self._model
+        # model=None → используем self._model; model задан → используем override (не меняем self._model)
+        _own_model = model is None
+        model_id = self._model if _own_model else _normalize_model_id(model)
         used_fallback_model = False
 
         for attempt in range(self._retries + 1):
@@ -809,7 +822,7 @@ class OpenRouterProvider:
                     raise RuntimeError("AI вернул пустой текст (только think-теги)")
                 tokens = int(data.get("usage", {}).get("total_tokens") or 0)
                 await _add_remote_usage(chat_id, tokens)
-                if used_fallback_model and self._model != model_id:
+                if used_fallback_model and _own_model and self._model != model_id:
                     logger.warning("AI model switched to fallback for runtime stability: %r", model_id)
                     self._model = model_id
                 logger.info("AI response <- tokens=%s chat_id=%s", tokens, chat_id)
@@ -1031,8 +1044,13 @@ class OpenRouterProvider:
                     {"role": "user", "content": user_content},
                 ],
                 chat_id=chat_id,
+                response_format={"type": "json_object"},
             )
-            data = json.loads(content)
+            # Убираем markdown-обёртку ```json ... ``` если модель всё же добавила её
+            stripped = content.strip()
+            if stripped.startswith("```"):
+                stripped = re.sub(r"^```[a-z]*\n?", "", stripped).rstrip("`").strip()
+            data = json.loads(stripped)
             violation_type = str(data.get("violation_type", "none"))
             action = str(data.get("action", "none"))
             severity = int(data.get("severity", 0))
@@ -1223,7 +1241,12 @@ class OpenRouterProvider:
         else:
             temperature = 0.7
         try:
-            content, _ = await self._chat_completion(messages, chat_id=chat_id, temperature=temperature)
+            content, _ = await self._chat_completion(
+                messages,
+                chat_id=chat_id,
+                temperature=temperature,
+                model=settings.ai_reply_model,
+            )
             reply = content[:500]
             return reply
         except RuntimeError as exc:

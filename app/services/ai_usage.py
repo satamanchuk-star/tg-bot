@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -106,3 +106,48 @@ def next_reset_delta() -> timedelta:
     tomorrow = (now + timedelta(days=1)).date()
     next_reset = datetime.combine(tomorrow, datetime.min.time(), tzinfo=now.tzinfo)
     return next_reset - now
+
+
+# Специальный sentinel chat_id для хранения счётчика генерации картинок.
+# Telegram chat_id никогда не бывает 0, поэтому коллизий нет.
+_IMAGE_USAGE_CHAT_ID = 0
+
+
+async def get_today_image_count(session: AsyncSession) -> int:
+    """Возвращает количество сгенерированных картинок за сегодня из БД."""
+    date_key = now_tz().date().isoformat()
+    usage = await session.get(AiUsage, {"date_key": date_key, "chat_id": _IMAGE_USAGE_CHAT_ID})
+    return usage.request_count if usage else 0
+
+
+async def add_image_usage(session: AsyncSession) -> int:
+    """Атомарно инкрементирует счётчик картинок за сегодня через INSERT OR IGNORE + UPDATE.
+
+    Избегает race condition при параллельных фоновых записях:
+    одна транзакция — один INCREMENT без промежуточного чтения.
+    """
+    date_key = now_tz().date().isoformat()
+    now_utc = datetime.now(timezone.utc).isoformat()
+    try:
+        await session.execute(
+            text(
+                "INSERT OR IGNORE INTO ai_usage (date_key, chat_id, request_count, tokens_used, updated_at) "
+                "VALUES (:dk, :cid, 0, 0, :ts)"
+            ),
+            {"dk": date_key, "cid": _IMAGE_USAGE_CHAT_ID, "ts": now_utc},
+        )
+        result = await session.execute(
+            text(
+                "UPDATE ai_usage SET request_count = request_count + 1, updated_at = :ts "
+                "WHERE date_key = :dk AND chat_id = :cid "
+                "RETURNING request_count"
+            ),
+            {"dk": date_key, "cid": _IMAGE_USAGE_CHAT_ID, "ts": now_utc},
+        )
+        row = result.fetchone()
+        await session.commit()
+        return int(row[0]) if row else 0
+    except OperationalError as exc:
+        logger.warning("Не удалось записать image usage: %s", exc)
+        await session.rollback()
+        return 0

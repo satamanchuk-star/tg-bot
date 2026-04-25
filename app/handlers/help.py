@@ -1357,7 +1357,7 @@ async def mention_help(message: Message, bot: Bot) -> None:
         )
         return
     if _is_silent_topic(message.message_thread_id):
-        logger.info(
+        logger.debug(
             "MENTION_SKIPPED reason=silent_topic topic_id=%s",
             message.message_thread_id,
         )
