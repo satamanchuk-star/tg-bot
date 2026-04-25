@@ -205,6 +205,7 @@ async def send_morning_greeting(bot: Bot) -> None:
                 {"role": "user", "content": user_message},
             ],
             chat_id=settings.forum_chat_id,
+            temperature=0.6,
             bypass_limit=True,
         )
 
@@ -280,3 +281,119 @@ async def send_daily_digest(bot: Bot) -> None:
         logger.info("send_daily_digest: сводка отправлена.")
     except Exception:
         logger.exception("send_daily_digest: не удалось отправить сводку.")
+
+
+# ---------------------------------------------------------------------------
+# Ежедневная картинка по главной теме курилки
+# ---------------------------------------------------------------------------
+
+_SMOKE_THEME_SYSTEM_PROMPT = (
+    "Ты анализируешь сообщения из раздела 'Курилка' чата жилого комплекса. "
+    "Найди ОДНУ самую обсуждаемую тему дня и сформулируй её как короткое образное "
+    "описание для генерации картинки. "
+    "Стиль: дружелюбный, с лёгким юмором, на русском языке. "
+    "Ответь ТОЛЬКО описанием темы: 5-15 слов, без вводных фраз и пояснений."
+)
+
+
+async def send_smoke_topic_image(bot: Bot) -> None:
+    """Раз в день определяет главную тему курилки и публикует тематическую картинку."""
+    if not settings.ai_digest_image_enabled or not settings.ai_image_enabled:
+        return
+    if not settings.topic_smoke or not settings.ai_enabled:
+        return
+
+    from datetime import date
+    from sqlalchemy import select
+    from aiogram.types import BufferedInputFile
+    from app.db import get_session
+    from app.models import MessageLog
+    from app.services.ai_image import generate_image, is_daily_limit_reached
+    from app.services.ai_module import OpenRouterProvider
+
+    tz = ZoneInfo(settings.timezone)
+    today = date.today()
+    today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=tz)
+
+    # 1. Собираем сообщения из курилки за сегодня
+    rows: list[str] = []
+    try:
+        async for session in get_session():
+            result = await session.execute(
+                select(MessageLog.text)
+                .where(
+                    MessageLog.chat_id == settings.forum_chat_id,
+                    MessageLog.topic_id == settings.topic_smoke,
+                    MessageLog.created_at >= today_start,
+                    MessageLog.severity <= 0,
+                    MessageLog.text.isnot(None),
+                )
+                .order_by(MessageLog.created_at.asc())
+                .limit(150)
+            )
+            rows = [r[0] for r in result.fetchall() if r[0] and r[0].strip()]
+            break
+    except Exception:
+        logger.exception("send_smoke_topic_image: ошибка чтения сообщений из БД.")
+        return
+
+    if not rows:
+        logger.info("send_smoke_topic_image: нет сообщений в курилке за сегодня, пропускаем.")
+        return
+
+    if is_daily_limit_reached():
+        logger.warning("send_smoke_topic_image: дневной лимит изображений исчерпан.")
+        return
+
+    # 2. AI определяет главную тему обсуждения
+    context = "\n".join(rows)[:3000]
+    provider = get_ai_client()._provider  # noqa: SLF001
+    if not isinstance(provider, OpenRouterProvider):
+        logger.info("send_smoke_topic_image: AI в stub-режиме, пропускаем.")
+        return
+
+    try:
+        theme, _ = await provider._chat_completion_with_model(  # noqa: SLF001
+            settings.ai_classifier_model,
+            [
+                {"role": "system", "content": _SMOKE_THEME_SYSTEM_PROMPT},
+                {"role": "user", "content": context},
+            ],
+            chat_id=settings.forum_chat_id,
+            max_tokens=60,
+            temperature=0.5,
+        )
+        theme = theme.strip()[:200]
+    except Exception:
+        logger.exception("send_smoke_topic_image: ошибка AI при определении темы.")
+        return
+
+    if not theme:
+        logger.warning("send_smoke_topic_image: AI не определил тему.")
+        return
+
+    logger.info("send_smoke_topic_image: тема='%s'", theme)
+
+    # 3. Генерируем картинку
+    try:
+        image_bytes = await generate_image(
+            "smoke", theme,
+            chat_id=settings.forum_chat_id,
+            user_id=None,
+        )
+    except RuntimeError:
+        logger.exception("send_smoke_topic_image: ошибка генерации картинки.")
+        return
+
+    # 4. Отправляем в топик курилки
+    caption = f"Главная тема курилки сегодня: {theme}"
+    try:
+        await bot.send_photo(
+            settings.forum_chat_id,
+            photo=BufferedInputFile(image_bytes, "smoke_image.png"),
+            caption=caption,
+            message_thread_id=settings.topic_smoke,
+        )
+        logger.info("send_smoke_topic_image: картинка отправлена в курилку.")
+    except Exception:
+        logger.exception("send_smoke_topic_image: не удалось отправить картинку.")

@@ -325,6 +325,9 @@ class Settings(BaseSettings):
     ai_summary_hour: int = 21
     ai_summary_minute: int = 0
     ai_summary_topic_id: int | None = None
+    # Ежедневная картинка по главной теме курилки (ai_digest_image_enabled)
+    ai_smoke_image_hour: int = 20
+    ai_smoke_image_minute: int = 0
     db_logs_retention_days: int = 14
     db_stats_retention_days: int = 45
     google_sheets_spreadsheet_id: str = "1OsPh54Bn5fdkfsEJyKcbYZTcHnue3EWQ"
