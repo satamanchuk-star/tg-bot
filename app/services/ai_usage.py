@@ -106,3 +106,30 @@ def next_reset_delta() -> timedelta:
     tomorrow = (now + timedelta(days=1)).date()
     next_reset = datetime.combine(tomorrow, datetime.min.time(), tzinfo=now.tzinfo)
     return next_reset - now
+
+
+# Специальный sentinel chat_id для хранения счётчика генерации картинок.
+# Telegram chat_id никогда не бывает 0, поэтому коллизий нет.
+_IMAGE_USAGE_CHAT_ID = 0
+
+
+async def get_today_image_count(session: AsyncSession) -> int:
+    """Возвращает количество сгенерированных картинок за сегодня из БД."""
+    date_key = now_tz().date().isoformat()
+    usage = await session.get(AiUsage, {"date_key": date_key, "chat_id": _IMAGE_USAGE_CHAT_ID})
+    return usage.request_count if usage else 0
+
+
+async def add_image_usage(session: AsyncSession) -> int:
+    """Инкрементирует счётчик картинок за сегодня. Возвращает новое значение."""
+    date_key = now_tz().date().isoformat()
+    try:
+        usage = await get_or_create_usage(session, date_key=date_key, chat_id=_IMAGE_USAGE_CHAT_ID)
+        usage.request_count += 1
+        usage.updated_at = datetime.now(timezone.utc)
+        await session.commit()
+        return usage.request_count
+    except OperationalError as exc:
+        logger.warning("Не удалось записать image usage: %s", exc)
+        await session.rollback()
+        return 0

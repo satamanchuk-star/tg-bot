@@ -307,6 +307,8 @@ class Settings(BaseSettings):
     ai_image_admin_only: bool = True
     ai_image_daily_limit: int = 10
     ai_image_max_prompt_chars: int = 1000
+    # Дневной бюджет на картинки в USD; 0 = без лимита
+    ai_image_max_daily_cost_usd: float = 0.50
     ai_digest_image_enabled: bool = False
 
     # --- Extended limits ---

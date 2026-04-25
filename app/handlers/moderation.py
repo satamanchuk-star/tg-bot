@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -39,6 +40,23 @@ FLOOD_TRACKER = FloodTracker(limit=10, window_seconds=120)
 _topic_hint_last_user: dict[int, float] = {}   # user_id → timestamp
 _topic_hint_last_key: dict[str, float] = {}     # topic_key → timestamp
 _TOPIC_HINT_COOLDOWN = 600.0
+
+# Паттерны ссылок — признак того, что AI-проверка нужна
+_LINK_PATTERN = re.compile(r"https?://|www\.|t\.me/|@\w{3,}", re.IGNORECASE)
+
+
+def _can_skip_ai_moderation(text: str) -> bool:
+    """True → сообщение тривиально, достаточно local_moderation (экономит ~70% запросов).
+
+    Используется только когда ai_feature_moderation=True; при False и так идёт local.
+    """
+    if len(text) > 60:
+        return False
+    if len(text.split()) > 8:
+        return False
+    if _LINK_PATTERN.search(text):
+        return False
+    return True
 
 # Runtime-флаг режима обучения (переопределяет settings.moderation_training_mode)
 _TRAINING_MODE_OVERRIDE: bool | None = None
@@ -232,7 +250,7 @@ async def run_moderation(message: Message, bot: Bot) -> int:
     # Добавляем текущее сообщение с user_id для полного контекста
     current_msg = f"[user_{user_id}]: {text}"
 
-    if settings.ai_feature_moderation:
+    if settings.ai_feature_moderation and not _can_skip_ai_moderation(text):
         ai_client = get_ai_client()
         decision = await ai_client.moderate(
             current_msg, chat_id=chat_id, context=topic_context,

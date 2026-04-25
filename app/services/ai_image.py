@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from app.config import settings
+from app.db import get_session
 from app.services.ai_module import get_ai_client, get_admin_notifier
 from app.utils.time import now_tz
 
 logger = logging.getLogger(__name__)
+
+# Примерная стоимость одной генерации (Gemini 2.5 Flash Image via OpenRouter)
+_ESTIMATED_IMAGE_COST_USD: float = 0.05
 
 # ---------------------------------------------------------------------------
 # Prompt wrappers для каждой команды
@@ -42,7 +47,7 @@ IMAGE_PROMPT_WRAPPERS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Дневной счётчик (in-memory, сбрасывается при рестарте)
+# Дневной счётчик (in-memory + DB-персистентность)
 # ---------------------------------------------------------------------------
 
 _image_count: dict[str, int] = {}  # {"2026-04-25": 3}
@@ -56,17 +61,50 @@ def get_today_count() -> int:
     return _image_count.get(_today_key(), 0)
 
 
+def get_today_cost_usd() -> float:
+    return get_today_count() * _ESTIMATED_IMAGE_COST_USD
+
+
 def is_daily_limit_reached() -> bool:
-    return get_today_count() >= settings.ai_image_daily_limit
+    count = get_today_count()
+    if count >= settings.ai_image_daily_limit:
+        return True
+    if get_today_cost_usd() >= settings.ai_image_max_daily_cost_usd:
+        return True
+    return False
 
 
 def _increment_count() -> None:
     key = _today_key()
     _image_count[key] = _image_count.get(key, 0) + 1
-    # Чистим старые ключи (оставляем только сегодня)
     for old_key in list(_image_count):
         if old_key != key:
             del _image_count[old_key]
+
+
+async def sync_image_count() -> None:
+    """Инициализирует in-memory счётчик из БД — вызывается при старте бота."""
+    try:
+        async for session in get_session():
+            from app.services.ai_usage import get_today_image_count
+            count = await get_today_image_count(session)
+            if count > 0:
+                _image_count[_today_key()] = count
+                logger.info("Image count restored from DB: %d", count)
+            break
+    except Exception:  # noqa: BLE001
+        logger.warning("Не удалось загрузить счётчик картинок из БД.")
+
+
+async def _persist_count() -> None:
+    """Записывает текущий счётчик в БД (фоново, не блокирует генерацию)."""
+    try:
+        async for session in get_session():
+            from app.services.ai_usage import add_image_usage
+            await add_image_usage(session)
+            break
+    except Exception:  # noqa: BLE001
+        logger.warning("Не удалось сохранить счётчик картинок в БД.")
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +131,7 @@ async def generate_image(command: str, user_text: str, *, chat_id: int, user_id:
     try:
         image_bytes = await provider.generate_image_raw(model, prompt, chat_id=chat_id)
         _increment_count()
+        asyncio.create_task(_persist_count())
 
         notifier = get_admin_notifier()
         if notifier:

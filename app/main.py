@@ -793,57 +793,72 @@ async def on_startup_warmup(bot: Bot) -> None:
     # ── Команды бота в меню Telegram — оба вызова параллельно ────────────────
     _step_t = _time.monotonic()
     if telegram_available:
+        async def _set_commands_with_retry(coro_fn, label: str) -> None:
+            """Вызывает coro_fn() с 3 попытками (2 с, 4 с) при сбое."""
+            for attempt in range(1, 4):
+                try:
+                    await coro_fn()
+                    return
+                except Exception:  # noqa: BLE001
+                    if attempt < 3:
+                        await asyncio.sleep(2 ** attempt)
+                    else:
+                        logger.warning("Не удалось зарегистрировать %s в Telegram меню.", label)
+
         async def _set_public_commands() -> None:
-            try:
-                await bot.set_my_commands(
-                    [
-                        BotCommand(command="help", description="Справка и навигация по форуму"),
-                        BotCommand(command="rules", description="Правила нашего сообщества"),
-                        BotCommand(command="ai", description="Задать вопрос Жаботу"),
-                        BotCommand(command="21", description="Играть в блэкджек"),
-                        BotCommand(command="21top", description="Топ игроков недели"),
-                        BotCommand(command="score", description="Мои монеты и статистика"),
-                        BotCommand(command="предложить", description="Предложить место в инфраструктуре ЖК"),
-                    ],
-                )
-            except Exception:  # noqa: BLE001
-                logger.warning("Не удалось зарегистрировать публичные команды в Telegram меню.")
+            await bot.set_my_commands(
+                [
+                    BotCommand(command="help", description="Справка и навигация по форуму"),
+                    BotCommand(command="rules", description="Правила нашего сообщества"),
+                    BotCommand(command="ai", description="Задать вопрос Жаботу"),
+                    BotCommand(command="21", description="Играть в блэкджек"),
+                    BotCommand(command="21top", description="Топ игроков недели"),
+                    BotCommand(command="score", description="Мои монеты и статистика"),
+                    BotCommand(command="предложить", description="Предложить место в инфраструктуре ЖК"),
+                ],
+            )
 
         async def _set_admin_commands() -> None:
-            try:
-                await bot.set_my_commands(
-                    [
-                        BotCommand(command="admin", description="📋 Меню всех админ-команд"),
-                        BotCommand(command="mute", description="Замьютить пользователя (реплай)"),
-                        BotCommand(command="unmute", description="Снять мут (реплай)"),
-                        BotCommand(command="ban", description="Забанить пользователя (реплай)"),
-                        BotCommand(command="unban", description="Снять бан (реплай)"),
-                        BotCommand(command="strike", description="Выдать страйк (реплай)"),
-                        BotCommand(command="addcoins", description="Начислить монеты (реплай)"),
-                        BotCommand(command="ai_status", description="Статус и диагностика ИИ"),
-                        BotCommand(command="ai_probe", description="AI probe — проверка 3 слоёв"),
-                        BotCommand(command="ai_on", description="Включить AI runtime"),
-                        BotCommand(command="ai_off", description="Выключить AI runtime"),
-                        BotCommand(command="training_on", description="Включить режим обучения"),
-                        BotCommand(command="training_off", description="Выключить режим обучения"),
-                        BotCommand(command="reload_profanity", description="Перечитать мат-словари"),
-                        BotCommand(command="reset_routing_state", description="Сбросить ожидания роутинга"),
-                        BotCommand(command="reset_stats", description="Сбросить статистику"),
-                        BotCommand(command="form", description="Форма для шлагбаума"),
-                        BotCommand(command="text", description="Текст от лица бота"),
-                        BotCommand(command="rag_bot", description="Добавить запись в RAG базу"),
-                        BotCommand(command="rag_sync", description="Систематизировать RAG базу"),
-                        BotCommand(command="restart_jobs", description="Перезапуск зависших задач"),
-                        BotCommand(command="shutdown_bot", description="⚠️ Остановить бота"),
-                    ],
-                    scope=BotCommandScopeChatAdministrators(
-                        chat_id=settings.forum_chat_id,
-                    ),
-                )
-            except Exception:  # noqa: BLE001
-                logger.warning("Не удалось зарегистрировать админ-команды в Telegram меню.")
+            await bot.set_my_commands(
+                [
+                    BotCommand(command="admin", description="📋 Меню всех админ-команд"),
+                    BotCommand(command="mute", description="Замьютить пользователя (реплай)"),
+                    BotCommand(command="unmute", description="Снять мут (реплай)"),
+                    BotCommand(command="ban", description="Забанить пользователя (реплай)"),
+                    BotCommand(command="unban", description="Снять бан (реплай)"),
+                    BotCommand(command="strike", description="Выдать страйк (реплай)"),
+                    BotCommand(command="addcoins", description="Начислить монеты (реплай)"),
+                    BotCommand(command="ai_status", description="Статус и диагностика ИИ"),
+                    BotCommand(command="ai_probe", description="AI probe — проверка 3 слоёв"),
+                    BotCommand(command="ai_on", description="Включить AI runtime"),
+                    BotCommand(command="ai_off", description="Выключить AI runtime"),
+                    BotCommand(command="training_on", description="Включить режим обучения"),
+                    BotCommand(command="training_off", description="Выключить режим обучения"),
+                    BotCommand(command="reload_profanity", description="Перечитать мат-словари"),
+                    BotCommand(command="reset_routing_state", description="Сбросить ожидания роутинга"),
+                    BotCommand(command="reset_stats", description="Сбросить статистику"),
+                    BotCommand(command="form", description="Форма для шлагбаума"),
+                    BotCommand(command="text", description="Текст от лица бота"),
+                    BotCommand(command="meme", description="🖼 Мем про жизнь в ЖК"),
+                    BotCommand(command="poster", description="🖼 Афиша мероприятия"),
+                    BotCommand(command="digest_image", description="🖼 Иллюстрация для дайджеста"),
+                    BotCommand(command="rules_image", description="🖼 Иллюстрация правила"),
+                    BotCommand(command="welcome_card", description="🖼 Карточка приветствия"),
+                    BotCommand(command="warning_image", description="🖼 Предупреждающее изображение"),
+                    BotCommand(command="rag_bot", description="Добавить запись в RAG базу"),
+                    BotCommand(command="rag_sync", description="Систематизировать RAG базу"),
+                    BotCommand(command="restart_jobs", description="Перезапуск зависших задач"),
+                    BotCommand(command="shutdown_bot", description="⚠️ Остановить бота"),
+                ],
+                scope=BotCommandScopeChatAdministrators(
+                    chat_id=settings.forum_chat_id,
+                ),
+            )
 
-        await asyncio.gather(_set_public_commands(), _set_admin_commands())
+        await asyncio.gather(
+            _set_commands_with_retry(_set_public_commands, "публичные команды"),
+            _set_commands_with_retry(_set_admin_commands, "админ-команды"),
+        )
     logger.info("⏱ set_commands: %.2fs", _time.monotonic() - _step_t)
 
     # ── Кэши и база знаний ───────────────────────────────────────────────────
@@ -874,6 +889,14 @@ async def on_startup_warmup(bot: Bot) -> None:
 
     # ── Google Sheets — в фон ────────────────────────────────────────────────
     _run_background_task(_sync_places_from_sheets(), name="startup_sync_places")
+
+    # ── Image counter: restore from DB ──────────────────────────────────────
+    if settings.ai_image_enabled:
+        try:
+            from app.services.ai_image import sync_image_count
+            await sync_image_count()
+        except Exception:  # noqa: BLE001
+            logger.warning("Не удалось восстановить счётчик картинок из БД.")
 
     # ── AI клиент + probe ────────────────────────────────────────────────────
     _step_t = _time.monotonic()
