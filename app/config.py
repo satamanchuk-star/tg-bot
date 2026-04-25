@@ -345,6 +345,9 @@ class Settings(BaseSettings):
     topic_neighbors: int | None = None
     topic_market: int | None = None
     topic_duplex: int | None = None
+    # Топик «Попутчики»: бот не отвечает (по запросу пользователя),
+    # но модерация продолжает работать.
+    topic_rides: int | None = None
 
     @field_validator(
         "topic_rules",
@@ -366,6 +369,7 @@ class Settings(BaseSettings):
         "topic_neighbors",
         "topic_market",
         "topic_duplex",
+        "topic_rides",
         mode="before",
     )
     @classmethod

@@ -55,6 +55,13 @@ _BOT_PROFILE_CACHE: User | None = None
 _ASSISTANT_CHAT_IDS = {settings.forum_chat_id, settings.admin_log_chat_id}
 
 
+def _is_silent_topic(topic_id: int | None) -> bool:
+    """Топики, где бот молчит по запросу пользователей (модерация продолжает работать)."""
+    if topic_id is None:
+        return False
+    return settings.topic_rides is not None and topic_id == settings.topic_rides
+
+
 async def _get_bot_profile(bot: Bot) -> User:
     """Почему: снижаем число вызовов Telegram API при частых упоминаниях."""
 
@@ -1193,6 +1200,8 @@ async def ai_command(message: Message) -> None:
     if message.chat.id not in _ASSISTANT_CHAT_IDS:
         await message.reply("Команда /ai работает только в форуме ЖК и чате логов.")
         return
+    if _is_silent_topic(message.message_thread_id):
+        return
     if message.from_user is None or message.from_user.is_bot:
         return
     if not settings.ai_feature_assistant:
@@ -1345,6 +1354,12 @@ async def mention_help(message: Message, bot: Bot) -> None:
         logger.info(
             "MENTION_SKIPPED reason=wrong_chat chat_id=%s",
             message.chat.id,
+        )
+        return
+    if _is_silent_topic(message.message_thread_id):
+        logger.info(
+            "MENTION_SKIPPED reason=silent_topic topic_id=%s",
+            message.message_thread_id,
         )
         return
     if message.from_user is None:
