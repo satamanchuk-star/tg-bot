@@ -39,7 +39,6 @@ from app.handlers import (
     help as help_handler,
     moderation,
     personalization as personalization_handler,
-    roulette,
     shop,
     suggest,
     text_publish,
@@ -58,12 +57,10 @@ from app.services.games import (
 from app.services.health import get_health_state, update_heartbeat, update_notice
 from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
-from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, get_and_clear_response_log, set_ai_admin_notifier
+from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, set_ai_admin_notifier
 from app.services.proxy import ProxyManager
-from app.services.daily_summary import build_ai_summary_context, build_daily_summary, build_response_report, render_daily_summary
 from app.services.daily_messages import send_morning_greeting
 from app.services.personalization import send_weekly_nudges
-from app.services.weekly_digest import send_weekly_digest
 from app.services.sheets import sync_places_from_sheet
 from app.services.resident_kb import load_resident_kb
 
@@ -441,73 +438,6 @@ async def drop_orphaned_tables(session: AsyncSession) -> None:
     logger.info("Удалены осиротевшие таблицы: %s", ", ".join(orphaned))
 
 
-async def send_daily_summary(bot: Bot) -> None:
-    if not settings.ai_feature_daily_summary:
-        logger.info("Ежедневная сводка пропущена: ai_feature_daily_summary=false.")
-        return
-    target_chat_id = settings.forum_chat_id
-    target_thread_id = settings.ai_summary_topic_id
-    if target_thread_id is None:
-        target_chat_id = settings.admin_log_chat_id
-    async for session in get_session():
-        summary = await build_daily_summary(session, settings.forum_chat_id)
-        break
-    else:
-        logger.error("Не удалось получить сессию БД для ежедневной сводки.")
-        return
-    stats_text = render_daily_summary(summary)
-
-    # Генерируем AI-сводку, если доступен провайдер
-    ai_summary_text = ""
-    if summary.messages > 0:
-        try:
-            from app.services.ai_module import get_ai_client
-            ai_client = get_ai_client()
-            ai_context = build_ai_summary_context(summary)
-            ai_summary = await ai_client.generate_daily_summary(
-                ai_context, chat_id=settings.forum_chat_id,
-            )
-            if ai_summary and ai_summary.strip():
-                ai_summary_text = f"\n\n🤖 Резюме от ИИ:\n{ai_summary.strip()}"
-        except Exception:
-            logger.warning("Не удалось сгенерировать AI-сводку, отправляем только статистику.")
-
-    full_text = stats_text + ai_summary_text
-
-    for attempt in range(1, 4):
-        try:
-            await bot.send_message(
-                target_chat_id,
-                full_text,
-                message_thread_id=target_thread_id,
-            )
-            return
-        except Exception:
-            if attempt >= 3:
-                await bot.send_message(
-                    settings.admin_log_chat_id,
-                    "Не удалось отправить ежедневную сводку после 3 попыток.",
-                )
-                return
-            await asyncio.sleep(2)
-
-
-
-async def send_daily_response_report(bot: Bot) -> None:
-    """Отправляет в чат логов ежедневный отчёт по логике ответов бота."""
-    response_log = get_and_clear_response_log()
-    report_text = build_response_report(response_log)
-    for attempt in range(1, 4):
-        try:
-            await bot.send_message(settings.admin_log_chat_id, report_text)
-            return
-        except Exception:
-            if attempt >= 3:
-                logger.error("Не удалось отправить отчёт по ответам бота после 3 попыток.")
-                return
-            await asyncio.sleep(2)
-
-
 async def send_weekly_leaderboard(bot: Bot) -> None:
     if settings.topic_games is None:
         logger.info("Еженедельный рейтинг игр пропущен: topic_games не задан.")
@@ -677,20 +607,6 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
             minutes=settings.proxy_refresh_interval_min,
         )
     scheduler.add_job(
-        send_daily_summary,
-        "cron",
-        hour=settings.ai_summary_hour,
-        minute=settings.ai_summary_minute,
-        args=[bot],
-    )
-    scheduler.add_job(
-        send_daily_response_report,
-        "cron",
-        hour=settings.ai_summary_hour,
-        minute=(settings.ai_summary_minute + 2) % 60,
-        args=[bot],
-    )
-    scheduler.add_job(
         send_weekly_leaderboard,
         "cron",
         day_of_week="sat",
@@ -722,43 +638,12 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         hour="0,6,12,18",
         minute=30,
     )
-    # Рулетка: анонс → правила → запуск первого раунда
-    scheduler.add_job(
-        roulette.announce_roulette_soon,
-        "cron",
-        hour=20,
-        minute=55,
-        args=[bot],
-    )
-    scheduler.add_job(
-        roulette.announce_roulette_rules,
-        "cron",
-        hour=20,
-        minute=59,
-        args=[bot],
-    )
-    scheduler.add_job(
-        roulette.start_roulette_round,
-        "cron",
-        hour=21,
-        minute=0,
-        args=[bot],
-    )
     # Блэкджек: правила за минуту до старта
     scheduler.add_job(
         games.announce_blackjack_rules,
         "cron",
         hour=21,
         minute=59,
-        args=[bot],
-    )
-    # Недельный дайджест по воскресеньям (20:00)
-    scheduler.add_job(
-        send_weekly_digest,
-        "cron",
-        day_of_week="sun",
-        hour=20,
-        minute=0,
         args=[bot],
     )
     # Еженедельные персональные DM-нажъмы (по фактам из ResidentProfile).
@@ -916,8 +801,6 @@ async def on_startup_warmup(bot: Bot) -> None:
                         BotCommand(command="ai", description="Задать вопрос Жаботу"),
                         BotCommand(command="21", description="Играть в блэкджек"),
                         BotCommand(command="21top", description="Топ игроков недели"),
-                        BotCommand(command="roulette", description="Играть в рулетку"),
-                        BotCommand(command="bet", description="Сделать ставку в рулетке"),
                         BotCommand(command="score", description="Мои монеты и статистика"),
                         BotCommand(command="предложить", description="Предложить место в инфраструктуре ЖК"),
                     ],
@@ -990,14 +873,6 @@ async def on_startup_warmup(bot: Bot) -> None:
 
     # ── Google Sheets — в фон ────────────────────────────────────────────────
     _run_background_task(_sync_places_from_sheets(), name="startup_sync_places")
-
-    # ── Рулетка ──────────────────────────────────────────────────────────────
-    _step_t = _time.monotonic()
-    try:
-        await roulette.resume_roulette_if_needed(bot)
-    except Exception:  # noqa: BLE001
-        logger.exception("Не удалось возобновить рулетку при старте (некритично, продолжаем).")
-    logger.info("⏱ roulette_resume: %.2fs", _time.monotonic() - _step_t)
 
     # ── AI клиент + probe ────────────────────────────────────────────────────
     _step_t = _time.monotonic()
@@ -1181,7 +1056,6 @@ async def main() -> None:
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     dp.include_router(shop.router)  # магазин монет (FSM, перед economy)
     dp.include_router(economy_handler.router)  # инициативы жителей (доработки бота)
-    dp.include_router(roulette.router)  # рулетка (команда /bet)
     dp.include_router(suggest.router)   # предложить место в инфраструктуру ЖК
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
     dp.include_router(personalization_handler.router)  # /off_nudges, /on_nudges (только в DM)
