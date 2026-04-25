@@ -363,3 +363,25 @@ class ShopPurchase(Base):
     coins_spent: Mapped[int] = mapped_column(Integer)
     details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class AiTaskLog(Base):
+    """Детальный лог каждого AI-запроса: задача, модель, стоимость, результат."""
+
+    __tablename__ = "ai_task_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
+    )
+    date_key: Mapped[str] = mapped_column(String(10), index=True)  # "2026-04-25"
+    task: Mapped[str] = mapped_column(String(40))                   # "moderation", "reply", ...
+    model: Mapped[str] = mapped_column(String(80))
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    chat_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    input_chars: Mapped[int] = mapped_column(Integer, default=0)
+    output_chars: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_used: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    success: Mapped[bool] = mapped_column(Boolean, default=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -855,6 +855,140 @@ class OpenRouterProvider:
                 raise RuntimeError("Некорректный ответ AI API") from exc
         raise RuntimeError("AI API недоступен")
 
+    async def _chat_completion_with_model(
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        chat_id: int,
+        max_tokens: int,
+        temperature: float = 0.7,
+    ) -> tuple[str, int]:
+        """Как _chat_completion, но принимает model и max_tokens явно.
+        При ошибке невалидной модели делает retry с settings.ai_fallback_model."""
+        if not settings.ai_key:
+            raise RuntimeError("AI_KEY не задан")
+
+        model_id = _normalize_model_id(model)
+        fallback_model = _normalize_model_id(settings.ai_fallback_model)
+        used_fallback = False
+
+        payload: dict[str, object] = {
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "messages": messages,
+        }
+        headers = {
+            "Authorization": f"Bearer {settings.ai_key}",
+            "Content-Type": "application/json",
+        }
+
+        for attempt in range(self._retries + 1):
+            payload["model"] = model_id
+            logger.info("AI task request -> model=%s chat_id=%s", model_id, chat_id)
+            try:
+                response = await self._client.post("/chat/completions", json=payload, headers=headers)
+                if response.status_code >= 500 and attempt < self._retries:
+                    continue
+                response.raise_for_status()
+                data = response.json()
+                content = _strip_think_tags(_extract_response_content(data))
+                if not content:
+                    raise RuntimeError("AI вернул пустой текст")
+                tokens = int(data.get("usage", {}).get("total_tokens") or 0)
+                await _add_remote_usage(chat_id, tokens)
+                logger.info("AI task response <- tokens=%s model=%s", tokens, model_id)
+                return content, tokens
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                response_text = exc.response.text[:500].strip()
+                logger.warning("AI task HTTP error status=%s model=%s body=%r", status_code, model_id, response_text)
+                if status_code == 429 and attempt < self._retries:
+                    continue
+                error_hint = ""
+                try:
+                    error_payload = exc.response.json()
+                    error_hint = str(error_payload.get("error", {}).get("message") or "")[:160]
+                except ValueError:
+                    error_hint = response_text[:160]
+                if (
+                    status_code in (400, 404, 422)
+                    and _is_invalid_model_id_error(error_hint)
+                    and not used_fallback
+                    and model_id != fallback_model
+                ):
+                    logger.warning("AI task invalid model %r, retry with fallback %r", model_id, fallback_model)
+                    model_id = fallback_model
+                    used_fallback = True
+                    continue
+                if error_hint:
+                    raise RuntimeError(f"AI API ошибка {status_code}: {error_hint}") from exc
+                raise RuntimeError(f"AI API ошибка {status_code}") from exc
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                if attempt >= self._retries:
+                    raise RuntimeError("Сбой соединения с AI API") from exc
+            except (ValueError, KeyError, TypeError) as exc:
+                raise RuntimeError("Некорректный ответ AI API") from exc
+        raise RuntimeError("AI API недоступен")
+
+    async def generate_image_raw(self, model: str, prompt: str, *, chat_id: int) -> bytes:
+        """Генерирует картинку через OpenRouter image-модель, возвращает PNG bytes."""
+        if not settings.ai_key:
+            raise RuntimeError("AI_KEY не задан")
+
+        model_id = _normalize_model_id(model)
+        headers = {
+            "Authorization": f"Bearer {settings.ai_key}",
+            "Content-Type": "application/json",
+        }
+        payload: dict[str, object] = {
+            "model": model_id,
+            "messages": [{"role": "user", "content": prompt}],
+            "modalities": ["image", "text"],
+        }
+        logger.info("AI image request -> model=%s chat_id=%s", model_id, chat_id)
+        response = await self._client.post("/chat/completions", json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+        # Парсинг: пробуем несколько форматов ответа image-моделей
+        raw_url: str | None = None
+        try:
+            choices = data.get("choices", [])
+            if choices:
+                msg = choices[0].get("message", {})
+                content_raw = msg.get("content")
+                # Формат 1: content как список с type=image_url
+                if isinstance(content_raw, list):
+                    for block in content_raw:
+                        if isinstance(block, dict) and block.get("type") == "image_url":
+                            url_block = block.get("image_url") or {}
+                            raw_url = url_block.get("url") or block.get("data")
+                            break
+                # Формат 2: images[]
+                if raw_url is None:
+                    images = msg.get("images")
+                    if isinstance(images, list) and images:
+                        raw_url = images[0].get("url") or images[0].get("image_url", {}).get("url")
+                # Формат 3: content — строка data:image/...
+                if raw_url is None and isinstance(content_raw, str) and content_raw.startswith("data:image"):
+                    raw_url = content_raw
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"Не удалось распарсить image-ответ AI: {exc}") from exc
+
+        if not raw_url:
+            raise RuntimeError("AI не вернул изображение в ответе")
+
+        # Декодируем base64
+        if raw_url.startswith("data:"):
+            header, _, b64 = raw_url.partition(",")
+            if not b64:
+                raise RuntimeError("Пустые данные base64 в image-ответе")
+            import base64 as _base64
+            return _base64.b64decode(b64)
+
+        raise RuntimeError(f"Неподдерживаемый формат image URL: {raw_url[:80]}")
+
     async def probe(self) -> AiProbeResult:
         """Лёгкая проверка доступности API: GET /models без расхода токенов."""
         if not settings.ai_key:
@@ -1098,12 +1232,16 @@ class OpenRouterProvider:
 
     async def generate_daily_summary(self, context: str, *, chat_id: int) -> str | None:
         try:
-            content, _ = await self._chat_completion(
+            digest_model = _normalize_model_id(settings.ai_digest_model)
+            content, _ = await self._chat_completion_with_model(
+                digest_model,
                 [
                     {"role": "system", "content": _DAILY_SUMMARY_SYSTEM_PROMPT},
                     {"role": "user", "content": context[:4000]},
                 ],
                 chat_id=chat_id,
+                max_tokens=settings.ai_digest_max_output_tokens,
+                temperature=0.8,
             )
             return content[:800]
         except RuntimeError as exc:
@@ -2094,6 +2232,10 @@ async def get_ai_diagnostics(chat_id: int) -> AiDiagnosticsReport:
 def set_ai_admin_notifier(notifier: Callable[[str], Awaitable[None]] | None) -> None:
     global _ADMIN_ALERT_NOTIFIER
     _ADMIN_ALERT_NOTIFIER = notifier
+
+
+def get_admin_notifier() -> Callable[[str], Awaitable[None]] | None:
+    return _ADMIN_ALERT_NOTIFIER
 
 
 def is_ai_runtime_enabled() -> bool:

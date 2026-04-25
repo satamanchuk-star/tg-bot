@@ -33,6 +33,7 @@ from app.config import settings
 from app.db import Base, engine, get_session
 from app.handlers import (
     admin,
+    ai_admin,
     economy as economy_handler,
     forms,
     games,
@@ -1052,6 +1053,7 @@ async def main() -> None:
     # Порядок важен: упоминания должны ловиться до остальных обработчиков
     dp.include_router(help_handler.router)  # mention-help (catch-all, не блокирует)
     dp.include_router(admin.router)  # админ-команды
+    dp.include_router(ai_admin.router)  # AI-команды для админов (/meme, /poster и др.)
     dp.include_router(games.router)  # игры (команды /21, /score)
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     dp.include_router(shop.router)  # магазин монет (FSM, перед economy)

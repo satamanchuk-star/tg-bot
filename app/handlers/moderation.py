@@ -35,6 +35,11 @@ logger = logging.getLogger(__name__)
 router = Router()
 FLOOD_TRACKER = FloodTracker(limit=10, window_seconds=120)
 
+# Антиспам для подсказок о теме: не чаще 1 раза в 10 минут
+_topic_hint_last_user: dict[int, float] = {}   # user_id → timestamp
+_topic_hint_last_key: dict[str, float] = {}     # topic_key → timestamp
+_TOPIC_HINT_COOLDOWN = 600.0
+
 # Runtime-флаг режима обучения (переопределяет settings.moderation_training_mode)
 _TRAINING_MODE_OVERRIDE: bool | None = None
 
@@ -260,7 +265,70 @@ async def run_moderation(message: Message, bot: Bot) -> int:
     if severity == 0:
         # Flood-проверка (не связана с AI severity)
         flood = await _check_flood(message, bot)
-        return 2 if flood else 0
+        if flood:
+            return 2
+
+        # Gate detection: только в топике шлагбаума
+        if (
+            settings.topic_gate is not None
+            and message.message_thread_id == settings.topic_gate
+            and settings.ai_enabled
+        ):
+            try:
+                from app.services.ai_tasks import detect_gate_intent, extract_gate_request
+                intent = await detect_gate_intent(text, chat_id=chat_id, user_id=user_id)
+                if intent.is_gate_problem and intent.confidence >= 0.75:
+                    fields = await extract_gate_request(text, chat_id=chat_id, user_id=user_id)
+                    if fields.missing_fields:
+                        missing_str = ", ".join(fields.missing_fields)
+                        await safe_call(
+                            message.reply(f"Чтобы передать заявку, уточни: {missing_str}"),
+                            log_ctx="gate_missing_fields",
+                        )
+                    elif fields.confidence >= 0.70:
+                        gate_log = (
+                            f"🚗 Заявка по шлагбауму\n"
+                            f"Дата/время: {fields.date_time or 'не указано'}\n"
+                            f"Номер авто: {fields.car_number or 'не указан'}\n"
+                            f"В базе пропусков: {fields.in_pass_base or 'неизвестно'}\n"
+                            f"Проблема: {fields.problem_description}\n"
+                            f"От: user_id={user_id}"
+                        )
+                        await safe_call(
+                            bot.send_message(settings.admin_log_chat_id, gate_log),
+                            log_ctx="gate_request_log",
+                        )
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Topic classification: только в общем чате (без топика)
+        elif (
+            message.message_thread_id is None
+            and settings.ai_enabled
+            and settings.ai_feature_assistant
+        ):
+            now_ts = time.time()
+            if now_ts - _topic_hint_last_user.get(user_id, 0) > _TOPIC_HINT_COOLDOWN:
+                try:
+                    from app.services.ai_tasks import classify_topic
+                    topic_res = await classify_topic(text, chat_id=chat_id, user_id=user_id)
+                    if (
+                        topic_res.confidence >= 0.75
+                        and topic_res.topic_key
+                        and topic_res.suggestion_text
+                    ):
+                        key = topic_res.topic_key
+                        if now_ts - _topic_hint_last_key.get(key, 0) > _TOPIC_HINT_COOLDOWN:
+                            await safe_call(
+                                message.reply(topic_res.suggestion_text),
+                                log_ctx="topic_hint",
+                            )
+                            _topic_hint_last_user[user_id] = now_ts
+                            _topic_hint_last_key[key] = now_ts
+                except Exception:  # noqa: BLE001
+                    pass
+
+        return 0
 
     # L1: мягкое предупреждение, без счётчика
     if severity == 1:

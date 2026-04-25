@@ -42,6 +42,7 @@ from app.services.ai_usage import next_reset_delta
 from app.services.rag import add_rag_message, build_canonical_text, get_rag_count, systematize_rag
 
 from app.services.admin_stats_reset import reset_runtime_statistics
+from app.services.ai_tasks import explain_technical_error, generate_premium_reply
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -590,6 +591,42 @@ async def rag_sync_command(message: Message, bot: Bot) -> None:
         f"Всего записей: {count}"
     )
 
+
+
+@router.message(Command("admin_reply_ai"))
+async def admin_reply_ai_cmd(message: Message, bot: Bot) -> None:
+    """Генерирует вежливый ответ от имени администрации через premium AI-модель."""
+    if not await _ensure_admin(message, bot):
+        return
+
+    command_text = message.text or ""
+    parts = command_text.split(None, 1)
+    text = parts[1].strip() if len(parts) > 1 else ""
+    if not text:
+        await message.reply("Использование: /admin_reply_ai <текст запроса или жалобы>")
+        return
+
+    user_id = message.from_user.id if message.from_user else None
+    reply = await generate_premium_reply(text, chat_id=message.chat.id, user_id=user_id)
+    await message.reply(reply)
+
+
+@router.message(Command("explain_error"))
+async def explain_error_cmd(message: Message, bot: Bot) -> None:
+    """Объясняет техническую ошибку через AI (код/DevOps модель)."""
+    if not await _ensure_admin(message, bot):
+        return
+
+    command_text = message.text or ""
+    parts = command_text.split(None, 1)
+    error_text = parts[1].strip() if len(parts) > 1 else ""
+    if not error_text:
+        await message.reply("Использование: /explain_error <текст ошибки или traceback>")
+        return
+
+    user_id = message.from_user.id if message.from_user else None
+    explanation = await explain_technical_error(error_text, chat_id=message.chat.id, user_id=user_id)
+    await message.reply(explanation)
 
 
 @router.message(Command("shutdown_bot"))
