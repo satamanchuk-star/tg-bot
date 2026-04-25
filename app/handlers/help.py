@@ -182,7 +182,6 @@ HELP_MENU_TEXT = (
     "• Упомяни меня или напиши вопрос — отвечу с помощью AI\n\n"
     "<b>Игры (зарабатывай монеты!)</b>\n"
     "• /21 — блэкджек (22:00–00:00)\n"
-    "• /roulette — рулетка (21:00–22:00)\n"
     "• /score — твой баланс и статистика\n"
     "• /21top — топ по монетам\n"
     "<b>Трать монеты</b>\n"
@@ -551,8 +550,6 @@ _ABILITIES_CONTEXT = """
 
 ИГРЫ (зарабатывай монеты!):
 - /21 — блэкджек (каждый день 22:00–00:00)
-- Викторина — ежедневно в 20:00 (15 вопросов, +20 монет за правильный ответ)
-- /roulette — рулетка (каждый день 21:00–22:00, ставки от 10 монет)
 - /score — твой баланс монет и статистика
 - /21top — топ игроков по монетам
 ТРАТА МОНЕТ:
@@ -1336,13 +1333,6 @@ async def mention_help(message: Message, bot: Bot) -> None:
     if not settings.ai_feature_assistant:
         await message.reply(_next_mention_reply())
         logger.info("OUT: MENTION_REPLY (ai_feature_assistant=off)")
-        from app.services.ai_module import _log_response_event
-        _log_response_event(
-            "mention_random",
-            _get_message_text(message) or "",
-            message.from_user.id if message.from_user else None,
-            message.message_thread_id,
-        )
         return
 
     # Если спрашивают «что умеешь?» — отвечаем через AI в разном стиле
@@ -1515,26 +1505,13 @@ async def mention_help(message: Message, bot: Bot) -> None:
         except Exception:
             logger.exception("Ошибка при генерации AI-ответа на упоминание.")
             try:
-                from app.services.ai_module import build_local_assistant_reply, _log_response_event
-                _log_response_event(
-                    "mention_ai_error",
-                    prompt[:70],
-                    message.from_user.id if message.from_user else None,
-                    message.message_thread_id,
-                )
+                from app.services.ai_module import build_local_assistant_reply
                 fallback_reply = build_local_assistant_reply(prompt, context=context)
                 await message.reply(fallback_reply)
             except Exception:
                 logger.exception("Не удалось отправить даже fallback-ответ на упоминание.")
     else:
         # Упомянули без вопроса — подсказываем, как пользоваться
-        from app.services.ai_module import _log_response_event
-        _log_response_event(
-            "mention_no_prompt",
-            _get_message_text(message) or "",
-            message.from_user.id if message.from_user else None,
-            message.message_thread_id,
-        )
         await message.reply(
             "Привет! Задай вопрос — и я постараюсь помочь 😊\n"
             "Например: «@бот где ближайшая аптека?»"

@@ -8,7 +8,6 @@ import logging
 import random
 import re
 import time
-from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Literal, Protocol
@@ -52,35 +51,6 @@ _CACHE_STOP_WORDS = {
     "тут", "там", "про", "под", "над", "без", "еще", "уже", "тоже",
 }
 
-# ---------------------------------------------------------------------------
-# Лог ответов бота (in-memory, для ежедневного отчёта)
-# ---------------------------------------------------------------------------
-_RESPONSE_LOG: deque[dict] = deque(maxlen=500)
-
-
-def _log_response_event(
-    source: str,
-    prompt: str,
-    user_id: int | None = None,
-    topic_id: int | None = None,
-    used_ai: bool = False,
-) -> None:
-    """Записывает событие ответа бота для ежедневного отчёта."""
-    _RESPONSE_LOG.append({
-        "ts": datetime.now(timezone.utc),
-        "source": source,
-        "prompt": prompt[:70],
-        "user_id": user_id,
-        "topic_id": topic_id,
-        "used_ai": used_ai,
-    })
-
-
-def get_and_clear_response_log() -> list[dict]:
-    """Возвращает накопленный лог ответов и очищает его."""
-    snapshot = list(_RESPONSE_LOG)
-    _RESPONSE_LOG.clear()
-    return snapshot
 
 
 def _strip_think_tags(text: str) -> str:
@@ -728,7 +698,6 @@ class StubAiProvider:
     ) -> str:
         safe_prompt = mask_personal_data(prompt)[:1000]
         if not is_assistant_topic_allowed(safe_prompt):
-            _log_response_event("forbidden_topic", safe_prompt, user_id, topic_id)
             return random.choice(_FORBIDDEN_TOPIC_REPLIES)
         places_context = await _get_places_context(safe_prompt)
         rag_text = await _get_rag_context(chat_id, safe_prompt)
@@ -956,7 +925,6 @@ class OpenRouterProvider:
     ) -> str:
         safe_prompt = mask_personal_data(prompt)[:1000]
         if not is_assistant_topic_allowed(safe_prompt):
-            _log_response_event("forbidden_topic", safe_prompt, user_id, topic_id)
             return random.choice(_FORBIDDEN_TOPIC_REPLIES)
 
         # KB используется как контекст для AI, а не как прямой ответ.
@@ -1042,7 +1010,6 @@ class OpenRouterProvider:
             bool(places_context), bool(web_context),
             safe_prompt[:80], user_id, topic_id,
         )
-        _log_response_event(_answer_source + "_ai", safe_prompt, user_id, topic_id, used_ai=True)
 
         if resident_context:
             dynamic_system_parts.append(
@@ -1127,7 +1094,6 @@ class OpenRouterProvider:
             return reply
         except RuntimeError as exc:
             self._record_runtime_error(exc)
-            _log_response_event("ai_error_local_fallback", safe_prompt, user_id, topic_id, used_ai=False)
             return build_local_assistant_reply(safe_prompt, context=context, places_hint=places_context, rag_hint=rag_text, faq_hint=faq_answer)
 
     async def generate_daily_summary(self, context: str, *, chat_id: int) -> str | None:
@@ -1787,16 +1753,13 @@ def build_local_assistant_reply(
 ) -> str:
     normalized_prompt = _normalize_assistant_prompt(prompt)
     if not normalized_prompt:
-        _log_response_event("empty_prompt", prompt[:70], user_id, topic_id)
         return random.choice(_EMPTY_PROMPT_REPLIES)
 
     # Быстрые интенты: приветствие и благодарность
     intent = _detect_intent(normalized_prompt)
     if intent == "greeting":
-        _log_response_event("greeting", normalized_prompt, user_id, topic_id)
         return random.choice(_GREETING_REPLIES)
     if intent == "thanks":
-        _log_response_event("thanks", normalized_prompt, user_id, topic_id)
         return random.choice(_THANKS_REPLIES)
 
     # 1. Каноническая база знаний ЖК — используем только при очень точном совпадении
@@ -1805,7 +1768,6 @@ def build_local_assistant_reply(
     if kb_result.exact and kb_result.matches and kb_result.matches[0].score >= 0.9:
         resident_answer = kb_result.matches[0].entry.answer
         logger.info("ANSWER_SOURCE: source=resident_kb_exact prompt=%r", normalized_prompt[:80])
-        _log_response_event("resident_kb", normalized_prompt, user_id, topic_id)
         return resident_answer
 
     # 2. RAG — записи, добавленные админами через /rag_bot
@@ -1819,13 +1781,11 @@ def build_local_assistant_reply(
             "У меня как раз было про это в записях.",
         )
         logger.info("ANSWER_SOURCE: source=rag prompt=%r", normalized_prompt[:80])
-        _log_response_event("rag", normalized_prompt, user_id, topic_id)
         return f"{random.choice(intros)}\n{rag_hint.strip()[:700]}"
 
     # 3. FAQ-ответ (закреплённый ответ, набравший положительные оценки)
     if faq_hint and faq_hint.strip():
         logger.info("ANSWER_SOURCE: source=faq prompt=%r", normalized_prompt[:80])
-        _log_response_event("faq", normalized_prompt, user_id, topic_id)
         return faq_hint.strip()[:800]
 
     # 4. Данные из БД инфраструктуры
@@ -1838,7 +1798,6 @@ def build_local_assistant_reply(
             "Секунду... Точно, вот информация:",
         )
         logger.info("ANSWER_SOURCE: source=places prompt=%r", normalized_prompt[:80])
-        _log_response_event("places", normalized_prompt, user_id, topic_id)
         return f"{random.choice(intros)}\n{places_hint.strip()[:700]}"
 
     # 6. Результаты веб-поиска
@@ -1849,19 +1808,16 @@ def build_local_assistant_reply(
             "Этого в нашей базе нет, но вот что удалось найти:",
         )
         logger.info("ANSWER_SOURCE: source=web prompt=%r", normalized_prompt[:80])
-        _log_response_event("web", normalized_prompt, user_id, topic_id)
         return f"{random.choice(intros)}\n{web_hint.strip()[:700]}"
 
     # 7. Локальные правила-подсказки (шлагбаум, лифт, шум и т.д.)
     rule_reply = _assistant_rule_reply(normalized_prompt)
     if rule_reply:
         logger.info("ANSWER_SOURCE: source=rule prompt=%r", normalized_prompt[:80])
-        _log_response_event("rule", normalized_prompt, user_id, topic_id)
         return rule_reply
 
     # 8. Не знаю — честно говорю
     logger.info("ANSWER_SOURCE: source=fallback prompt=%r", normalized_prompt[:80])
-    _log_response_event("fallback", normalized_prompt, user_id, topic_id)
     return _pick_fallback_variant(normalized_prompt)
 
 

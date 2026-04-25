@@ -275,7 +275,6 @@ class Settings(BaseSettings):
     ai_feature_moderation: bool = True
     ai_feature_assistant: bool = True
     ai_feature_web_search: bool = True
-    ai_feature_daily_summary: bool = True
     # Проактивный режим: бот сам подсказывает, когда может помочь
     ai_feature_proactive: bool = True
     # Профили жителей: бот запоминает факты о пользователях из диалогов
@@ -292,9 +291,6 @@ class Settings(BaseSettings):
     moderation_training_mode: bool = False
     # Утреннее приветствие с погодой и праздниками (8:00 в General)
     ai_daily_greeting: bool = False
-    ai_summary_hour: int = 21
-    ai_summary_minute: int = 0
-    ai_summary_topic_id: int | None = None
     db_logs_retention_days: int = 14
     db_stats_retention_days: int = 45
     google_sheets_spreadsheet_id: str = "1OsPh54Bn5fdkfsEJyKcbYZTcHnue3EWQ"

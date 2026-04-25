@@ -87,42 +87,6 @@ class GameCommandMessage(Base):
     )
 
 
-class RouletteRound(Base):
-    """Раунд рулетки — хранит результат вращения."""
-    __tablename__ = "roulette_rounds"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    chat_id: Mapped[int] = mapped_column(Integer, index=True)
-    topic_id: Mapped[int] = mapped_column(Integer)
-    result_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-
-class RouletteBet(Base):
-    """Ставка пользователя в раунде рулетки."""
-    __tablename__ = "roulette_bets"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    round_id: Mapped[int] = mapped_column(Integer, index=True)
-    user_id: Mapped[int] = mapped_column(Integer, index=True)
-    bet_type: Mapped[str] = mapped_column(String(20))   # red, black, even, odd, number
-    bet_value: Mapped[str] = mapped_column(String(10))   # цвет/чётность или число
-    amount: Mapped[int] = mapped_column(Integer)
-    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
-class RouletteUserStat(Base):
-    """Статистика пользователя в рулетке (за всё время)."""
-    __tablename__ = "roulette_stats"
-
-    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    chat_id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    total_won: Mapped[int] = mapped_column(Integer, default=0)
-    total_lost: Mapped[int] = mapped_column(Integer, default=0)
-    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
 class MessageLog(Base):
     __tablename__ = "message_logs"
 
