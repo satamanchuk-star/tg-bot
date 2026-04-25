@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -121,14 +121,32 @@ async def get_today_image_count(session: AsyncSession) -> int:
 
 
 async def add_image_usage(session: AsyncSession) -> int:
-    """Инкрементирует счётчик картинок за сегодня. Возвращает новое значение."""
+    """Атомарно инкрементирует счётчик картинок за сегодня через INSERT OR IGNORE + UPDATE.
+
+    Избегает race condition при параллельных фоновых записях:
+    одна транзакция — один INCREMENT без промежуточного чтения.
+    """
     date_key = now_tz().date().isoformat()
+    now_utc = datetime.now(timezone.utc).isoformat()
     try:
-        usage = await get_or_create_usage(session, date_key=date_key, chat_id=_IMAGE_USAGE_CHAT_ID)
-        usage.request_count += 1
-        usage.updated_at = datetime.now(timezone.utc)
+        await session.execute(
+            text(
+                "INSERT OR IGNORE INTO ai_usage (date_key, chat_id, request_count, tokens_used, updated_at) "
+                "VALUES (:dk, :cid, 0, 0, :ts)"
+            ),
+            {"dk": date_key, "cid": _IMAGE_USAGE_CHAT_ID, "ts": now_utc},
+        )
+        result = await session.execute(
+            text(
+                "UPDATE ai_usage SET request_count = request_count + 1, updated_at = :ts "
+                "WHERE date_key = :dk AND chat_id = :cid "
+                "RETURNING request_count"
+            ),
+            {"dk": date_key, "cid": _IMAGE_USAGE_CHAT_ID, "ts": now_utc},
+        )
+        row = result.fetchone()
         await session.commit()
-        return usage.request_count
+        return int(row[0]) if row else 0
     except OperationalError as exc:
         logger.warning("Не удалось записать image usage: %s", exc)
         await session.rollback()

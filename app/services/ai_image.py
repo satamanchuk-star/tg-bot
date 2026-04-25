@@ -69,7 +69,8 @@ def is_daily_limit_reached() -> bool:
     count = get_today_count()
     if count >= settings.ai_image_daily_limit:
         return True
-    if get_today_cost_usd() >= settings.ai_image_max_daily_cost_usd:
+    # 0 = без лимита по стоимости
+    if settings.ai_image_max_daily_cost_usd > 0 and get_today_cost_usd() >= settings.ai_image_max_daily_cost_usd:
         return True
     return False
 
