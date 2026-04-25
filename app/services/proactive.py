@@ -156,6 +156,10 @@ async def maybe_proactive_reply(message: Message, bot: Bot) -> bool:
     chat_id = message.chat.id
     topic_id = message.message_thread_id
 
+    # Топики, где бот молчит по запросу (например, «Попутчики»).
+    if settings.topic_rides is not None and topic_id == settings.topic_rides:
+        return False
+
     # Cooldown
     if _is_on_cooldown(chat_id, topic_id):
         return False
@@ -208,6 +212,9 @@ def _init_excluded_topics() -> None:
         _EXCLUDED_TOPIC_IDS.add(settings.topic_rules)
     if settings.topic_important is not None:
         _EXCLUDED_TOPIC_IDS.add(settings.topic_important)
+    # Попутчики — пользователи попросили, чтобы бот не вмешивался
+    if settings.topic_rides is not None:
+        _EXCLUDED_TOPIC_IDS.add(settings.topic_rides)
 
 
 def _is_comment_cooldown(chat_id: int, topic_id: int | None) -> bool:
