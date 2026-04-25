@@ -880,8 +880,7 @@ async def on_startup_warmup(bot: Bot) -> None:
     get_ai_client()
     ai_probe_note = ""
     if settings.ai_enabled and settings.ai_key:
-        source_note = " (по умолчанию, AI_MODEL не задан)" if settings.ai_model_is_default else ""
-        ai_mode = f"AI: OpenRouter ({settings.ai_model}){source_note}"
+        ai_mode = f"AI: OpenRouter (main: {settings.ai_main_model})"
         try:
             probe = await asyncio.wait_for(
                 get_ai_client().probe(),
