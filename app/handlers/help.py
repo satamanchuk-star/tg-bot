@@ -131,6 +131,12 @@ class BotMentionFilter(BaseFilter):
     async def __call__(self, message: Message, bot: Bot) -> bool:
         if message.from_user and message.from_user.is_bot:
             return False
+        # Топик «Попутчики» — бот не отвечает вообще, даже при прямом упоминании
+        if (
+            settings.topic_popuchiki is not None
+            and message.message_thread_id == settings.topic_popuchiki
+        ):
+            return False
         # Пропускаем уже обработанные сообщения
         if message.message_id in _PROCESSED_MSG_IDS:
             return False
