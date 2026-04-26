@@ -811,8 +811,6 @@ async def on_startup_warmup(bot: Bot) -> None:
                     BotCommand(command="help", description="Справка и навигация по форуму"),
                     BotCommand(command="rules", description="Правила нашего сообщества"),
                     BotCommand(command="ai", description="Задать вопрос Жаботу"),
-                    BotCommand(command="21", description="Играть в блэкджек"),
-                    BotCommand(command="21top", description="Топ игроков недели"),
                     BotCommand(command="score", description="Мои монеты и статистика"),
                     BotCommand(command="предложить", description="Предложить место в инфраструктуре ЖК"),
                 ],
