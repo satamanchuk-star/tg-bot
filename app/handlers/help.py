@@ -129,6 +129,10 @@ _REPLY_REACTION_PHRASES = frozenset({
     "лол", "ахах", "хаха", "хахаха", "ха", "класс", "топ", "огонь", "огонь🔥",
     "спасибо", "спс", "благодарю", "thanks", "ok", "ок!", "ага!", "понял!",
     "👍", "🙏", "👌", "😂", "🔥", "❤️", "👏", "😄", "😊",
+    # Оценочные реплики о боте — не требуют ответа
+    "понял, спасибо", "хорошо, спасибо", "отлично, спасибо",
+    "окей", "окей!", "ладно", "ладно!", "принято", "принято!",
+    "не надо", "хватит", "достаточно", "всё понятно", "все понятно",
 })
 
 
@@ -151,8 +155,8 @@ class BotMentionFilter(BaseFilter):
 
         has_direct_mention = _is_bot_mentioned(message, me) or _is_bot_name_called(text, me)
 
-        # Реплай на бота: пропускаем короткие эмоциональные реакции ("ок", "👍", "спасибо"),
-        # но отвечаем на любое содержательное продолжение разговора — даже без знака вопроса
+        # Реплай на бота: отвечаем только если это реальный вопрос (есть "?").
+        # Комментарии, жалобы и эмоциональные реакции без вопроса — игнорируем.
         is_reply_to_bot = False
         if (
             not has_direct_mention
@@ -162,20 +166,20 @@ class BotMentionFilter(BaseFilter):
         ):
             stripped = text.strip()
             stripped_lower = stripped.lower()
-            min_len = 2 if "?" in stripped else 4
             if (
-                len(stripped) >= min_len
+                "?" in stripped
+                and len(stripped) >= 2
                 and not stripped.startswith("/")
                 and stripped_lower not in _REPLY_REACTION_PHRASES
             ):
                 is_reply_to_bot = True
 
-        # Активный диалог: если бот недавно отвечал этому пользователю в этом топике —
-        # продолжаем разговор без явного упоминания
+        # Активный диалог: продолжаем разговор только если пользователь задаёт вопрос.
+        # Без "?" бот не вмешивается в общий чат, даже если недавно отвечал.
         is_active_dialog = False
         if not has_direct_mention and not is_reply_to_bot and message.from_user:
             stripped = text.strip() if text else ""
-            if len(stripped) >= 3 and not stripped.startswith("/"):
+            if "?" in stripped and len(stripped) >= 3 and not stripped.startswith("/"):
                 if _is_in_active_dialog(message.chat.id, message.from_user.id, message.message_thread_id):
                     is_active_dialog = True
 
@@ -533,7 +537,7 @@ _KB_ACTION_SCORE_THRESHOLD = 0.6
 _ACTIVE_DIALOG: dict[tuple[int, int, int | None], datetime] = {}
 # 4 минуты — человек успевает отвлечься и вернуться, но окно не такое длинное,
 # чтобы бот вмешивался в уже закрытое обсуждение.
-_ACTIVE_DIALOG_WINDOW = timedelta(minutes=4)
+_ACTIVE_DIALOG_WINDOW = timedelta(minutes=2)
 _ACTIVE_DIALOG_MAX = 500
 
 
