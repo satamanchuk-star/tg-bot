@@ -43,6 +43,15 @@ _TOPIC_HINT_COOLDOWN = 600.0
 
 # Паттерны ссылок — признак того, что AI-проверка нужна
 _LINK_PATTERN = re.compile(r"https?://|www\.|t\.me/|@\w{3,}", re.IGNORECASE)
+_GATE_REQUEST_ACTION_WORDS = (
+    "заявк",
+    "переда",
+    "оформ",
+    "созда",
+    "диспетчер",
+    "эскал",
+    "помоги подать",
+)
 
 
 def _can_skip_ai_moderation(text: str) -> bool:
@@ -57,6 +66,12 @@ def _can_skip_ai_moderation(text: str) -> bool:
     if _LINK_PATTERN.search(text):
         return False
     return True
+
+
+def _should_collect_gate_request(text: str) -> bool:
+    """Определяет, нужно ли запускать сбор полей заявки в топике шлагбаума."""
+    lowered = text.lower()
+    return any(word in lowered for word in _GATE_REQUEST_ACTION_WORDS)
 
 # Runtime-флаг режима обучения (переопределяет settings.moderation_training_mode)
 _TRAINING_MODE_OVERRIDE: bool | None = None
@@ -295,12 +310,20 @@ async def run_moderation(message: Message, bot: Bot) -> int:
             try:
                 from app.services.ai_tasks import detect_gate_intent, extract_gate_request
                 intent = await detect_gate_intent(text, chat_id=chat_id, user_id=user_id)
-                if intent.is_gate_problem and intent.confidence >= 0.75:
+                if (
+                    intent.is_gate_problem
+                    and intent.confidence >= 0.75
+                    and _should_collect_gate_request(text)
+                ):
                     fields = await extract_gate_request(text, chat_id=chat_id, user_id=user_id)
                     if fields.missing_fields:
-                        missing_str = ", ".join(fields.missing_fields)
                         await safe_call(
-                            message.reply(f"Чтобы передать заявку, уточни: {missing_str}"),
+                            message.reply(
+                                "Чтобы передать заявку диспетчеру, напиши одним сообщением:\n"
+                                "• когда была проблема,\n"
+                                "• номер автомобиля,\n"
+                                "• что именно произошло."
+                            ),
                             log_ctx="gate_missing_fields",
                         )
                     elif fields.confidence >= 0.70:
