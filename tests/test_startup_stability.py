@@ -96,6 +96,7 @@ def test_main_does_not_raise_when_polling_network_error(monkeypatch) -> None:
         monkeypatch.setattr(main_module, "schedule_jobs", AsyncMock(return_value=None))
         monkeypatch.setattr(main_module, "close_ai_client", AsyncMock())
         monkeypatch.setattr(main_module, "_run_background_task", lambda coro, *, name: coro.close())
+        monkeypatch.setattr(main_module.asyncio, "sleep", AsyncMock())
 
         await main_module.main()
 
