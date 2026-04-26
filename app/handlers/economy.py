@@ -127,7 +127,7 @@ async def improvement_text_handler(message: Message, bot: Bot) -> None:
             await message.reply(
                 f"Недостаточно монет.\n"
                 f"Нужно: {IMPROVEMENT_CREATE_COST} монет, у вас: {balance}.\n"
-                f"Зарабатывайте в /21 и рулетке."
+                "Сейчас доступных игровых способов заработка нет."
             )
             return
         improvement = result
