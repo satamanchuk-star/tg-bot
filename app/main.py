@@ -36,7 +36,6 @@ from app.handlers import (
     ai_admin,
     economy as economy_handler,
     forms,
-    games,
     help as help_handler,
     moderation,
     personalization as personalization_handler,
@@ -639,14 +638,6 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         hour="0,6,12,18",
         minute=30,
     )
-    # Блэкджек: правила за минуту до старта
-    scheduler.add_job(
-        games.announce_blackjack_rules,
-        "cron",
-        hour=21,
-        minute=59,
-        args=[bot],
-    )
     # Еженедельные персональные DM-нажъмы (по фактам из ResidentProfile).
     # Off-by-default через ai_feature_weekly_nudge — внутри функции стоит ранний return.
     # Вторник 11:00 — середина рабочей недели, не путается с проактивными
@@ -1094,7 +1085,7 @@ async def main() -> None:
     dp.include_router(help_handler.router)  # mention-help (catch-all, не блокирует)
     dp.include_router(admin.router)  # админ-команды
     dp.include_router(ai_admin.router)  # AI-команды для админов (/meme, /poster и др.)
-    dp.include_router(games.router)  # игры (команды /21, /score)
+    # games.router отключен: игровой модуль исключен из запуска диспетчера
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     dp.include_router(shop.router)  # магазин монет (FSM, перед economy)
     dp.include_router(economy_handler.router)  # инициативы жителей (доработки бота)
