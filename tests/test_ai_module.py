@@ -16,6 +16,7 @@ from app.services.ai_module import (
     normalize_for_profanity,
     _extract_search_words,
     _extract_response_content,
+    _parse_context_line,
     _normalize_model_id,
     get_ai_client,
     is_ai_runtime_enabled,
@@ -129,6 +130,7 @@ def test_local_assistant_reply_handles_rules_and_mentions() -> None:
 def test_local_assistant_reply_unknown_question_is_friendly() -> None:
     reply = build_local_assistant_reply("Где телепорт на Марс в нашем ЖК?")
     assert len(reply.strip()) > 0
+    assert len(reply.strip()) <= 90
 
 
 def test_local_assistant_reply_uses_places_hint(monkeypatch) -> None:
@@ -251,6 +253,44 @@ def test_openrouter_assistant_includes_resident_kb_in_context(monkeypatch) -> No
         str(m.get("content", "")) for m in captured[0] if m.get("role") == "system"
     )
     assert kb_text in system_text
+
+
+def test_openrouter_assistant_includes_history_summary_context(monkeypatch) -> None:
+    provider = OpenRouterProvider()
+    summary = "Краткий контекст диалога:\n- Вы: ранее обсуждали шлагбаум"
+    captured: list[list[dict]] = []
+
+    async def _fake_completion(messages: list[dict], *, chat_id: int, **kwargs) -> tuple[str, int]:
+        captured.append(messages)
+        return ("ai answer", 5)
+
+    monkeypatch.setattr(provider, "_chat_completion", _fake_completion)
+
+    async def _run() -> None:
+        await provider.assistant_reply("и что дальше делать?", [summary], chat_id=1)
+        await provider.aclose()
+
+    asyncio.run(_run())
+
+    assert captured
+    roles = [m.get("role") for m in captured[0]]
+    assert "system" in roles
+    assert any(
+        m.get("role") == "system" and summary in str(m.get("content", ""))
+        for m in captured[0]
+    )
+
+
+def test_parse_context_line_supports_bracket_format() -> None:
+    role, text = _parse_context_line("[user_101]: А что с лифтом?")
+    assert role == "user"
+    assert text == "А что с лифтом?"
+
+
+def test_parse_context_line_maps_summary_to_system() -> None:
+    role, text = _parse_context_line("Краткий контекст диалога:\n- Вы: спрашивали про парковку")
+    assert role == "system"
+    assert text.startswith("Краткий контекст диалога:")
 
 
 
