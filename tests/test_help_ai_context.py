@@ -7,10 +7,14 @@ from app.handlers.help import (
     AI_CHAT_HISTORY,
     AI_CHAT_HISTORY_LIMIT,
     AI_RATE_LIMIT_TEXT,
+    AI_UNCERTAIN_REPLY_COOLDOWN,
     LAST_AI_REPLY_TIME,
+    _LAST_UNCERTAIN_REPLY_TIME,
     _extract_ai_prompt,
     _get_ai_context,
     _is_ai_reply_rate_limited,
+    _is_uncertain_reply,
+    _should_skip_uncertain_reply,
     _remember_ai_exchange,
     ai_command,
     mention_help,
@@ -81,6 +85,7 @@ class _DummyBot:
 def setup_function() -> None:
     AI_CHAT_HISTORY.clear()
     LAST_AI_REPLY_TIME.clear()
+    _LAST_UNCERTAIN_REPLY_TIME.clear()
 
 
 def test_ai_context_remembers_previous_messages() -> None:
@@ -175,3 +180,26 @@ def test_mention_help_returns_rate_limit_message(monkeypatch) -> None:
     asyncio.run(mention_help(message, _DummyBot()))
 
     assert message.replies == [AI_RATE_LIMIT_TEXT]
+
+
+def test_uncertain_reply_detection() -> None:
+    assert _is_uncertain_reply("Честно, не знаю.")
+    assert _is_uncertain_reply("По этому у меня нет данных.")
+    assert not _is_uncertain_reply("По шлагбауму: откройте приложение «Дворецкий».")
+
+
+def test_uncertain_reply_is_throttled_for_repeated_questions() -> None:
+    payload = dict(
+        chat_id=1,
+        user_id=2,
+        thread_id=3,
+        prompt="Где телепорт?",
+        reply="Не знаю по этому вопросу.",
+    )
+    assert _should_skip_uncertain_reply(**payload) is False
+    assert _should_skip_uncertain_reply(**payload) is True
+
+    _LAST_UNCERTAIN_REPLY_TIME[(1, 2, 3)] = (
+        datetime.now(timezone.utc) - AI_UNCERTAIN_REPLY_COOLDOWN - timedelta(seconds=1)
+    )
+    assert _should_skip_uncertain_reply(**payload) is False

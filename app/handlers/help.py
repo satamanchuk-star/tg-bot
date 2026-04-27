@@ -319,6 +319,7 @@ WAITING_TIMEOUT = timedelta(minutes=2)
 HINT_COOLDOWN = timedelta(seconds=30)
 HELP_DELETE_TIMEOUT = timedelta(minutes=2)
 AI_MENTION_COOLDOWN = timedelta(seconds=20)
+AI_UNCERTAIN_REPLY_COOLDOWN = timedelta(minutes=10)
 
 # Дедупликация: предотвращаем повторные ответы одному и тому же пользователю.
 # Ключ — (chat_id, user_id, norm_prompt): разные жители могут спросить одно и то же
@@ -329,6 +330,15 @@ _DEDUP_MAX = 300
 # Множество обработанных message_id для предотвращения двойной обработки
 _PROCESSED_MSG_IDS: set[int] = set()
 _PROCESSED_MSG_IDS_MAX = 500
+_LAST_UNCERTAIN_REPLY_TIME: dict[tuple[int, int, int | None], datetime] = {}
+
+_UNCERTAIN_REPLY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bне\s+знаю\b", re.IGNORECASE),
+    re.compile(r"\bнет\s+(?:точного\s+)?ответа\b", re.IGNORECASE),
+    re.compile(r"\bнет\s+данн(?:ых|ой)\b", re.IGNORECASE),
+    re.compile(r"\bне\s+уверен\b", re.IGNORECASE),
+    re.compile(r"\bне\s+хочу\s+гадать\b", re.IGNORECASE),
+)
 
 
 def _is_duplicate_prompt(chat_id: int, user_id: int, prompt: str) -> bool:
@@ -361,6 +371,38 @@ def _mark_prompt_answered(chat_id: int, user_id: int, prompt: str) -> None:
     if not normalized:
         return
     _RECENT_RESPONSES[(chat_id, user_id, normalized)] = datetime.now(timezone.utc)
+
+
+def _is_uncertain_reply(reply: str) -> bool:
+    """Определяет ответы низкой информативности («не знаю» и аналоги)."""
+    normalized = " ".join((reply or "").split())
+    if not normalized:
+        return False
+    return any(pattern.search(normalized) for pattern in _UNCERTAIN_REPLY_PATTERNS)
+
+
+def _should_skip_uncertain_reply(
+    *,
+    chat_id: int,
+    user_id: int,
+    thread_id: int | None,
+    prompt: str,
+    reply: str,
+) -> bool:
+    """Снижает спам неинформативными ответами в чате."""
+    if not _is_uncertain_reply(reply):
+        return False
+
+    if "?" not in prompt:
+        return True
+
+    key = (chat_id, user_id, thread_id)
+    now = datetime.now(timezone.utc)
+    last_sent = _LAST_UNCERTAIN_REPLY_TIME.get(key)
+    if last_sent and now - last_sent < AI_UNCERTAIN_REPLY_COOLDOWN:
+        return True
+    _LAST_UNCERTAIN_REPLY_TIME[key] = now
+    return False
 
 
 def _mark_message_processed(message_id: int) -> None:
@@ -1495,6 +1537,20 @@ async def mention_help(message: Message, bot: Bot) -> None:
                 reply = build_local_assistant_reply(prompt, context=context)
                 logger.warning("AI вернул пустой ответ на упоминание, использован локальный fallback.")
 
+            if _should_skip_uncertain_reply(
+                chat_id=message.chat.id,
+                user_id=message.from_user.id,
+                thread_id=message.message_thread_id,
+                prompt=prompt,
+                reply=reply,
+            ):
+                logger.info(
+                    "OUT: MENTION_REPLY_SKIPPED_UNCERTAIN prompt=%r reply=%r",
+                    prompt[:80],
+                    reply[:120],
+                )
+                return
+
             await _remember_ai_exchange_persistent(
                 message.chat.id, message.from_user.id, prompt, reply,
             )
@@ -1547,11 +1603,7 @@ async def mention_help(message: Message, bot: Bot) -> None:
             except Exception:
                 logger.exception("Не удалось отправить даже fallback-ответ на упоминание.")
     else:
-        # Упомянули без вопроса — подсказываем, как пользоваться
-        await message.reply(
-            "Привет! Задай вопрос — и я постараюсь помочь 😊\n"
-            "Например: «@бот где ближайшая аптека?»"
-        )
+        logger.info("OUT: MENTION_REPLY_SKIPPED_EMPTY_PROMPT")
     logger.info("OUT: MENTION_REPLY")
 
 
