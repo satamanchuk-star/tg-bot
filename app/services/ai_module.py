@@ -86,14 +86,13 @@ def _extract_response_content(data: dict[str, object]) -> str:
                 continue
             if not isinstance(item, dict):
                 continue
+            # Пропускаем reasoning/thinking-блоки — они не должны попадать в ответ.
+            # Инлайн-вариант <think>...</think> обрабатывается в _strip_think_tags.
+            if item.get("type") in ("reasoning", "thinking"):
+                continue
             text_part = item.get("text")
             if isinstance(text_part, str) and text_part.strip():
                 parts.append(text_part)
-                continue
-            if item.get("type") == "reasoning":
-                reasoning_part = item.get("reasoning")
-                if isinstance(reasoning_part, str) and reasoning_part.strip():
-                    parts.append(reasoning_part)
         return "\n".join(parts)
     return str(content_raw)
 
@@ -975,7 +974,9 @@ class OpenRouterProvider:
             "modalities": ["image", "text"],
         }
         logger.info("AI image request -> model=%s chat_id=%s", model_id, chat_id)
-        response = await self._client.post("/chat/completions", json=payload, headers=headers)
+        # Генерация картинок занимает значительно дольше текста — используем отдельный таймаут.
+        image_timeout = httpx.Timeout(120.0)
+        response = await self._client.post("/chat/completions", json=payload, headers=headers, timeout=image_timeout)
         response.raise_for_status()
         data = response.json()
 
@@ -1014,6 +1015,13 @@ class OpenRouterProvider:
                 raise RuntimeError("Пустые данные base64 в image-ответе")
             import base64 as _base64
             return _base64.b64decode(b64)
+
+        # OpenRouter может вернуть обычный HTTPS-URL вместо base64 — скачиваем.
+        if raw_url.startswith("https://") or raw_url.startswith("http://"):
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as dl_client:
+                img_response = await dl_client.get(raw_url)
+                img_response.raise_for_status()
+                return img_response.content
 
         raise RuntimeError(f"Неподдерживаемый формат image URL: {raw_url[:80]}")
 
