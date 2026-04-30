@@ -5,12 +5,13 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, ChatPermissions, Message
+from aiogram.types import CallbackQuery, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
 
@@ -47,8 +48,17 @@ from app.services.ai_tasks import explain_technical_error, generate_premium_repl
 router = Router()
 logger = logging.getLogger(__name__)
 
+# Временное хранилище ожидающих подтверждения действий: uid -> params
+_pending_actions: dict[str, dict] = {}
 
 STOP_FLAG = settings.data_dir / ".stopped"
+
+
+def _make_confirm_keyboard(action: str, uid: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"{action}:confirm:{uid}"),
+        InlineKeyboardButton(text="❌ Отменить", callback_data=f"{action}:cancel:{uid}"),
+    ]])
 
 
 def _admin_label(message: Message) -> str:
@@ -178,6 +188,40 @@ async def mute_user(message: Message, bot: Bot) -> None:
     if target_id is None:
         await message.reply("Нужен реплай на сообщение пользователя.")
         return
+    uid = uuid.uuid4().hex[:12]
+    _pending_actions[uid] = {"type": "mute", "target_id": target_id, "display_name": display_name, "minutes": minutes}
+    name = display_name or str(target_id)
+    await message.reply(
+        f"Замьютить <b>{name}</b> на {minutes} мин.?",
+        parse_mode="HTML",
+        reply_markup=_make_confirm_keyboard("mute", uid),
+    )
+
+
+@router.callback_query(F.data.startswith("mute:"))
+async def mute_confirm_cb(callback: CallbackQuery, bot: Bot) -> None:
+    if not await _ensure_admin_cb(callback, bot):
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3:
+        await callback.answer()
+        return
+    _, action, uid = parts
+    params = _pending_actions.pop(uid, None)
+    if params is None:
+        await callback.answer("Действие устарело или уже выполнено.", show_alert=True)
+        if callback.message:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        return
+    name = params["display_name"] or str(params["target_id"])
+    if action == "cancel":
+        await callback.answer("Мут отменён.")
+        if callback.message:
+            await callback.message.edit_text(f"🚫 Мут {name} отменён.")
+        return
+    # confirm
+    minutes = params["minutes"]
+    target_id = params["target_id"]
     until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
     permissions = ChatPermissions(can_send_messages=False)
     result = await safe_call(
@@ -190,9 +234,14 @@ async def mute_user(message: Message, bot: Bot) -> None:
         log_ctx=f"/mute user_id={target_id} minutes={minutes}",
     )
     if result is None:
-        await message.reply("Не удалось замьютить: Telegram API вернул ошибку (см. логи).")
+        await callback.answer("Не удалось замьютить: Telegram API вернул ошибку.", show_alert=True)
         return
-    await message.reply(f"Пользователь замьючен на {minutes} минут.")
+    await callback.answer("Мут выдан.")
+    if callback.message:
+        await callback.message.edit_text(
+            f"🔇 <b>{name}</b> замьючен на {minutes} мин. (выдал: {callback.from_user.full_name})",
+            parse_mode="HTML",
+        )
 
 
 @router.message(Command("unmute"))
@@ -233,15 +282,54 @@ async def ban_user(message: Message, bot: Bot) -> None:
     if target_id is None:
         await message.reply("Нужен реплай на сообщение пользователя.")
         return
+    uid = uuid.uuid4().hex[:12]
+    _pending_actions[uid] = {"type": "ban", "target_id": target_id, "display_name": display_name, "days": days}
+    name = display_name or str(target_id)
+    await message.reply(
+        f"Забанить <b>{name}</b> на {days} дн.?",
+        parse_mode="HTML",
+        reply_markup=_make_confirm_keyboard("ban", uid),
+    )
+
+
+@router.callback_query(F.data.startswith("ban:"))
+async def ban_confirm_cb(callback: CallbackQuery, bot: Bot) -> None:
+    if not await _ensure_admin_cb(callback, bot):
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3:
+        await callback.answer()
+        return
+    _, action, uid = parts
+    params = _pending_actions.pop(uid, None)
+    if params is None:
+        await callback.answer("Действие устарело или уже выполнено.", show_alert=True)
+        if callback.message:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        return
+    name = params["display_name"] or str(params["target_id"])
+    if action == "cancel":
+        await callback.answer("Бан отменён.")
+        if callback.message:
+            await callback.message.edit_text(f"🚫 Бан {name} отменён.")
+        return
+    # confirm
+    days = params["days"]
+    target_id = params["target_id"]
     until = datetime.now(timezone.utc) + timedelta(days=days)
     result = await safe_call(
         bot.ban_chat_member(settings.forum_chat_id, target_id, until_date=until),
         log_ctx=f"/ban user_id={target_id} days={days}",
     )
     if result is None:
-        await message.reply("Не удалось забанить: Telegram API вернул ошибку (см. логи).")
+        await callback.answer("Не удалось забанить: Telegram API вернул ошибку.", show_alert=True)
         return
-    await message.reply(f"Бан на {days} дней выдан.")
+    await callback.answer("Бан выдан.")
+    if callback.message:
+        await callback.message.edit_text(
+            f"🔨 <b>{name}</b> забанен на {days} дн. (выдал: {callback.from_user.full_name})",
+            parse_mode="HTML",
+        )
 
 
 @router.message(Command("unban"))
