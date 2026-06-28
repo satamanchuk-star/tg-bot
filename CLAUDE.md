@@ -62,16 +62,28 @@ app/
 - **SQLAlchemy 2.0.25** - Async ORM with aiosqlite
 - **Pydantic Settings** - Configuration from environment
 - **APScheduler** - Recurring jobs
+- **anthropic SDK** - прямой доступ к Claude (Messages API); по умолчанию `claude-haiku-4-5`, премиум — `claude-sonnet-4-6`
 
 ## Configuration
 
 Environment variables in `.env`:
 - `BOT_TOKEN` - Telegram bot token (required)
+- `ANTHROPIC_API_KEY` - ключ Anthropic Claude (алиасы: `AI_KEY`, `AI_API_KEY`)
 - `FORUM_CHAT_ID` - Forum supergroup ID
 - `ADMIN_LOG_CHAT_ID` - Admin notifications destination
 - `DATABASE_URL` - Database connection (default: SQLite)
 - `TIMEZONE` - Default Europe/Moscow
 - Topic IDs for forum sections
+
+## Безопасность (ОБЯЗАТЕЛЬНО)
+
+- **Никаких паролей/токенов/ключей в открытом виде в репозитории.** Только ссылки
+  `${{ secrets.* }}` в workflow. `.env` не коммитится; `.env.example` — пустые поля.
+- Секреты сервера хранятся **только** в GitHub Secrets. Всё содержимое env-файла —
+  в одном секрете `BOT_ENV`; деплой пишет его в `/opt/alexbot/.env`. В
+  `docker-compose.yaml` секретов нет.
+- Не добавляй парсинг секретов из файлов на сервере (старый
+  `_inject_env_from_server_compose` удалён намеренно).
 
 ## Code Style
 

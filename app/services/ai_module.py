@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Literal, Protocol
 
+import anthropic
 import httpx
 from sqlalchemy import select
 
@@ -97,13 +98,24 @@ def _extract_response_content(data: dict[str, object]) -> str:
     return str(content_raw)
 
 
+def _extract_text_from_message(message: object) -> str:
+    """Извлекает текст из ответа Anthropic Messages API (content — список блоков)."""
+    blocks = getattr(message, "content", None) or []
+    parts: list[str] = []
+    for block in blocks:
+        if getattr(block, "type", None) != "text":
+            continue
+        text_part = getattr(block, "text", "")
+        if text_part:
+            parts.append(text_part)
+    return "\n".join(parts)
+
+
 def _normalize_model_id(model_id: str) -> str:
-    """Исправляет частые опечатки в ID модели OpenRouter."""
+    """Нормализует ID модели: убирает кавычки и исправляет десятичную запятую."""
     normalized = model_id.strip().strip("'\"")
     return normalized.replace(",", ".").replace("，", ".")
 
-
-_MODEL_FALLBACK_ID = "openrouter/auto"
 
 
 def _is_invalid_model_id_error(error_hint: str) -> bool:
@@ -744,50 +756,157 @@ class StubAiProvider:
         return "{}"
 
 
-class OpenRouterProvider:
-    """Почему: подключаем реальный ИИ через API без изменения публичных интерфейсов бота."""
+class AnthropicProvider:
+    """Подключение реального ИИ напрямую к Anthropic Messages API через official SDK."""
 
     def __init__(self) -> None:
-        base_url = settings.ai_api_url or "https://openrouter.ai/api/v1"
-        self._client = httpx.AsyncClient(
-            base_url=base_url.rstrip("/"),
-            timeout=httpx.Timeout(settings.ai_timeout_seconds),
-        )
         self._model = _normalize_model_id(settings.ai_model)
         if self._model != settings.ai_model:
             logger.warning("AI model id normalized: %r -> %r", settings.ai_model, self._model)
         self._retries = max(0, settings.ai_retries)
+        client_kwargs: dict[str, object] = {
+            # При отсутствии ключа конструктор SDK не должен падать: реальный вызов
+            # всё равно отсекается проверкой settings.ai_key до обращения к сети.
+            "api_key": settings.ai_key or "missing-key",
+            "timeout": float(settings.ai_timeout_seconds),
+            "max_retries": self._retries,
+        }
+        # Опциональный override эндпоинта (например, корпоративный прокси к Anthropic).
+        if settings.ai_api_url:
+            client_kwargs["base_url"] = settings.ai_api_url
+        self._client = anthropic.AsyncAnthropic(**client_kwargs)
 
     async def aclose(self) -> None:
-        await self._client.aclose()
-
-    def _is_anthropic_model(self) -> bool:
-        """OpenRouter использует префикс `anthropic/` для моделей Claude."""
-        return (self._model or "").lower().startswith("anthropic/")
+        await self._client.close()
 
     def _build_system_message(self, static_text: str, dynamic_text: str) -> dict:
-        """
-        Собирает system-сообщение. Для Anthropic-моделей оборачивает статичную часть
-        в content-block с `cache_control: ephemeral` — это включает Anthropic prompt
-        caching через OpenRouter и экономит токены/латентность на повторных запросах.
+        """Собирает system-сообщение с `cache_control: ephemeral` на статичной части —
+        это включает Anthropic prompt caching и экономит токены/латентность на повторах."""
+        content_blocks: list[dict] = [
+            {
+                "type": "text",
+                "text": static_text,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        if dynamic_text:
+            content_blocks.append({"type": "text", "text": dynamic_text})
+        return {"role": "system", "content": content_blocks}
 
-        Для остальных провайдеров возвращает обычное сообщение со строковым content.
-        """
-        if self._is_anthropic_model():
-            content_blocks: list[dict] = [
+    @staticmethod
+    def _split_system_and_messages(
+        messages: list[dict],
+    ) -> tuple[list[dict], list[dict]]:
+        """Раскладывает OpenAI-стиль messages на Anthropic `system` (top-level) и
+        список user/assistant сообщений. system-блоки сохраняют cache_control."""
+        system_blocks: list[dict] = []
+        anth_messages: list[dict] = []
+        for msg in messages:
+            role = msg.get("role")
+            content = msg.get("content")
+            if role == "system":
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict):
+                            system_blocks.append(block)
+                        elif isinstance(block, str) and block.strip():
+                            system_blocks.append({"type": "text", "text": block})
+                elif isinstance(content, str) and content.strip():
+                    system_blocks.append({"type": "text", "text": content})
+                continue
+            text = content if isinstance(content, str) else str(content)
+            if not text.strip():
+                continue
+            anth_role = role if role in ("user", "assistant") else "user"
+            anth_messages.append({"role": anth_role, "content": text})
+        # Anthropic требует, чтобы первое сообщение было от user.
+        while anth_messages and anth_messages[0]["role"] != "user":
+            anth_messages.pop(0)
+        return system_blocks, anth_messages
+
+    async def _messages_create(
+        self,
+        model_id: str,
+        messages: list[dict],
+        *,
+        chat_id: int,
+        max_tokens: int,
+        temperature: float,
+        response_format: dict | None,
+        fallback_model: str,
+    ) -> tuple[str, int]:
+        """Единая точка вызова Anthropic Messages API. Возвращает (текст, токены).
+        SDK сам ретраит 429/5xx (max_retries); здесь — один retry на fallback-модель
+        при невалидном ID модели."""
+        system_blocks, anth_messages = self._split_system_and_messages(messages)
+        if (
+            isinstance(response_format, dict)
+            and response_format.get("type") in ("json_object", "json")
+        ):
+            system_blocks.append(
                 {
                     "type": "text",
-                    "text": static_text,
-                    "cache_control": {"type": "ephemeral"},
+                    "text": "Верни ТОЛЬКО валидный JSON-объект, без markdown-обёрток и пояснений.",
                 }
-            ]
-            if dynamic_text:
-                content_blocks.append({"type": "text", "text": dynamic_text})
-            return {"role": "system", "content": content_blocks}
+            )
+        if not anth_messages:
+            anth_messages = [{"role": "user", "content": "."}]
 
-        if dynamic_text:
-            return {"role": "system", "content": f"{static_text}\n\n{dynamic_text}"}
-        return {"role": "system", "content": static_text}
+        current_model = model_id
+        used_fallback = False
+        while True:
+            kwargs: dict[str, object] = {
+                "model": current_model,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "messages": anth_messages,
+            }
+            if system_blocks:
+                kwargs["system"] = system_blocks
+            logger.info("AI request -> model=%s chat_id=%s", current_model, chat_id)
+            try:
+                response = await self._client.messages.create(**kwargs)
+            except anthropic.APIStatusError as exc:
+                status_code = getattr(exc, "status_code", 0)
+                error_hint = str(getattr(exc, "message", "") or exc)[:160]
+                logger.warning(
+                    "AI HTTP error status=%s chat_id=%s body=%r",
+                    status_code, chat_id, error_hint,
+                )
+                if (
+                    status_code in (400, 404)
+                    and _is_invalid_model_id_error(error_hint)
+                    and not used_fallback
+                    and current_model != fallback_model
+                ):
+                    logger.warning(
+                        "AI invalid model id, retry with fallback: %r -> %r",
+                        current_model, fallback_model,
+                    )
+                    current_model = fallback_model
+                    used_fallback = True
+                    continue
+                raise RuntimeError(f"AI API вернул ошибку {status_code}: {error_hint}") from exc
+            except (anthropic.APIConnectionError, anthropic.APITimeoutError) as exc:
+                raise RuntimeError("Сбой соединения с AI API") from exc
+            except anthropic.AnthropicError as exc:
+                raise RuntimeError(f"Некорректный ответ AI API: {exc}") from exc
+
+            content = _strip_think_tags(_extract_text_from_message(response))
+            if not content:
+                raise RuntimeError("AI вернул пустой текст")
+            usage = getattr(response, "usage", None)
+            tokens = 0
+            if usage is not None:
+                tokens = int(getattr(usage, "input_tokens", 0) or 0) + int(
+                    getattr(usage, "output_tokens", 0) or 0
+                )
+            await _add_remote_usage(chat_id, tokens)
+            if used_fallback and model_id == self._model and current_model != self._model:
+                logger.warning("AI model switched to fallback for runtime stability: %r", current_model)
+                self._model = current_model
+            logger.info("AI response <- tokens=%s chat_id=%s", tokens, chat_id)
+            return content, tokens
 
     async def _chat_completion(
         self,
@@ -805,82 +924,16 @@ class OpenRouterProvider:
             allowed, reason = await _can_use_remote_ai(chat_id)
             if not allowed:
                 raise RuntimeError(f"AI лимит: {reason or 'превышен'}")
-
-        payload: dict[str, object] = {
-            "temperature": temperature,
-            "max_tokens": settings.ai_max_tokens,
-            "messages": messages,
-        }
-        if response_format:
-            payload["response_format"] = response_format
-        headers = {
-            "Authorization": f"Bearer {settings.ai_key}",
-            "Content-Type": "application/json",
-        }
-        # model=None → используем self._model; model задан → используем override (не меняем self._model)
-        _own_model = model is None
-        model_id = self._model if _own_model else _normalize_model_id(model)
-        used_fallback_model = False
-
-        for attempt in range(self._retries + 1):
-            payload["model"] = model_id
-            logger.info("AI request -> model=%s chat_id=%s", model_id, chat_id)
-            try:
-                response = await self._client.post("/chat/completions", json=payload, headers=headers)
-                if response.status_code >= 500 and attempt < self._retries:
-                    continue
-                response.raise_for_status()
-                data = response.json()
-                content = _strip_think_tags(_extract_response_content(data))
-                if not content:
-                    raise RuntimeError("AI вернул пустой текст (только think-теги)")
-                tokens = int(data.get("usage", {}).get("total_tokens") or 0)
-                await _add_remote_usage(chat_id, tokens)
-                if used_fallback_model and _own_model and self._model != model_id:
-                    logger.warning("AI model switched to fallback for runtime stability: %r", model_id)
-                    self._model = model_id
-                logger.info("AI response <- tokens=%s chat_id=%s", tokens, chat_id)
-                return content, tokens
-            except httpx.HTTPStatusError as exc:
-                status_code = exc.response.status_code
-                response_text = exc.response.text[:500].strip()
-                logger.warning(
-                    "AI HTTP error status=%s chat_id=%s body=%r",
-                    status_code,
-                    chat_id,
-                    response_text,
-                )
-                if status_code == 429 and attempt < self._retries:
-                    continue
-                error_hint = ""
-                try:
-                    error_payload = exc.response.json()
-                    error_hint = str(error_payload.get("error", {}).get("message") or "")[:160]
-                except ValueError:
-                    error_hint = response_text[:160]
-                if (
-                    status_code in (400, 404, 422)
-                    and _is_invalid_model_id_error(error_hint)
-                    and not used_fallback_model
-                    and model_id != _MODEL_FALLBACK_ID
-                ):
-                    logger.warning(
-                        "AI invalid model id, retrying with fallback model: %r -> %r",
-                        model_id,
-                        _MODEL_FALLBACK_ID,
-                    )
-                    model_id = _MODEL_FALLBACK_ID
-                    used_fallback_model = True
-                    continue
-                if error_hint:
-                    raise RuntimeError(f"AI API вернул ошибку {status_code}: {error_hint}") from exc
-                raise RuntimeError(f"AI API вернул ошибку {status_code}") from exc
-            except (httpx.TimeoutException, httpx.TransportError) as exc:
-                if attempt >= self._retries:
-                    raise RuntimeError("Сбой соединения с AI API") from exc
-            except (ValueError, KeyError, TypeError) as exc:
-                raise RuntimeError("Некорректный ответ AI API") from exc
-        raise RuntimeError("AI API недоступен")
+        model_id = self._model if model is None else _normalize_model_id(model)
+        return await self._messages_create(
+            model_id,
+            messages,
+            chat_id=chat_id,
+            max_tokens=settings.ai_max_tokens,
+            temperature=temperature,
+            response_format=response_format,
+            fallback_model=_normalize_model_id(settings.ai_fallback_model),
+        )
 
     async def _chat_completion_with_model(
         self,
@@ -895,154 +948,25 @@ class OpenRouterProvider:
         При ошибке невалидной модели делает retry с settings.ai_fallback_model."""
         if not settings.ai_key:
             raise RuntimeError("AI_KEY не задан")
-
-        model_id = _normalize_model_id(model)
-        fallback_model = _normalize_model_id(settings.ai_fallback_model)
-        used_fallback = False
-
-        payload: dict[str, object] = {
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "messages": messages,
-        }
-        headers = {
-            "Authorization": f"Bearer {settings.ai_key}",
-            "Content-Type": "application/json",
-        }
-
-        for attempt in range(self._retries + 1):
-            payload["model"] = model_id
-            logger.info("AI task request -> model=%s chat_id=%s", model_id, chat_id)
-            try:
-                response = await self._client.post("/chat/completions", json=payload, headers=headers)
-                if response.status_code >= 500 and attempt < self._retries:
-                    continue
-                response.raise_for_status()
-                data = response.json()
-                content = _strip_think_tags(_extract_response_content(data))
-                if not content:
-                    raise RuntimeError("AI вернул пустой текст")
-                tokens = int(data.get("usage", {}).get("total_tokens") or 0)
-                await _add_remote_usage(chat_id, tokens)
-                logger.info("AI task response <- tokens=%s model=%s", tokens, model_id)
-                return content, tokens
-            except httpx.HTTPStatusError as exc:
-                status_code = exc.response.status_code
-                response_text = exc.response.text[:500].strip()
-                logger.warning("AI task HTTP error status=%s model=%s body=%r", status_code, model_id, response_text)
-                if status_code == 429 and attempt < self._retries:
-                    continue
-                error_hint = ""
-                try:
-                    error_payload = exc.response.json()
-                    error_hint = str(error_payload.get("error", {}).get("message") or "")[:160]
-                except ValueError:
-                    error_hint = response_text[:160]
-                if (
-                    status_code in (400, 404, 422)
-                    and _is_invalid_model_id_error(error_hint)
-                    and not used_fallback
-                    and model_id != fallback_model
-                ):
-                    logger.warning("AI task invalid model %r, retry with fallback %r", model_id, fallback_model)
-                    model_id = fallback_model
-                    used_fallback = True
-                    continue
-                if error_hint:
-                    raise RuntimeError(f"AI API ошибка {status_code}: {error_hint}") from exc
-                raise RuntimeError(f"AI API ошибка {status_code}") from exc
-            except (httpx.TimeoutException, httpx.TransportError) as exc:
-                if attempt >= self._retries:
-                    raise RuntimeError("Сбой соединения с AI API") from exc
-            except (ValueError, KeyError, TypeError) as exc:
-                raise RuntimeError("Некорректный ответ AI API") from exc
-        raise RuntimeError("AI API недоступен")
-
-    async def generate_image_raw(self, model: str, prompt: str, *, chat_id: int) -> bytes:
-        """Генерирует картинку через OpenRouter image-модель, возвращает PNG bytes."""
-        if not settings.ai_key:
-            raise RuntimeError("AI_KEY не задан")
-
-        model_id = _normalize_model_id(model)
-        headers = {
-            "Authorization": f"Bearer {settings.ai_key}",
-            "Content-Type": "application/json",
-        }
-        payload: dict[str, object] = {
-            "model": model_id,
-            "messages": [{"role": "user", "content": prompt}],
-            "modalities": ["image", "text"],
-        }
-        logger.info("AI image request -> model=%s chat_id=%s", model_id, chat_id)
-        # Генерация картинок занимает значительно дольше текста — используем отдельный таймаут.
-        image_timeout = httpx.Timeout(120.0)
-        response = await self._client.post("/chat/completions", json=payload, headers=headers, timeout=image_timeout)
-        response.raise_for_status()
-        data = response.json()
-
-        # Парсинг: пробуем несколько форматов ответа image-моделей
-        raw_url: str | None = None
-        try:
-            choices = data.get("choices", [])
-            if choices:
-                msg = choices[0].get("message", {})
-                content_raw = msg.get("content")
-                # Формат 1: content как список с type=image_url
-                if isinstance(content_raw, list):
-                    for block in content_raw:
-                        if isinstance(block, dict) and block.get("type") == "image_url":
-                            url_block = block.get("image_url") or {}
-                            raw_url = url_block.get("url") or block.get("data")
-                            break
-                # Формат 2: images[]
-                if raw_url is None:
-                    images = msg.get("images")
-                    if isinstance(images, list) and images:
-                        raw_url = images[0].get("url") or images[0].get("image_url", {}).get("url")
-                # Формат 3: content — строка data:image/...
-                if raw_url is None and isinstance(content_raw, str) and content_raw.startswith("data:image"):
-                    raw_url = content_raw
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"Не удалось распарсить image-ответ AI: {exc}") from exc
-
-        if not raw_url:
-            raise RuntimeError("AI не вернул изображение в ответе")
-
-        # Декодируем base64
-        if raw_url.startswith("data:"):
-            header, _, b64 = raw_url.partition(",")
-            if not b64:
-                raise RuntimeError("Пустые данные base64 в image-ответе")
-            import base64 as _base64
-            return _base64.b64decode(b64)
-
-        # OpenRouter может вернуть обычный HTTPS-URL вместо base64 — скачиваем.
-        if raw_url.startswith("https://") or raw_url.startswith("http://"):
-            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as dl_client:
-                img_response = await dl_client.get(raw_url)
-                img_response.raise_for_status()
-                return img_response.content
-
-        raise RuntimeError(f"Неподдерживаемый формат image URL: {raw_url[:80]}")
+        return await self._messages_create(
+            _normalize_model_id(model),
+            messages,
+            chat_id=chat_id,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            response_format=None,
+            fallback_model=_normalize_model_id(settings.ai_fallback_model),
+        )
 
     async def probe(self) -> AiProbeResult:
-        """Лёгкая проверка доступности API: GET /models без расхода токенов."""
+        """Лёгкая проверка доступности API: список моделей без расхода токенов."""
         if not settings.ai_key:
             return AiProbeResult(False, "AI_KEY не задан", 0)
         started = time.perf_counter()
         try:
-            response = await self._client.get(
-                "/models",
-                headers={"Authorization": f"Bearer {settings.ai_key}"},
-            )
+            await self._client.models.list()
             latency = int((time.perf_counter() - started) * 1000)
-            if response.status_code == 200:
-                return AiProbeResult(True, "AI API доступен.", latency)
-            return AiProbeResult(
-                False,
-                f"AI API вернул HTTP {response.status_code}",
-                latency,
-            )
+            return AiProbeResult(True, "AI API доступен.", latency)
         except Exception as exc:  # noqa: BLE001
             latency = int((time.perf_counter() - started) * 1000)
             return AiProbeResult(False, str(exc), latency)
@@ -2242,6 +2166,10 @@ def get_ai_runtime_status() -> AiRuntimeStatus:
     )
 
 
+# Обратносовместимый алиас: исторически провайдер назывался OpenRouterProvider.
+OpenRouterProvider = AnthropicProvider
+
+
 def resolve_provider_mode() -> Literal["remote", "stub"]:
     """Возвращает фактический режим провайдера с учетом ключа и runtime-флага."""
     if settings.ai_enabled and bool(settings.ai_key) and is_ai_runtime_enabled():
@@ -2265,7 +2193,7 @@ async def get_ai_diagnostics(chat_id: int) -> AiDiagnosticsReport:
         provider_mode=provider_mode,
         ai_enabled=settings.ai_enabled,
         has_api_key=bool(settings.ai_key),
-        api_url=settings.ai_api_url or "https://openrouter.ai/api/v1",
+        api_url=settings.ai_api_url or "https://api.anthropic.com",
         requests_used_today=req_used,
         tokens_used_today=tok_used,
         probe_ok=probe_result.ok,
@@ -2304,7 +2232,7 @@ def get_ai_client() -> AiModuleClient:
     global _AI_CLIENT
     if _AI_CLIENT is None:
         if settings.ai_enabled and settings.ai_key and is_ai_runtime_enabled():
-            _AI_CLIENT = AiModuleClient(OpenRouterProvider())
+            _AI_CLIENT = AiModuleClient(AnthropicProvider())
             _LAST_ERROR = None
             _LAST_ERROR_AT = None
         else:

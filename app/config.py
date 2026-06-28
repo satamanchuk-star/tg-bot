@@ -1,217 +1,17 @@
-"""Почему: централизуем конфигурацию из окружения для удобства деплоя и тестов."""
+"""Почему: централизуем конфигурацию из окружения для удобства деплоя и тестов.
+
+Секреты (BOT_TOKEN, ANTHROPIC_API_KEY и т.п.) приходят ТОЛЬКО из окружения /
+файла `.env`, который деплой-пайплайн пишет на сервере из GitHub Secrets.
+Никакого чтения секретов из docker-compose на сервере больше нет.
+"""
 
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
-from dotenv import dotenv_values
 from pydantic import AliasChoices, Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-
-SERVER_COMPOSE_PATHS: tuple[Path, ...] = (
-    Path("/opt/alexbot/docker-compose.yaml"),
-    Path("/opt/alexbot/docker-compose.yml"),
-)
-REQUIRED_ENV_FIELDS: tuple[str, ...] = (
-    "BOT_TOKEN",
-    "FORUM_CHAT_ID",
-    "ADMIN_LOG_CHAT_ID",
-)
-
-
-def _has_required_bot_env(env: dict[str, str]) -> bool:
-    """Проверяет наличие обязательных переменных бота."""
-    return all(env.get(field) for field in REQUIRED_ENV_FIELDS)
-
-
-def _resolve_compose_value(raw_value: str) -> str:
-    """Упрощённо резолвит ${VAR} и ${VAR:-default} из docker-compose."""
-    value = raw_value.strip().strip("'\"")
-    if not (value.startswith("${") and value.endswith("}")):
-        return value
-
-    inner = value[2:-1]
-    if ":-" in inner:
-        env_name, default = inner.split(":-", 1)
-        return os.getenv(env_name, default)
-    return os.getenv(inner, "")
-
-
-def _read_env_file_values(compose_path: Path, env_file_item: str) -> dict[str, str]:
-    """Читает переменные из env_file, если файл существует."""
-    env_file_candidate = Path(env_file_item).expanduser()
-    if env_file_candidate.is_absolute():
-        env_file_path = env_file_candidate.resolve()
-    else:
-        env_file_path = (compose_path.parent / env_file_candidate).resolve()
-    if not env_file_path.exists():
-        return {}
-
-    env_values = dotenv_values(env_file_path)
-    result: dict[str, str] = {}
-    for key, value in env_values.items():
-        if value is None:
-            continue
-        result[str(key)] = str(value)
-    return result
-
-
-def _extract_compose_service_env(compose_path: Path, service_name: str) -> dict[str, str]:
-    """Извлекает environment/env_file для указанного сервиса из docker-compose."""
-    if not compose_path.exists():
-        return {}
-
-    lines = compose_path.read_text(encoding="utf-8").splitlines()
-    result: dict[str, str] = {}
-
-    in_bot = False
-    in_environment = False
-    in_env_file = False
-
-    for raw_line in lines:
-        line = raw_line.rstrip()
-        stripped = line.strip()
-        indent = len(line) - len(line.lstrip(" "))
-
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        if stripped == f"{service_name}:" and indent == 2:
-            in_bot = True
-            in_environment = False
-            in_env_file = False
-            continue
-
-        if in_bot and indent <= 2 and stripped.endswith(":") and stripped != f"{service_name}:":
-            in_bot = False
-            in_environment = False
-            in_env_file = False
-
-        if not in_bot:
-            continue
-
-        if stripped == "environment:" and indent == 4:
-            in_environment = True
-            in_env_file = False
-            continue
-
-        if stripped == "env_file:" and indent == 4:
-            in_env_file = True
-            in_environment = False
-            continue
-
-        if stripped.startswith("env_file:") and indent == 4:
-            env_file_item = stripped.partition(":")[2].strip().strip("'\"")
-            if env_file_item:
-                result.update(_read_env_file_values(compose_path, env_file_item))
-            in_env_file = False
-            in_environment = False
-            continue
-
-        if indent == 4 and stripped.endswith(":"):
-            in_environment = False
-            in_env_file = False
-
-        if in_environment:
-            if indent == 6 and "=" in stripped and stripped.startswith("-"):
-                item = stripped.removeprefix("-").strip()
-                key, value = item.split("=", 1)
-                result[key.strip()] = _resolve_compose_value(value)
-                continue
-            if indent == 6 and stripped.startswith("-") and "=" not in stripped:
-                key = stripped.removeprefix("-").strip()
-                env_value = os.getenv(key)
-                if env_value is not None:
-                    result[key] = env_value
-                continue
-            if indent == 6 and ":" in stripped and not stripped.startswith("-"):
-                key, value = stripped.split(":", 1)
-                key = key.strip()
-                resolved = _resolve_compose_value(value)
-                if resolved:
-                    result[key] = resolved
-                elif key in os.environ:
-                    result[key] = os.environ[key]
-                continue
-
-        if in_env_file and indent == 6 and stripped.startswith("-"):
-            env_file_item = stripped.removeprefix("-").strip()
-            if env_file_item.startswith("path:"):
-                env_file_path = env_file_item.partition(":")[2].strip().strip("'\"")
-                if env_file_path:
-                    result.update(_read_env_file_values(compose_path, env_file_path))
-                continue
-            env_file_path = env_file_item.strip("'\"")
-            if env_file_path:
-                result.update(_read_env_file_values(compose_path, env_file_path))
-
-    return result
-
-
-def _extract_compose_bot_env(compose_path: Path) -> dict[str, str]:
-    """Извлекает env для целевого сервиса бота (bot/alexbot или первого валидного)."""
-    if not compose_path.exists():
-        return {}
-
-    lines = compose_path.read_text(encoding="utf-8").splitlines()
-    services: list[str] = []
-    in_services = False
-    for raw_line in lines:
-        line = raw_line.rstrip()
-        stripped = line.strip()
-        indent = len(line) - len(line.lstrip(" "))
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped == "services:" and indent == 0:
-            in_services = True
-            continue
-        if in_services and indent == 0 and stripped.endswith(":") and stripped != "services:":
-            in_services = False
-        if in_services and indent == 2 and stripped.endswith(":"):
-            services.append(stripped[:-1].strip())
-
-    preferred = ["bot", "alexbot"]
-    checked: list[str] = []
-    best_match: dict[str, str] = {}
-
-    for service in [*preferred, *services]:
-        if service in checked:
-            continue
-        checked.append(service)
-        env = _extract_compose_service_env(compose_path, service)
-        if not env:
-            continue
-        if _has_required_bot_env(env):
-            return env
-        if len(env) > len(best_match):
-            best_match = env
-    return best_match
-
-
-def _inject_env_from_server_compose() -> None:
-    """Подхватывает env из /opt/alexbot/docker-compose.yaml как источник истины."""
-    compose_env: dict[str, str] = {}
-    fallback_env: dict[str, str] = {}
-    for compose_path in SERVER_COMPOSE_PATHS:
-        compose_env = _extract_compose_bot_env(compose_path)
-        if not compose_env:
-            continue
-        if _has_required_bot_env(compose_env):
-            break
-        if len(compose_env) > len(fallback_env):
-            fallback_env = compose_env
-    if not _has_required_bot_env(compose_env):
-        compose_env = fallback_env
-    for key, value in compose_env.items():
-        if not value:
-            continue
-        existing = os.getenv(key)
-        if existing:
-            continue
-        os.environ[key] = value
 
 
 class Settings(BaseSettings):
@@ -258,13 +58,17 @@ class Settings(BaseSettings):
     proxy_state_path: str = "data/working_proxies.json"
 
     ai_enabled: bool = True
+    # Опциональный override эндпоинта Anthropic (например, корпоративный прокси).
+    # Пусто → официальный https://api.anthropic.com через anthropic SDK.
     ai_api_url: str | None = None
     ai_key: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("AI_KEY", "OPENROUTER_API_KEY", "AI_API_KEY"),
+        validation_alias=AliasChoices(
+            "ANTHROPIC_API_KEY", "AI_KEY", "OPENROUTER_API_KEY", "AI_API_KEY"
+        ),
     )
     ai_model: str = Field(
-        default="anthropic/claude-haiku-4.5",
+        default="claude-haiku-4-5",
         validation_alias=AliasChoices("AI_MODEL", "ai_model"),
     )
     ai_max_tokens: int = 800
@@ -287,29 +91,21 @@ class Settings(BaseSettings):
     # Адаптация тона под настроение чата
     ai_feature_mood: bool = True
 
-    # --- Multi-model routing ---
-    ai_classifier_model: str = "qwen/qwen3-30b-a3b-instruct-2507"
-    ai_spam_model: str = "qwen/qwen3-30b-a3b-instruct-2507"
-    ai_topic_model: str = "qwen/qwen3-30b-a3b-instruct-2507"
-    ai_gate_intent_model: str = "qwen/qwen3-30b-a3b-instruct-2507"
-    ai_main_model: str = "deepseek/deepseek-v3.2"
-    ai_faq_model: str = "deepseek/deepseek-v3.2"
-    ai_reply_model: str = "deepseek/deepseek-v3.2"
-    ai_digest_model: str = "deepseek/deepseek-v3.2"
-    ai_gate_extract_model: str = "deepseek/deepseek-v3.2"
-    ai_code_model: str = "qwen/qwen3-coder-30b-a3b-instruct"
-    ai_premium_model: str = "anthropic/claude-3.5-haiku"
-    ai_fallback_model: str = "deepseek/deepseek-v3.2"
-
-    # --- Image generation ---
-    ai_image_enabled: bool = False
-    ai_image_model: str = "google/gemini-2.5-flash-image"
-    ai_image_admin_only: bool = True
-    ai_image_daily_limit: int = 10
-    ai_image_max_prompt_chars: int = 1000
-    # Дневной бюджет на картинки в USD; 0 = без лимита
-    ai_image_max_daily_cost_usd: float = 0.50
-    ai_digest_image_enabled: bool = False
+    # --- Multi-model routing (Anthropic Claude) ---
+    # По умолчанию всё на дешёвом Claude Haiku; Sonnet — только премиум-путь.
+    ai_classifier_model: str = "claude-haiku-4-5"
+    ai_spam_model: str = "claude-haiku-4-5"
+    ai_topic_model: str = "claude-haiku-4-5"
+    ai_gate_intent_model: str = "claude-haiku-4-5"
+    ai_main_model: str = "claude-haiku-4-5"
+    ai_faq_model: str = "claude-haiku-4-5"
+    ai_reply_model: str = "claude-haiku-4-5"
+    ai_digest_model: str = "claude-haiku-4-5"
+    ai_gate_extract_model: str = "claude-haiku-4-5"
+    ai_code_model: str = "claude-haiku-4-5"
+    # Премиум-ответы (крайние случаи) — Claude Sonnet.
+    ai_premium_model: str = "claude-sonnet-4-6"
+    ai_fallback_model: str = "claude-haiku-4-5"
 
     # --- Extended limits ---
     ai_max_daily_cost_usd: float = 2.0
@@ -426,7 +222,6 @@ class Settings(BaseSettings):
 
 
 def _load_settings() -> Settings:
-    _inject_env_from_server_compose()
     try:
         return Settings()  # type: ignore[call-arg]
     except ValidationError as exc:
@@ -456,7 +251,7 @@ def _load_settings() -> Settings:
                 ", ".join(missing),
             )
             logger.error(
-                "На сервере источник переменных: /opt/alexbot/docker-compose.yaml (bot.environment/env_file).",
+                "Источник переменных: файл .env (на сервере его пишет деплой из GitHub Secrets).",
             )
         logger.error("Ошибка конфигурации: %s", exc)
         raise SystemExit(1) from exc

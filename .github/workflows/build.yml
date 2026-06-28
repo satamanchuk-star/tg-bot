@@ -1,9 +1,11 @@
-name: Build and Push Docker Image
+name: Build and Deploy
 
 on:
   push:
     branches:
       - main
+  # Позволяет запускать деплой вручную (в т.ч. из Claude через GitHub API).
+  workflow_dispatch:
 
 jobs:
   build:
@@ -55,12 +57,50 @@ jobs:
           echo "Build and push failed after 2 attempts."
           exit 1
 
-      - name: Deploy to server
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    # Деплой только если заданы серверные секреты (иначе шаг просто пропускается).
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Готовим .env из единственного секрета BOT_ENV (всё содержимое env-файла).
+      # Секрет маскируется в логах GitHub; на диск раннера попадает эфемерно.
+      - name: Render .env from secret
+        env:
+          BOT_ENV: ${{ secrets.BOT_ENV }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BOT_ENV}" ]; then
+            echo "::error::Секрет BOT_ENV не задан — нечего деплоить."
+            exit 1
+          fi
+          printf '%s\n' "${BOT_ENV}" > .env
+          chmod 600 .env
+
+      # Копируем docker-compose.yaml и .env на сервер.
+      - name: Copy deploy files to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "docker-compose.yaml,.env"
+          target: /opt/alexbot
+
+      # Тянем свежий образ и перезапускаем.
+      - name: Pull image and restart
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            set -e
             cd /opt/alexbot
-            sh reload.sh
+            chmod 600 .env
+            mkdir -p data
+            docker compose pull
+            docker compose up -d --remove-orphans
+            docker image prune -f

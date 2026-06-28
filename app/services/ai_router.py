@@ -15,7 +15,6 @@ _TASK_CONFIG: dict[str, dict[str, object]] = {
     "digest":        {"model": "ai_digest_model",         "temp": 0.8, "tokens": "ai_digest_max_output_tokens"},
     "premium_reply": {"model": "ai_premium_model",        "temp": 0.5, "tokens": "ai_reply_max_output_tokens"},
     "code_help":     {"model": "ai_code_model",           "temp": 0.2, "tokens": "ai_reply_max_output_tokens"},
-    "image":         {"model": "ai_image_model",          "temp": 1.0, "tokens": None},
 }
 
 
