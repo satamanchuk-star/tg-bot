@@ -91,7 +91,7 @@ python scripts/import_places_from_google_sheets.py --dry-run
 ## AI: текущий статус
 
 Бот поддерживает два режима AI:
-- **Remote AI**: если задан `AI_KEY` (или алиас `OPENROUTER_API_KEY`/`AI_API_KEY`) и опционально `AI_API_URL`, `AI_MODEL`, используется внешний провайдер через Chat Completions API.
+- **Remote AI**: если задан `ANTHROPIC_API_KEY` (алиасы: `AI_KEY`/`AI_API_KEY`), бот ходит напрямую в **Anthropic Claude** (Messages API через официальный `anthropic` SDK). По умолчанию всё на дешёвом `claude-haiku-4-5`, премиум-путь — `claude-sonnet-4-6`.
 - **Stub fallback**: если ключ не задан или API недоступен, бот автоматически работает в локальном режиме без падений.
 
 В remote-режиме включены:
@@ -134,47 +134,57 @@ python scripts/import_places_from_google_sheets.py --dry-run
 - Если ключ не задан, API недоступно, превышены лимиты или временно отключён runtime-флаг — бот продолжает работать в локальном режиме.
 - Критичные функции чата (модерация, команды, игры, статистика) при этом не останавливаются.
 
+## Безопасность и секреты
+
+**Правило: никаких паролей/токенов/ключей в открытом виде в репозитории.**
+
+- Все секреты (`BOT_TOKEN`, `ANTHROPIC_API_KEY`, SSH-ключ, Docker Hub токен) хранятся
+  **только** в GitHub Secrets. В коде, `docker-compose.yaml` и любых закоммиченных
+  файлах их быть не должно — только ссылки вида `${{ secrets.* }}`.
+- `.env` в git не коммитится (см. `.gitignore`). `.env.example` содержит только
+  **пустые** поля и несекретные дефолты — как шаблон.
+- На сервере секреты не лежат в `docker-compose.yaml`. Весь env-файл собирается из
+  одного GitHub-секрета `BOT_ENV` и пишется деплоем в `/opt/alexbot/.env` (chmod 600).
+
 ## CI/CD
 
-При пуше в `main` автоматически собирается и пушится Docker-образ (GitHub Actions).
+При пуше в `main` (или вручную через **Run workflow**) GitHub Actions собирает и
+пушит Docker-образ, затем — если включён деплой — раскатывает его на сервер.
 
-Секреты в репозитории (Settings → Secrets → Actions):
+GitHub Secrets (Settings → Secrets and variables → Actions → **Secrets**):
 - `DOCKERHUB_USERNAME` — логин Docker Hub
-- `DOCKERHUB_TOKEN` — Access Token
-- `SSH_HOST` — адрес сервера для деплоя
-- `SSH_USER` — пользователь на сервере
-- `SSH_PRIVATE_KEY` — приватный SSH-ключ
-- `AI_KEY` — ключ OpenRouter; при деплое автоматически записывается в `/opt/alexbot/.env`
+- `DOCKERHUB_TOKEN` — Access Token Docker Hub
+- `SSH_HOST` / `SSH_USER` / `SSH_PRIVATE_KEY` — доступ к серверу для деплоя
+- `BOT_ENV` — **всё содержимое `.env`** одним блоком (секреты + настройки).
+  Источник истины для конфигурации сервера.
 
-## Деплой
+GitHub Variables (вкладка **Variables**):
+- `DEPLOY_ENABLED=true` — включает джобу деплоя (пока сервер не готов — оставьте
+  невыставленным, тогда собирается только образ).
 
-Собрать образ локально (или дождаться CI):
-```bash
-# Linux/macOS
-sh build.sh
+Деплой запускается из Claude/вручную: Actions → *Build and Deploy* → **Run workflow**.
 
-# Windows
-build.bat
-```
+## Деплой на сервер (первичная настройка)
 
-На сервере:
+1. Поднять зарубежный VPS (рекомендация — Hetzner CX22, Германия/Финляндия),
+   установить Docker + docker compose, создать каталог `/opt/alexbot`.
+2. Добавить в GitHub секрет `BOT_ENV` (содержимое `.env.example` с заполненными
+   значениями) и серверные секреты `SSH_*`, плюс переменную `DEPLOY_ENABLED=true`.
+3. Запустить workflow — он соберёт образ, запишет `/opt/alexbot/.env` из `BOT_ENV`
+   и поднимет контейнер. Данные бота хранятся в `/opt/alexbot/data` (SQLite).
+
+Ручное обновление на сервере (если нужно):
 ```bash
 cd /opt/alexbot
-
-# Обновить приложение
-sh reload.sh
-
-# Посмотреть логи
-docker compose logs
+sh reload.sh          # docker compose pull && up -d
+docker compose logs -f
 ```
 
 ## Локальный запуск
 
 ```bash
-# Установить зависимости
 pip install -r requirements.txt
-
-# Запустить бота
+cp .env.example .env   # заполнить BOT_TOKEN, ANTHROPIC_API_KEY и т.д.
 python -m app.main
 ```
 
@@ -183,34 +193,8 @@ python -m app.main
 1. `cp .env.example .env` и заполнить обязательные переменные.
 2. Запустить: `python -m app.main`.
 3. В Telegram выполнить `/help` и проверить меню.
-4. Выполнить `/ai` и убедиться, что приходит сообщение о заглушке.
-5. Упомянуть бота в сообщении и проверить локальный ответ.
-6. Запустить/дождаться ежедневной сводки и убедиться, что приходит только статистика.
-
-
-## Проверка OpenRouter API
-
-Быстрый health-check без запуска бота:
-
-```bash
-python scripts/check_openrouter.py --api-key sk-or-...
-```
-
-Если аргументы не переданы, скрипт берёт `AI_KEY` (или `OPENROUTER_API_KEY`/`AI_API_KEY`), `AI_MODEL`, `AI_API_URL`
-сначала из переменных окружения процесса, затем из локального файла `.env`.
-
-Или через переменные окружения:
-
-```bash
-AI_KEY=sk-or-... AI_MODEL=qwen/qwen3.5-flash python scripts/check_openrouter.py
-# или
-OPENROUTER_API_KEY=sk-or-... AI_MODEL=qwen/qwen3.5-flash python scripts/check_openrouter.py
-```
-
-Скрипт вернет `ok/status_code/latency_ms/details` и завершится кодом:
-- `0` — API доступен и вернул `choices`;
-- `1` — API ответил ошибкой или сеть недоступна;
-- `2` — не передан API-ключ.
+4. Выполнить `/ai_probe` и убедиться, что Anthropic API доступен.
+5. Упомянуть бота в сообщении и проверить ответ ассистента.
 
 ## Почему бот может не запускаться
 

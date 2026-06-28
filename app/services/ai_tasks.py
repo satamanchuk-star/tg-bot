@@ -2,7 +2,7 @@
 
 Каждая функция:
 - выбирает модель через ai_router
-- вызывает OpenRouterProvider._chat_completion_with_model
+- вызывает AnthropicProvider._chat_completion_with_model
 - при ошибке возвращает безопасный дефолт (бот не падает)
 - логирует в AiTaskLog
 """
@@ -59,11 +59,11 @@ def _parse_json_safe(text: str, default: dict) -> dict:
 
 
 async def _get_provider():
-    """Возвращает OpenRouterProvider или None если AI недоступен."""
+    """Возвращает AnthropicProvider или None если AI недоступен."""
     client = get_ai_client()
     provider = client._provider  # noqa: SLF001
-    from app.services.ai_module import OpenRouterProvider
-    if not isinstance(provider, OpenRouterProvider):
+    from app.services.ai_module import AnthropicProvider
+    if not isinstance(provider, AnthropicProvider):
         return None
     return provider
 

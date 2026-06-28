@@ -33,7 +33,6 @@ from app.config import settings
 from app.db import Base, engine, get_session
 from app.handlers import (
     admin,
-    ai_admin,
     economy as economy_handler,
     forms,
     help as help_handler,
@@ -879,14 +878,6 @@ async def on_startup_warmup(bot: Bot) -> None:
     # ── Google Sheets — в фон ────────────────────────────────────────────────
     _run_background_task(_sync_places_from_sheets(), name="startup_sync_places")
 
-    # ── Image counter: restore from DB ──────────────────────────────────────
-    if settings.ai_image_enabled:
-        try:
-            from app.services.ai_image import sync_image_count
-            await sync_image_count()
-        except Exception:  # noqa: BLE001
-            logger.warning("Не удалось восстановить счётчик картинок из БД.")
-
     # ── AI клиент + probe ────────────────────────────────────────────────────
     _step_t = _time.monotonic()
     get_ai_client()
@@ -912,7 +903,7 @@ async def on_startup_warmup(bot: Bot) -> None:
             f"  · {_m.split('/')[-1]} ({', '.join(_r)})"
             for _m, _r in _model_roles.items()
         )
-        ai_mode = f"AI: OpenRouter\n{_model_lines}"
+        ai_mode = f"AI: Anthropic\n{_model_lines}"
         try:
             probe = await asyncio.wait_for(
                 get_ai_client().probe(),
@@ -1084,7 +1075,6 @@ async def main() -> None:
     # Порядок важен: упоминания должны ловиться до остальных обработчиков
     dp.include_router(help_handler.router)  # mention-help (catch-all, не блокирует)
     dp.include_router(admin.router)  # админ-команды
-    dp.include_router(ai_admin.router)  # AI-команды для админов (/meme, /poster и др.)
     # games.router отключен: игровой модуль исключен из запуска диспетчера
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     dp.include_router(shop.router)  # магазин монет (FSM, перед economy)

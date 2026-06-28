@@ -309,89 +309,86 @@ def test_openrouter_assistant_fallback_on_http_400(monkeypatch) -> None:
     asyncio.run(provider.aclose())
 
 
-def test_openrouter_retries_with_fallback_model_on_invalid_id(monkeypatch) -> None:
-    provider = OpenRouterProvider()
-    sent_models: list[str] = []
+class _FakeBlock:
+    type = "text"
+    text = "ok"
 
+
+class _FakeUsage:
+    input_tokens = 5
+    output_tokens = 7
+
+
+class _FakeMessage:
+    content = [_FakeBlock()]
+    usage = _FakeUsage()
+
+
+def _patch_completion_env(monkeypatch, provider, create_fn) -> None:
     async def _fake_add_usage(chat_id: int, tokens: int) -> None:
         return None
-
-    async def _post(*args, **kwargs):  # type: ignore[no-untyped-def]
-        model = kwargs["json"]["model"]
-        sent_models.append(model)
-        request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
-        if len(sent_models) == 1:
-            return httpx.Response(
-                400,
-                request=request,
-                json={"error": {"message": f"{model} is not a valid model ID"}},
-            )
-        return httpx.Response(
-            200,
-            request=request,
-            json={
-                "choices": [{"message": {"content": "ok"}}],
-                "usage": {"total_tokens": 12},
-            },
-        )
 
     async def _allow(chat_id: int) -> tuple[bool, str | None]:
         return (True, None)
 
     monkeypatch.setattr("app.services.ai_module.settings.ai_key", "test-key", raising=False)
+    monkeypatch.setattr("app.services.ai_module.settings.ai_fallback_model", "claude-haiku-4-5", raising=False)
     monkeypatch.setattr("app.services.ai_module._can_use_remote_ai", _allow)
     monkeypatch.setattr("app.services.ai_module._add_remote_usage", _fake_add_usage)
-    monkeypatch.setattr(provider._client, "post", _post)
+    monkeypatch.setattr(provider._client.messages, "create", create_fn)
+
+
+def test_anthropic_retries_with_fallback_model_on_not_found(monkeypatch) -> None:
+    import anthropic
+
+    provider = OpenRouterProvider()
+    sent_models: list[str] = []
+
+    async def _create(**kwargs):  # type: ignore[no-untyped-def]
+        sent_models.append(kwargs["model"])
+        if len(sent_models) == 1:
+            request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+            response = httpx.Response(404, request=request)
+            raise anthropic.NotFoundError(
+                f"model: {kwargs['model']} not found", response=response, body=None
+            )
+        return _FakeMessage()
+
+    _patch_completion_env(monkeypatch, provider, _create)
 
     content, tokens = asyncio.run(provider._chat_completion([{"role": "user", "content": "ping"}], chat_id=1))
 
     assert content == "ok"
     assert tokens == 12
     assert len(sent_models) == 2
-    assert sent_models[-1] == "openrouter/auto"
+    assert sent_models[-1] == "claude-haiku-4-5"
     asyncio.run(provider.aclose())
 
 
-def test_openrouter_retries_with_fallback_model_on_no_endpoints(monkeypatch) -> None:
+def test_anthropic_retries_with_fallback_model_on_bad_request(monkeypatch) -> None:
+    import anthropic
+
     provider = OpenRouterProvider()
     sent_models: list[str] = []
 
-    async def _fake_add_usage(chat_id: int, tokens: int) -> None:
-        return None
-
-    async def _post(*args, **kwargs):  # type: ignore[no-untyped-def]
-        model = kwargs["json"]["model"]
-        sent_models.append(model)
-        request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    async def _create(**kwargs):  # type: ignore[no-untyped-def]
+        sent_models.append(kwargs["model"])
         if len(sent_models) == 1:
-            return httpx.Response(
-                404,
-                request=request,
-                json={"error": {"message": f"No endpoints found for {model}"}},
+            request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+            response = httpx.Response(400, request=request)
+            raise anthropic.BadRequestError(
+                f"model {kwargs['model']} is not available", response=response, body=None
             )
-        return httpx.Response(
-            200,
-            request=request,
-            json={
-                "choices": [{"message": {"content": "ok"}}],
-                "usage": {"total_tokens": 7},
-            },
-        )
+        return _FakeMessage()
 
-    async def _allow(chat_id: int) -> tuple[bool, str | None]:
-        return (True, None)
-
-    monkeypatch.setattr("app.services.ai_module.settings.ai_key", "test-key", raising=False)
-    monkeypatch.setattr("app.services.ai_module._can_use_remote_ai", _allow)
-    monkeypatch.setattr("app.services.ai_module._add_remote_usage", _fake_add_usage)
-    monkeypatch.setattr(provider._client, "post", _post)
+    _patch_completion_env(monkeypatch, provider, _create)
 
     content, tokens = asyncio.run(provider._chat_completion([{"role": "user", "content": "ping"}], chat_id=1))
 
     assert content == "ok"
-    assert tokens == 7
+    assert tokens == 12
     assert len(sent_models) == 2
-    assert sent_models[-1] == "openrouter/auto"
+    assert sent_models[-1] == "claude-haiku-4-5"
     asyncio.run(provider.aclose())
 
 def test_openrouter_summary_fallback_on_runtime_error(monkeypatch) -> None:
