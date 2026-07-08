@@ -69,25 +69,64 @@ async def _check_duplicate_correction(
     return result is not None
 
 
-async def _notify_admins_about_correction(
+# Очередь коррекций, ожидающих подтверждения админом: uid -> payload.
+# Коррекции жителей НЕ пишутся в RAG напрямую (вектор отравления базы) —
+# только после нажатия «Принять» админом (callback corr:ok:/corr:no: в admin.py).
+_PENDING_CORRECTIONS: dict[str, dict] = {}
+_PENDING_CORRECTIONS_MAX = 50
+
+
+def store_pending_correction(payload: dict) -> str:
+    """Сохраняет коррекцию в очередь модерации, возвращает uid для callback-кнопок."""
+    import uuid
+    if len(_PENDING_CORRECTIONS) >= _PENDING_CORRECTIONS_MAX:
+        oldest_key = next(iter(_PENDING_CORRECTIONS))
+        _PENDING_CORRECTIONS.pop(oldest_key, None)
+    uid = uuid.uuid4().hex[:12]
+    _PENDING_CORRECTIONS[uid] = payload
+    return uid
+
+
+def pop_pending_correction(uid: str) -> dict | None:
+    """Извлекает коррекцию из очереди (одноразово)."""
+    return _PENDING_CORRECTIONS.pop(uid, None)
+
+
+async def _send_correction_for_review(
+    *,
+    chat_id: int,
     user_id: int,
     fact: str,
+    corrected_text: str,
     bot: object | None = None,
 ) -> None:
-    """Уведомляет админов о применённой коррекции."""
+    """Отправляет коррекцию админам на подтверждение с inline-кнопками."""
     try:
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
         from app.config import settings
         admin_chat = settings.admin_log_chat_id
-        if admin_chat and bot and hasattr(bot, "send_message"):
-            text = (
-                f"📝 Коррекция от жителя (user_id={user_id}):\n"
-                f"{fact[:500]}\n\n"
-                "Запись добавлена в RAG на 180 дней."
-            )
-            await bot.send_message(admin_chat, text)
+        if not (admin_chat and bot and hasattr(bot, "send_message")):
+            return
+        uid = store_pending_correction({
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "corrected_text": corrected_text,
+            "fact": fact,
+        })
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Принять", callback_data=f"corr:ok:{uid}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"corr:no:{uid}"),
+        ]])
+        text = (
+            f"📝 Коррекция от жителя (user_id={user_id}) — требует проверки:\n\n"
+            f"{fact[:500]}\n\n"
+            "«Принять» → запись в RAG на 180 дней. «Отклонить» → игнорировать."
+        )
+        await bot.send_message(admin_chat, text, reply_markup=keyboard)
     except Exception:
         # Уведомление не критично — логируем и идём дальше
-        logger.debug("Не удалось уведомить админов о коррекции.")
+        logger.warning("Не удалось отправить коррекцию на модерацию.")
 
 
 async def detect_and_apply_correction(
@@ -99,7 +138,12 @@ async def detect_and_apply_correction(
     bot_reply: str,
     bot: object | None = None,
 ) -> bool:
-    """Определяет коррекцию и сохраняет в RAG. Возвращает True если коррекция применена."""
+    """Определяет коррекцию и ставит её в очередь модерации админам.
+
+    Возвращает True, если коррекция распознана и отправлена на проверку.
+    В RAG запись попадает только после подтверждения админом (защита от
+    отравления базы знаний произвольными «поправками»).
+    """
     if not is_likely_correction(user_text, bot_reply):
         return False
 
@@ -126,7 +170,7 @@ async def detect_and_apply_correction(
         return False
 
     # Дедупликация: проверяем, нет ли уже такой коррекции в RAG
-    from app.services.rag import add_rag_message, build_semantic_key, classify_rag_message
+    from app.services.rag import build_semantic_key, classify_rag_message
     corrected_text = f"[Коррекция от жителя] {fact}"
     category = classify_rag_message(corrected_text)
     semantic_key = build_semantic_key(corrected_text, category)
@@ -135,20 +179,13 @@ async def detect_and_apply_correction(
         logger.info("LEARNING: дублирующая коррекция пропущена, semantic_key=%s", semantic_key)
         return False
 
-    # Сохраняем в RAG как community correction
-    await add_rag_message(
-        session,
+    # НЕ пишем в RAG сразу — отправляем админам на подтверждение.
+    await _send_correction_for_review(
         chat_id=chat_id,
-        message_text=corrected_text,
-        added_by_user_id=user_id,
-        source_user_id=user_id,
-        ttl_days=180,  # Коррекции живут дольше обычных RAG
+        user_id=user_id,
+        fact=fact,
+        corrected_text=corrected_text,
+        bot=bot,
     )
-    await session.commit()
-    logger.info("LEARNING: коррекция применена от user_id=%s: %s", user_id, fact[:100])
-
-    # Уведомляем админов (фоново, не блокируем)
-    import asyncio
-    asyncio.create_task(_notify_admins_about_correction(user_id, fact, bot=bot))
-
+    logger.info("LEARNING: коррекция от user_id=%s отправлена на модерацию: %s", user_id, fact[:100])
     return True

@@ -505,6 +505,72 @@ async def reload_profanity(message: Message, bot: Bot) -> None:
     )
 
 
+@router.message(Command("kb_reload"))
+async def kb_reload(message: Message, bot: Bot) -> None:
+    """Перечитывает resident_kb.json без рестарта бота (сброс lru_cache)."""
+    if not await _ensure_admin(message, bot):
+        return
+    from app.services.resident_kb import load_resident_kb
+    load_resident_kb.cache_clear()
+    entries = load_resident_kb()
+    await message.reply(
+        f"База знаний перечитана: {len(entries)} записей. "
+        "Изменения в data/resident_kb.json применены."
+    )
+
+
+@router.callback_query(F.data.startswith("corr:"))
+async def correction_review_cb(callback: CallbackQuery, bot: Bot) -> None:
+    """Подтверждение/отклонение коррекции жителя перед записью в RAG."""
+    if not await _ensure_admin_cb(callback, bot):
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3:
+        await callback.answer()
+        return
+    _, action, uid = parts
+
+    from app.services.learning import pop_pending_correction
+    payload = pop_pending_correction(uid)
+    if payload is None:
+        await callback.answer("Коррекция устарела или уже обработана.", show_alert=True)
+        if callback.message:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        return
+
+    if action == "no":
+        await callback.answer("Коррекция отклонена.")
+        if callback.message:
+            await callback.message.edit_text(
+                f"❌ Коррекция отклонена:\n{payload['fact'][:400]}"
+            )
+        return
+
+    # action == "ok" — записываем в RAG
+    try:
+        async for session in get_session():
+            await add_rag_message(
+                session,
+                chat_id=payload["chat_id"],
+                message_text=payload["corrected_text"],
+                added_by_user_id=payload["user_id"],
+                source_user_id=payload["user_id"],
+                ttl_days=180,
+            )
+            await session.commit()
+            break
+    except Exception:
+        logger.exception("Не удалось записать подтверждённую коррекцию в RAG.")
+        await callback.answer("Ошибка записи в RAG.", show_alert=True)
+        return
+
+    await callback.answer("Коррекция принята и записана в RAG.")
+    if callback.message:
+        await callback.message.edit_text(
+            f"✅ Коррекция принята (RAG, 180 дней):\n{payload['fact'][:400]}"
+        )
+
+
 @router.message(Command("reset_routing_state"))
 async def reset_routing_state(message: Message, bot: Bot) -> None:
     if not await _ensure_admin(message, bot):

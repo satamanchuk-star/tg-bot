@@ -37,3 +37,24 @@ def test_is_likely_correction_ignores_thanks():
 def test_is_likely_correction_ignores_agreement():
     from app.services.learning import is_likely_correction
     assert not is_likely_correction("Да, всё верно, так и есть!", "Аптека на Лесной")
+
+
+def test_pending_correction_queue_roundtrip():
+    """Коррекция кладётся в очередь модерации и извлекается один раз."""
+    from app.services.learning import pop_pending_correction, store_pending_correction
+
+    payload = {"chat_id": 1, "user_id": 2, "corrected_text": "[Коррекция от жителя] тест", "fact": "тест"}
+    uid = store_pending_correction(payload)
+    assert pop_pending_correction(uid) == payload
+    # Повторное извлечение — None (одноразовость)
+    assert pop_pending_correction(uid) is None
+
+
+def test_pending_correction_queue_caps_size():
+    """Очередь не растёт бесконечно: старые записи вытесняются."""
+    from app.services import learning
+
+    for i in range(learning._PENDING_CORRECTIONS_MAX + 10):
+        learning.store_pending_correction({"n": i})
+    assert len(learning._PENDING_CORRECTIONS) <= learning._PENDING_CORRECTIONS_MAX
+    learning._PENDING_CORRECTIONS.clear()
