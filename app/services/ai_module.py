@@ -442,9 +442,46 @@ _FALLBACK_VARIANTS = (
     "Этого в моей базе сейчас нет.",
 )
 
+# Ответы для гейта «нет опоры в базе знаний». Каждая фраза гарантированно
+# распознаётся как uncertain (_is_uncertain_reply в help.py) → при отсутствии
+# «?» бот молчит, при прямом вопросе даёт одну честную строку.
+_UNGROUNDED_REPLIES = (
+    "Не знаю — точной информации по этому вопросу у меня нет.",
+    "Честно, не знаю: надёжных данных по этому у меня нет.",
+    "Не уверен и не хочу гадать — таких данных у меня нет.",
+)
+
 
 # Последний использованный style-hint per (chat_id, user_id) — чтобы не повторялся подряд.
 _LAST_STYLE_HINT_BY_USER: dict[tuple[int, int], str] = {}
+
+
+# Маркеры фактического вопроса (адрес/телефон/график/тариф/процедура) — только
+# такие вопросы требуют опоры в базе знаний. Творческие просьбы («сформулируй»,
+# «напиши объявление») и рассуждения гейт не трогает.
+_FACTUAL_QUESTION_PATTERNS = re.compile(
+    r"(?ix)"
+    r"\b(где|куда|когда|во\s+сколько|сколько|почём|телефон|адрес|контакт|номер|"
+    r"график|расписание|режим\s+работы|тариф|стоимост\w*|цен[аыу]|"
+    r"как\s+(оформить|получить|записаться|попасть|подключить|заказать|вызвать|оплатить|добраться|проехать|передать)|"
+    r"работает\s+ли|есть\s+ли|чей|куда\s+звонить|куда\s+обращаться|кто\s+отвеча\w*)\b"
+)
+
+# Творческие/редакторские просьбы: модель работает с текстом из диалога,
+# опора в базе знаний не нужна — гейт не применяем.
+_DRAFTING_REQUEST_PATTERNS = re.compile(
+    r"(?i)\b(напиши|напечатай|сформулируй|составь|придумай|перепиши|переведи|"
+    r"сократи|подправь|исправь|оформи|помоги\s+(написать|составить|сформулировать))\b"
+)
+
+
+def _asks_local_facts(text: str) -> bool:
+    """Фактический ли это вопрос, требующий опоры в базе знаний."""
+    if not text:
+        return False
+    if _DRAFTING_REQUEST_PATTERNS.search(text):
+        return False
+    return bool(_FACTUAL_QUESTION_PATTERNS.search(text))
 
 
 _SMALLTALK_PATTERNS = re.compile(
@@ -480,13 +517,20 @@ def _parse_context_line(raw_line: str) -> tuple[str, str]:
     if not line:
         return ("system", "")
 
+    # Служебные сводки (профиль жителя, настроение чата, сжатая история)
+    # приходят с префиксом `summary:` и должны попадать в модель как system-контекст,
+    # а не как реплика пользователя — иначе Haiku путает, кто что сказал.
+    lowered = line.lower()
+    if lowered.startswith("summary:"):
+        return ("system", line[len("summary:"):].strip())
+
     for pattern, role in _CONTEXT_LINE_PATTERNS:
         match = pattern.match(line)
         if match:
             text = match.group(1).strip()
             return (role, text)
 
-    if line.lower().startswith("краткий контекст диалога"):
+    if lowered.startswith("краткий контекст диалога"):
         return ("system", line)
 
     return ("user", line)
@@ -991,6 +1035,7 @@ class AnthropicProvider:
                     {"role": "user", "content": user_content},
                 ],
                 chat_id=chat_id,
+                temperature=0.2,
                 response_format={"type": "json_object"},
             )
             # Убираем markdown-обёртку ```json ... ``` если модель всё же добавила её
@@ -1110,6 +1155,25 @@ class AnthropicProvider:
             safe_prompt[:80], user_id, topic_id,
         )
 
+        # «Реже, но точнее»: фактический вопрос без опоры в базе знаний → честный
+        # «не знаю» вместо генерации (модель не выдумывает, вызов к API экономится).
+        # Гейт бьёт ТОЛЬКО по фактическим вопросам (_asks_local_facts): болтовня,
+        # творческие просьбы («сформулируй», «напиши объявление») и рассуждения
+        # уходят в модель — там точность фактов не нужна, а no_kb_notice ниже
+        # всё равно запрещает выдумывать факты о ЖК. Короткий follow-up в живом
+        # диалоге тоже пропускаем: ответ может содержаться в контексте беседы.
+        _is_short_followup = bool(context) and len(safe_prompt) < 40
+        if (
+            settings.ai_require_grounding
+            and not has_factual_context
+            and not web_context
+            and not _looks_like_smalltalk(safe_prompt)
+            and _asks_local_facts(safe_prompt)
+            and not _is_short_followup
+        ):
+            logger.info("ANSWER_GATE: ungrounded factual question → honest 'не знаю' prompt=%r", safe_prompt[:80])
+            return random.choice(_UNGROUNDED_REPLIES)
+
         if resident_context:
             dynamic_system_parts.append(
                 "<knowledge_base source=\"resident_canonical\">\n"
@@ -1137,6 +1201,23 @@ class AnthropicProvider:
                 f"<knowledge_base source=\"web\">\n{web_context}\n</knowledge_base>"
             )
 
+        # Разделяем контекст на служебный (профиль жителя, настроение чата,
+        # сжатые сводки — role=system) и реальный диалог (user/assistant).
+        # Служебный контекст уходит отдельными system-сообщениями (их извлечёт
+        # _split_system_and_messages в system-параметр) и НЕ обрезается окном
+        # истории — иначе у активных пользователей персонализация теряется
+        # (окно берёт последние N реплик, а профиль/настроение вставлялись в начало).
+        dialogue_lines: list[tuple[str, str]] = []
+        system_context_lines: list[str] = []
+        for line in context:
+            role, text = _parse_context_line(line)
+            if not text:
+                continue
+            if role == "system":
+                system_context_lines.append(text)
+            else:
+                dialogue_lines.append((role, text))
+
         if not has_factual_context:
             dynamic_system_parts.append(
                 "<no_kb_notice>В knowledge_base нет данных по этому вопросу. "
@@ -1146,21 +1227,22 @@ class AnthropicProvider:
 
         dynamic_system_text = "\n\n".join(dynamic_system_parts).strip()
 
-        # Сборка system-сообщения. Для Anthropic-моделей через OpenRouter
-        # используем content-blocks с cache_control на статичной части —
-        # это даёт prompt caching и заметную экономию токенов/латентности.
+        # Сборка system-сообщения: статичная часть с cache_control (prompt caching),
+        # динамическая — контекст знаний и диалога.
         system_message = self._build_system_message(static_system_prompt, dynamic_system_text)
 
-        # Формируем историю как отдельные user/assistant сообщения.
-        # Гибридная обрезка: последние 6 реплик — до 1500 символов, остальные — до 500.
+        # Служебный контекст — отдельными system-сообщениями (не обрезается окном).
         messages: list[dict] = [system_message]
-        history_window = context[-30:]
+        for sys_text in system_context_lines:
+            messages.append({"role": "system", "content": sys_text})
+
+        # Реальный диалог как отдельные user/assistant сообщения.
+        # Гибридная обрезка: последние 6 реплик — до 1500 символов, остальные — до 500.
+        history_window = dialogue_lines[-30:]
         recent_cutoff = max(0, len(history_window) - 6)
-        for idx, line in enumerate(history_window):
+        for idx, (role, text) in enumerate(history_window):
             char_limit = 1500 if idx >= recent_cutoff else 500
-            role, text = _parse_context_line(line)
-            if text:
-                messages.append({"role": role, "content": text[:char_limit]})
+            messages.append({"role": role, "content": text[:char_limit]})
 
         # Style-hint добавляем к финальному запросу пользователя — рядом с
         # текстом, который Claude должен переформулировать.
@@ -1234,6 +1316,8 @@ class AnthropicProvider:
                     {"role": "user", "content": text[:2000]},
                 ],
                 chat_id=chat_id,
+                temperature=0.2,
+                response_format={"type": "json_object"},
             )
             data = json.loads(content)
             category = str(data.get("category", "общее"))
@@ -1260,6 +1344,7 @@ class AnthropicProvider:
                     {"role": "user", "content": conversation[:3000]},
                 ],
                 chat_id=chat_id,
+                temperature=0.3,
             )
             return content[:500]
         except RuntimeError as exc:
@@ -1279,6 +1364,8 @@ class AnthropicProvider:
                     {"role": "user", "content": dialog[:2000]},
                 ],
                 chat_id=chat_id,
+                temperature=0.2,
+                response_format={"type": "json_object"},
             )
             return content[:500]
         except RuntimeError as exc:
