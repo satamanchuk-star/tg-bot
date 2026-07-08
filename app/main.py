@@ -477,6 +477,20 @@ async def cleanup_blackjack_commands(bot: Bot) -> None:
             pass
 
 
+async def _systematize_rag_job() -> None:
+    """Ночная систематизация RAG-базы (категории, канонические тексты)."""
+    try:
+        from app.services.rag import systematize_rag
+        async for session in get_session():
+            changed = await systematize_rag(session, settings.forum_chat_id)
+            if changed:
+                await session.commit()
+            logger.info("RAG систематизация: обновлено %s записей.", changed)
+            return
+    except Exception:
+        logger.exception("Ошибка ночной систематизации RAG.")
+
+
 async def cleanup_database() -> None:
     """Удаляет старые техданные и уменьшает размер SQLite-файла."""
     stats: dict[str, int] | None = None
@@ -562,6 +576,14 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         "cron",
         hour=4,
         minute=20,
+    )
+    # Систематизация RAG вынесена из hot-path ответа ассистента (см. _get_rag_context):
+    # перезапись категорий/канонических текстов — раз в ночь, а не на каждый вопрос.
+    scheduler.add_job(
+        _systematize_rag_job,
+        "cron",
+        hour=4,
+        minute=40,
     )
     scheduler.add_job(
         _sync_places_from_sheets,
@@ -1029,8 +1051,12 @@ async def main() -> None:
                 )
                 break  # API ошибка (неверный токен) — ретраи бесполезны
     finally:
+        # aiogram сам ловит SIGTERM/SIGINT (handle_signals=True в start_polling)
+        # и корректно останавливает polling; здесь — только освобождение ресурсов.
+        # wait=False: не ждём завершения бегущих джоб, чтобы docker stop
+        # укладывался в stop_grace_period и не получал SIGKILL.
         if scheduler is not None:
-            scheduler.shutdown()
+            scheduler.shutdown(wait=False)
         await close_ai_client()
         await bot.session.close()
 
