@@ -456,6 +456,34 @@ _UNGROUNDED_REPLIES = (
 _LAST_STYLE_HINT_BY_USER: dict[tuple[int, int], str] = {}
 
 
+# Маркеры фактического вопроса (адрес/телефон/график/тариф/процедура) — только
+# такие вопросы требуют опоры в базе знаний. Творческие просьбы («сформулируй»,
+# «напиши объявление») и рассуждения гейт не трогает.
+_FACTUAL_QUESTION_PATTERNS = re.compile(
+    r"(?ix)"
+    r"\b(где|куда|когда|во\s+сколько|сколько|почём|телефон|адрес|контакт|номер|"
+    r"график|расписание|режим\s+работы|тариф|стоимост\w*|цен[аыу]|"
+    r"как\s+(оформить|получить|записаться|попасть|подключить|заказать|вызвать|оплатить|добраться|проехать|передать)|"
+    r"работает\s+ли|есть\s+ли|чей|куда\s+звонить|куда\s+обращаться|кто\s+отвеча\w*)\b"
+)
+
+# Творческие/редакторские просьбы: модель работает с текстом из диалога,
+# опора в базе знаний не нужна — гейт не применяем.
+_DRAFTING_REQUEST_PATTERNS = re.compile(
+    r"(?i)\b(напиши|напечатай|сформулируй|составь|придумай|перепиши|переведи|"
+    r"сократи|подправь|исправь|оформи|помоги\s+(написать|составить|сформулировать))\b"
+)
+
+
+def _asks_local_facts(text: str) -> bool:
+    """Фактический ли это вопрос, требующий опоры в базе знаний."""
+    if not text:
+        return False
+    if _DRAFTING_REQUEST_PATTERNS.search(text):
+        return False
+    return bool(_FACTUAL_QUESTION_PATTERNS.search(text))
+
+
 _SMALLTALK_PATTERNS = re.compile(
     r"(?ix)"
     r"\b(привет|здаров|здорово|здравствуй|хай|hello|hi|добрый\s+(день|вечер|утро)|"
@@ -1129,12 +1157,19 @@ class AnthropicProvider:
 
         # «Реже, но точнее»: фактический вопрос без опоры в базе знаний → честный
         # «не знаю» вместо генерации (модель не выдумывает, вызов к API экономится).
-        # Болтовню/приветствия пропускаем — там фактическая точность не нужна.
+        # Гейт бьёт ТОЛЬКО по фактическим вопросам (_asks_local_facts): болтовня,
+        # творческие просьбы («сформулируй», «напиши объявление») и рассуждения
+        # уходят в модель — там точность фактов не нужна, а no_kb_notice ниже
+        # всё равно запрещает выдумывать факты о ЖК. Короткий follow-up в живом
+        # диалоге тоже пропускаем: ответ может содержаться в контексте беседы.
+        _is_short_followup = bool(context) and len(safe_prompt) < 40
         if (
             settings.ai_require_grounding
             and not has_factual_context
             and not web_context
             and not _looks_like_smalltalk(safe_prompt)
+            and _asks_local_facts(safe_prompt)
+            and not _is_short_followup
         ):
             logger.info("ANSWER_GATE: ungrounded factual question → honest 'не знаю' prompt=%r", safe_prompt[:80])
             return random.choice(_UNGROUNDED_REPLIES)

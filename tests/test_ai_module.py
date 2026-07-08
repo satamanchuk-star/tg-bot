@@ -254,6 +254,64 @@ def test_assistant_stays_silent_when_ungrounded(monkeypatch) -> None:
     asyncio.run(provider.aclose())
 
 
+def _patch_empty_knowledge(monkeypatch, provider) -> None:
+    """Все источники знаний пустые — для тестов гейта."""
+    from app.services import ai_module
+
+    async def _empty(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return ""
+
+    monkeypatch.setattr(ai_module, "build_resident_context", lambda *a, **k: "")
+    monkeypatch.setattr(ai_module, "should_search_web", lambda *a, **k: False)
+    monkeypatch.setattr(ai_module, "_get_rag_context", _empty)
+    monkeypatch.setattr(ai_module, "_get_faq_answer", _empty)
+    monkeypatch.setattr(ai_module, "_get_places_context", _empty)
+
+
+def test_gate_lets_drafting_requests_through(monkeypatch) -> None:
+    """Творческая просьба без опоры в KB НЕ гейтится — уходит в модель."""
+    provider = OpenRouterProvider()
+    _patch_empty_knowledge(monkeypatch, provider)
+
+    called: list[bool] = []
+
+    async def _fake_completion(messages, *, chat_id, **kwargs):  # type: ignore[no-untyped-def]
+        called.append(True)
+        return ("Объявление: субботник в воскресенье в 10:00.", 10)
+
+    monkeypatch.setattr(provider, "_chat_completion", _fake_completion)
+
+    reply = asyncio.run(provider.assistant_reply(
+        "напиши объявление о субботнике в воскресенье", [], chat_id=1,
+    ))
+    assert called, "творческая просьба должна дойти до модели"
+    assert "субботник" in reply.lower()
+    asyncio.run(provider.aclose())
+
+
+def test_gate_lets_short_followup_through(monkeypatch) -> None:
+    """Короткий follow-up в живом диалоге НЕ гейтится: ответ может быть в контексте."""
+    provider = OpenRouterProvider()
+    _patch_empty_knowledge(monkeypatch, provider)
+
+    called: list[bool] = []
+
+    async def _fake_completion(messages, *, chat_id, **kwargs):  # type: ignore[no-untyped-def]
+        called.append(True)
+        return ("В 10 утра, как договаривались.", 5)
+
+    monkeypatch.setattr(provider, "_chat_completion", _fake_completion)
+
+    context = [
+        "user: когда собираемся на субботник?",
+        "assistant: В воскресенье в 10:00 у второго подъезда.",
+    ]
+    reply = asyncio.run(provider.assistant_reply("а во сколько?", context, chat_id=1))
+    assert called, "короткий follow-up должен дойти до модели"
+    assert reply
+    asyncio.run(provider.aclose())
+
+
 def test_openrouter_assistant_includes_resident_kb_in_context(monkeypatch) -> None:
     """KB-контент передаётся как контекст в AI (не bypasses AI)."""
     provider = OpenRouterProvider()
