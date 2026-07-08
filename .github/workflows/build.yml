@@ -77,7 +77,9 @@ jobs:
             exit 1
           fi
           printf '%s\n' "${BOT_ENV}" > .env
-          chmod 600 .env
+          # 644, чтобы scp-action (пакует файлы в своём контейнере под другим uid)
+          # смог прочитать файл. Строгие права 600 ставятся на сервере при деплое.
+          chmod 644 .env
 
       # Копируем docker-compose.yaml и .env на сервер.
       - name: Copy deploy files to server
