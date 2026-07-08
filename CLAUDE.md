@@ -14,7 +14,6 @@ python -m app.main
 
 # Build and push Docker image
 ./build.sh      # Linux/macOS
-build.bat       # Windows
 
 # Deploy (pull and restart)
 ./reload.sh

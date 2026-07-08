@@ -41,7 +41,6 @@ from app.handlers import (
     shop,
     suggest,
     text_publish,
-    welcome,
 )
 from app.models import MigrationFlag, UserStat
 from app.services.topic_stats import bump_topic_stat
@@ -57,7 +56,6 @@ from app.services.health import get_health_state, update_heartbeat, update_notic
 from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
 from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, set_ai_admin_notifier
-from app.services.proxy import ProxyManager
 from app.services.daily_messages import send_morning_greeting
 from app.services.personalization import send_weekly_nudges
 from app.services.sheets import sync_places_from_sheet
@@ -140,28 +138,8 @@ MAX_RETRIES_ON_FLOOD = 3
 MAX_RETRIES_ON_NETWORK = 3
 NETWORK_RETRY_BACKOFF = (1.0, 2.0, 4.0)
 
-# Глобальный менеджер прокси; None если прокси не включены
-_proxy_manager: ProxyManager | None = None
-
-
 class RetryOnFloodSession(AiohttpSession):
-    """Повторяет запросы при флуд-контроле и сетевых сбоях; ротирует прокси при необходимости.
-
-    Если передан proxy_manager — при каждом сетевом сбое переключается на
-    следующий прокси из пула перед повтором запроса.
-    """
-
-    def __init__(self, proxy_manager: ProxyManager | None = None, **kwargs):
-        proxy = proxy_manager.get_current() if proxy_manager else None
-        try:
-            super().__init__(proxy=proxy, **kwargs)
-        except RuntimeError as exc:
-            # aiogram требует aiohttp-socks для любого прокси; если пакет не установлен
-            # или прокси битый — запускаемся без прокси, чтобы не уронить весь бот.
-            logger.warning("Не удалось инициализировать прокси (%s), запускаюсь без прокси", exc)
-            super().__init__(proxy=None, **kwargs)
-            proxy_manager = None
-        self._proxy_manager = proxy_manager
+    """Повторяет запросы при флуд-контроле и сетевых сбоях Telegram."""
 
     async def make_request(
         self,
@@ -185,16 +163,6 @@ class RetryOnFloodSession(AiohttpSession):
                 await asyncio.sleep(e.retry_after)
             except TelegramNetworkError as e:
                 network_attempts += 1
-                if self._proxy_manager:
-                    new_proxy = self._proxy_manager.rotate()
-                    try:
-                        # Закрываем текущую сессию — следующий вызов super().make_request
-                        # создаст новую с обновлённым proxy (AiohttpSession ленив).
-                        await self.close()
-                        self.proxy = new_proxy
-                    except Exception as proxy_exc:
-                        logger.warning("Не удалось сменить прокси (%s), отключаю ротацию", proxy_exc)
-                        self._proxy_manager = None
                 if network_attempts >= MAX_RETRIES_ON_NETWORK:
                     logger.warning(
                         "Сетевой сбой Telegram после %d попыток: %s",
@@ -318,39 +286,6 @@ async def init_db(async_engine: AsyncEngine) -> None:
                     )
                 )
 
-            if inspector.has_table("resident_services"):
-                duplicate_rows = sync_conn.execute(
-                    text(
-                        "SELECT chat_id, source_message_id, MAX(id) AS keep_id "
-                        "FROM resident_services "
-                        "WHERE source_message_id IS NOT NULL "
-                        "GROUP BY chat_id, source_message_id "
-                        "HAVING COUNT(*) > 1"
-                    )
-                ).fetchall()
-                for duplicate in duplicate_rows:
-                    sync_conn.execute(
-                        text(
-                            "UPDATE resident_services "
-                            "SET source_message_id = NULL "
-                            "WHERE chat_id = :chat_id "
-                            "AND source_message_id = :source_message_id "
-                            "AND id <> :keep_id"
-                        ),
-                        {
-                            "chat_id": duplicate.chat_id,
-                            "source_message_id": duplicate.source_message_id,
-                            "keep_id": duplicate.keep_id,
-                        },
-                    )
-                sync_conn.execute(
-                    text(
-                        "CREATE UNIQUE INDEX IF NOT EXISTS "
-                        "uq_resident_services_chat_source_message_idx "
-                        "ON resident_services(chat_id, source_message_id)"
-                    )
-                )
-
             # Миграция resident_profiles (создаётся через create_all,
             # но проверяем на всякий случай)
             if inspector.has_table("resident_profiles"):
@@ -416,8 +351,8 @@ async def apply_v11_stats_reset(session: AsyncSession) -> None:
 
 
 async def drop_orphaned_tables(session: AsyncSession) -> None:
-    """Удаляет осиротевшие таблицы quiz_* и lottery_tickets."""
-    flag = await session.get(MigrationFlag, "drop_orphaned_quiz_lottery")
+    """Удаляет осиротевшие таблицы (quiz/lottery + мёртвые модели v1.2)."""
+    flag = await session.get(MigrationFlag, "drop_orphaned_tables_v2")
     if flag:
         return
 
@@ -428,11 +363,14 @@ async def drop_orphaned_tables(session: AsyncSession) -> None:
         "quiz_sessions",
         "quiz_used_questions",
         "quiz_user_stats",
+        # Модели удалены из кода (мёртвый функционал):
+        "resident_services",
+        "moderation_calibrations",
     ]
     for table_name in orphaned:
         await session.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
 
-    session.add(MigrationFlag(key="drop_orphaned_quiz_lottery"))
+    session.add(MigrationFlag(key="drop_orphaned_tables_v2"))
     await session.commit()
     logger.info("Удалены осиротевшие таблицы: %s", ", ".join(orphaned))
 
@@ -599,12 +537,6 @@ def _cleanup_flood_tracker() -> None:
 
 async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
-    if _proxy_manager is not None:
-        scheduler.add_job(
-            _proxy_manager.refresh_and_find,
-            "interval",
-            minutes=settings.proxy_refresh_interval_min,
-        )
     scheduler.add_job(
         send_weekly_leaderboard,
         "cron",
@@ -801,7 +733,6 @@ async def on_startup_warmup(bot: Bot) -> None:
                     BotCommand(command="help", description="Справка и навигация по форуму"),
                     BotCommand(command="rules", description="Правила нашего сообщества"),
                     BotCommand(command="ai", description="Задать вопрос Жаботу"),
-                    BotCommand(command="score", description="Мои монеты и статистика"),
                     BotCommand(command="предложить", description="Предложить место в инфраструктуре ЖК"),
                 ],
             )
@@ -828,12 +759,6 @@ async def on_startup_warmup(bot: Bot) -> None:
                     BotCommand(command="reset_stats", description="Сбросить статистику"),
                     BotCommand(command="form", description="Форма для шлагбаума"),
                     BotCommand(command="text", description="Текст от лица бота"),
-                    BotCommand(command="meme", description="🖼 Мем про жизнь в ЖК"),
-                    BotCommand(command="poster", description="🖼 Афиша мероприятия"),
-                    BotCommand(command="digest_image", description="🖼 Иллюстрация для дайджеста"),
-                    BotCommand(command="rules_image", description="🖼 Иллюстрация правила"),
-                    BotCommand(command="welcome_card", description="🖼 Карточка приветствия"),
-                    BotCommand(command="warning_image", description="🖼 Предупреждающее изображение"),
                     BotCommand(command="rag_bot", description="Добавить запись в RAG базу"),
                     BotCommand(command="rag_sync", description="Систематизировать RAG базу"),
                     BotCommand(command="restart_jobs", description="Перезапуск зависших задач"),
@@ -1022,44 +947,8 @@ async def main() -> None:
         )
         raise SystemExit(1)
 
-    # Инициализация прокси (до создания бота, чтобы сессия сразу получила адрес)
-    global _proxy_manager
-    if settings.proxy_enabled or settings.proxy_manual:
-        _proxy_manager = ProxyManager(
-            working_pool_size=settings.proxy_working_pool_size,
-            test_limit=settings.proxy_test_limit,
-            state_path=Path(settings.proxy_state_path),
-            manual_proxy=settings.proxy_manual,
-        )
-        if settings.proxy_manual:
-            logger.info("Прокси: ручной адрес задан, автоподбор пропущен")
-            ok = await _proxy_manager.validate_working_pool()
-            if not ok:
-                logger.warning(
-                    "Ручной прокси не отвечает, всё равно пробуем через него "
-                    "(Telegram может быть временно недоступен для прокси)"
-                )
-        else:
-            logger.info("Прокси включены, ищу рабочие…")
-            # Сначала пробуем прокси, которые уже были рабочими в прошлом запуске
-            if _proxy_manager.count > 0:
-                await _proxy_manager.validate_working_pool()
-            if _proxy_manager.count < settings.proxy_working_pool_size:
-                count = await _proxy_manager.refresh()
-                if count > 0:
-                    await _proxy_manager.find_working()
-            if _proxy_manager.count == 0:
-                logger.warning("Рабочий прокси не найден, работаем без прокси")
-                _proxy_manager = None
-            else:
-                logger.info(
-                    "Прокси: в пуле %d рабочих, текущий %s",
-                    _proxy_manager.count,
-                    _proxy_manager.get_current(),
-                )
-
     try:
-        bot = Bot(token=settings.bot_token, session=RetryOnFloodSession(proxy_manager=_proxy_manager))
+        bot = Bot(token=settings.bot_token, session=RetryOnFloodSession())
     except TokenValidationError:
         token_preview = settings.bot_token[:10] + "..." if len(settings.bot_token) > 10 else settings.bot_token
         logger.error(
@@ -1108,7 +997,8 @@ async def main() -> None:
                             "message",
                             "edited_message",
                             "callback_query",
-                            "message_reaction",
+                            # chat_member оставлен под приветствие новичков
+                            # (handlers/welcome.py — сейчас не подключён).
                             "chat_member",
                         ],
                     )
