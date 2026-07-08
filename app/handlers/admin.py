@@ -637,6 +637,8 @@ async def rag_bot_command(message: Message, bot: Bot) -> None:
             added_by_user_id=admin_id,
             source_user_id=source_user_id,
             source_message_id=target_msg.message_id,
+            # /rag_bot — админский канал знаний: запись бессрочна и приоритетна.
+            is_admin=True,
         )
         # Преобразуем запись в канонический вид без отдельной приоритизации.
         record.rag_category = cat_result.category

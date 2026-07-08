@@ -52,7 +52,7 @@ async def _fake_session_gen():
     yield _DummySession()
 
 
-def test_rag_bot_canonicalizes_without_admin_priority(monkeypatch) -> None:
+def test_rag_bot_marks_entry_as_admin(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     async def _allow_admin(_message, _bot) -> bool:
@@ -83,6 +83,7 @@ def test_rag_bot_canonicalizes_without_admin_priority(monkeypatch) -> None:
     message = _DummyMessage()
     asyncio.run(rag_bot_command(message, _DummyBot()))
 
-    assert "is_admin" not in captured
+    # /rag_bot — админский канал: запись помечается is_admin=True (бессрочна, приоритетна).
+    assert captured["is_admin"] is True
     assert captured["message_text"] == "Очень важное новое знание по ЖК."
     assert message.replies
