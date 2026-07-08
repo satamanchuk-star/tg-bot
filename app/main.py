@@ -823,6 +823,7 @@ async def on_startup_warmup(bot: Bot) -> None:
                     BotCommand(command="training_on", description="Включить режим обучения"),
                     BotCommand(command="training_off", description="Выключить режим обучения"),
                     BotCommand(command="reload_profanity", description="Перечитать мат-словари"),
+                    BotCommand(command="kb_reload", description="Перечитать базу знаний ЖК"),
                     BotCommand(command="reset_routing_state", description="Сбросить ожидания роутинга"),
                     BotCommand(command="reset_stats", description="Сбросить статистику"),
                     BotCommand(command="form", description="Форма для шлагбаума"),
