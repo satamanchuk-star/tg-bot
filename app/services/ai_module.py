@@ -19,7 +19,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.db import get_session
 from app.models import Place
-from app.services.ai_usage import add_usage, can_consume_ai, get_usage_stats
+from app.services.ai_usage import add_tokens, add_usage, get_usage_stats, try_reserve_request
 from app.services.faq import get_faq_answer
 from app.services.resident_kb import build_resident_answer, build_resident_context, search_resident_kb
 from app.services.web_search import format_search_context, search_duckduckgo, should_search_web
@@ -834,6 +834,7 @@ class AnthropicProvider:
         temperature: float,
         response_format: dict | None,
         fallback_model: str,
+        request_reserved: bool = False,
     ) -> tuple[str, int]:
         """Единая точка вызова Anthropic Messages API. Возвращает (текст, токены).
         SDK сам ретраит 429/5xx (max_retries); здесь — один retry на fallback-модель
@@ -897,15 +898,28 @@ class AnthropicProvider:
                 raise RuntimeError("AI вернул пустой текст")
             usage = getattr(response, "usage", None)
             tokens = 0
+            cache_read = 0
+            cache_write = 0
             if usage is not None:
                 tokens = int(getattr(usage, "input_tokens", 0) or 0) + int(
                     getattr(usage, "output_tokens", 0) or 0
                 )
-            await _add_remote_usage(chat_id, tokens)
+                cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+                cache_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+            if request_reserved:
+                # Запрос уже учтён атомарным резервом — дописываем только токены.
+                await _add_remote_tokens(chat_id, tokens)
+            else:
+                await _add_remote_usage(chat_id, tokens)
             if used_fallback and model_id == self._model and current_model != self._model:
                 logger.warning("AI model switched to fallback for runtime stability: %r", current_model)
                 self._model = current_model
-            logger.info("AI response <- tokens=%s chat_id=%s", tokens, chat_id)
+            # cache_read=0 при повторных запросах → prompt caching не работает
+            # (например, статичный префикс короче минимума модели).
+            logger.info(
+                "AI response <- tokens=%s cache_read=%s cache_write=%s chat_id=%s",
+                tokens, cache_read, cache_write, chat_id,
+            )
             return content, tokens
 
     async def _chat_completion(
@@ -920,10 +934,12 @@ class AnthropicProvider:
     ) -> tuple[str, int]:
         if not settings.ai_key:
             raise RuntimeError("AI_KEY не задан")
+        request_reserved = False
         if not bypass_limit:
             allowed, reason = await _can_use_remote_ai(chat_id)
             if not allowed:
                 raise RuntimeError(f"AI лимит: {reason or 'превышен'}")
+            request_reserved = True
         model_id = self._model if model is None else _normalize_model_id(model)
         return await self._messages_create(
             model_id,
@@ -933,6 +949,7 @@ class AnthropicProvider:
             temperature=temperature,
             response_format=response_format,
             fallback_model=_normalize_model_id(settings.ai_fallback_model),
+            request_reserved=request_reserved,
         )
 
     async def _chat_completion_with_model(
@@ -1986,14 +2003,16 @@ async def _get_faq_answer(chat_id: int, query: str) -> str | None:
 
 
 async def _get_rag_context(chat_id: int, query: str) -> str:
-    """Подгружает весь RAG-контекст, ранжируя его по релевантности запроса."""
+    """Подгружает весь RAG-контекст, ранжируя его по релевантности запроса.
+
+    Только чтение: систематизация (перезапись категорий/канонических текстов)
+    вынесена в ночную джобу планировщика — записи в БД на каждом ответе
+    ассистента давали лишнюю латентность в hot-path.
+    """
     try:
-        from app.services.rag import build_rag_context, systematize_rag
+        from app.services.rag import build_rag_context
 
         async for session in get_session():
-            changed = await systematize_rag(session, chat_id)
-            if changed:
-                await session.commit()
             return await build_rag_context(session, chat_id=chat_id, query=query, top_k=8)
     except Exception as exc:
         logger.warning("RAG search failed: %s", exc)
@@ -2179,9 +2198,10 @@ reload_profanity_runtime()
 
 
 async def _can_use_remote_ai(chat_id: int) -> tuple[bool, str | None]:
+    """Атомарно резервирует запрос в счёт дневного лимита (проверка+инкремент одной операцией)."""
     date_key = now_tz().date().isoformat()
     async for session in get_session():
-        allowed, reason = await can_consume_ai(
+        allowed, reason = await try_reserve_request(
             session,
             date_key=date_key,
             chat_id=chat_id,
@@ -2193,9 +2213,18 @@ async def _can_use_remote_ai(chat_id: int) -> tuple[bool, str | None]:
 
 
 async def _add_remote_usage(chat_id: int, tokens: int) -> None:
+    """Полный учёт (запрос + токены) — для путей без предварительного резерва."""
     date_key = now_tz().date().isoformat()
     async for session in get_session():
         await add_usage(session, date_key=date_key, chat_id=chat_id, tokens_used=tokens)
+        return
+
+
+async def _add_remote_tokens(chat_id: int, tokens: int) -> None:
+    """Только токены — запрос уже учтён резервом в _can_use_remote_ai."""
+    date_key = now_tz().date().isoformat()
+    async for session in get_session():
+        await add_tokens(session, date_key=date_key, chat_id=chat_id, tokens_used=tokens)
         return
 
 

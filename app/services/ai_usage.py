@@ -62,6 +62,77 @@ async def can_consume_ai(
     return True, None
 
 
+async def try_reserve_request(
+    session: AsyncSession,
+    *,
+    date_key: str,
+    chat_id: int,
+    request_limit: int,
+    token_limit: int,
+) -> tuple[bool, str | None]:
+    """Атомарно резервирует один AI-запрос в счёт дневного лимита.
+
+    Проверка и инкремент — одна UPDATE-операция с условием в WHERE, поэтому
+    параллельные корутины не могут все пройти проверку до первой записи
+    (у прежней пары «проверить → после ответа записать» была эта гонка).
+    """
+    now_utc = datetime.now(timezone.utc).isoformat()
+    try:
+        await session.execute(
+            text(
+                "INSERT OR IGNORE INTO ai_usage (date_key, chat_id, request_count, tokens_used, updated_at) "
+                "VALUES (:dk, :cid, 0, 0, :ts)"
+            ),
+            {"dk": date_key, "cid": chat_id, "ts": now_utc},
+        )
+        result = await session.execute(
+            text(
+                "UPDATE ai_usage SET request_count = request_count + 1, updated_at = :ts "
+                "WHERE date_key = :dk AND chat_id = :cid "
+                "AND request_count < :req_limit "
+                "AND (:tok_limit <= 0 OR tokens_used < :tok_limit) "
+                "RETURNING request_count"
+            ),
+            {
+                "dk": date_key, "cid": chat_id, "ts": now_utc,
+                "req_limit": request_limit, "tok_limit": token_limit,
+            },
+        )
+        row = result.fetchone()
+        await session.commit()
+        if row is None:
+            return False, "достигнут дневной лимит AI"
+        return True, None
+    except OperationalError as exc:
+        logger.warning("Не удалось зарезервировать AI-запрос: %s", exc)
+        await session.rollback()
+        # fail-open: при сбое БД не блокируем бота
+        return True, None
+
+
+async def add_tokens(
+    session: AsyncSession,
+    *,
+    date_key: str,
+    chat_id: int,
+    tokens_used: int,
+) -> None:
+    """Добавляет только токены (запрос уже зарезервирован try_reserve_request)."""
+    now_utc = datetime.now(timezone.utc).isoformat()
+    try:
+        await session.execute(
+            text(
+                "UPDATE ai_usage SET tokens_used = tokens_used + :t, updated_at = :ts "
+                "WHERE date_key = :dk AND chat_id = :cid"
+            ),
+            {"t": max(0, tokens_used), "ts": now_utc, "dk": date_key, "cid": chat_id},
+        )
+        await session.commit()
+    except OperationalError as exc:
+        logger.warning("Не удалось записать токены AI: %s", exc)
+        await session.rollback()
+
+
 async def add_usage(
     session: AsyncSession,
     *,
