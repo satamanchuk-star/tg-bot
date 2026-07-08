@@ -54,50 +54,6 @@ _CACHE_STOP_WORDS = {
 
 
 
-def _strip_think_tags(text: str) -> str:
-    """Удаляет теги <think>...</think> из ответов моделей (Qwen, DeepSeek и др.)."""
-    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-    return cleaned
-
-
-def _extract_response_content(data: dict[str, object]) -> str:
-    """Извлекает текст ответа OpenRouter из разных совместимых форматов."""
-    choices = data.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise RuntimeError("AI вернул ответ без choices")
-
-    first_choice = choices[0]
-    if not isinstance(first_choice, dict):
-        raise RuntimeError("AI вернул некорректный формат choices")
-
-    message = first_choice.get("message")
-    if not isinstance(message, dict):
-        raise RuntimeError("AI вернул ответ без message")
-
-    content_raw = message.get("content")
-    if isinstance(content_raw, str):
-        return content_raw
-    if content_raw is None:
-        return ""
-    if isinstance(content_raw, list):
-        parts: list[str] = []
-        for item in content_raw:
-            if isinstance(item, str):
-                parts.append(item)
-                continue
-            if not isinstance(item, dict):
-                continue
-            # Пропускаем reasoning/thinking-блоки — они не должны попадать в ответ.
-            # Инлайн-вариант <think>...</think> обрабатывается в _strip_think_tags.
-            if item.get("type") in ("reasoning", "thinking"):
-                continue
-            text_part = item.get("text")
-            if isinstance(text_part, str) and text_part.strip():
-                parts.append(text_part)
-        return "\n".join(parts)
-    return str(content_raw)
-
-
 def _extract_text_from_message(message: object) -> str:
     """Извлекает текст из ответа Anthropic Messages API (content — список блоков)."""
     blocks = getattr(message, "content", None) or []
@@ -936,7 +892,7 @@ class AnthropicProvider:
             except anthropic.AnthropicError as exc:
                 raise RuntimeError(f"Некорректный ответ AI API: {exc}") from exc
 
-            content = _strip_think_tags(_extract_text_from_message(response))
+            content = _extract_text_from_message(response).strip()
             if not content:
                 raise RuntimeError("AI вернул пустой текст")
             usage = getattr(response, "usage", None)
@@ -2251,10 +2207,6 @@ def get_ai_runtime_status() -> AiRuntimeStatus:
         profanity_prefix_count=len(_PROFANITY_RUNTIME["prefixes"]),
         profanity_exceptions_count=len(_PROFANITY_RUNTIME["exceptions"]),
     )
-
-
-# Обратносовместимый алиас: исторически провайдер назывался OpenRouterProvider.
-OpenRouterProvider = AnthropicProvider
 
 
 def resolve_provider_mode() -> Literal["remote", "stub"]:

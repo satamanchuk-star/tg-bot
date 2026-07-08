@@ -5,7 +5,7 @@ from app.services.ai_module import (
     AiModuleClient,
     _ASSISTANT_SYSTEM_PROMPT,
     _MODERATION_SYSTEM_PROMPT,
-    OpenRouterProvider,
+    AnthropicProvider,
     build_local_assistant_reply,
     detect_aggression_level,
     detect_profanity,
@@ -15,7 +15,6 @@ from app.services.ai_module import (
     mask_personal_data,
     normalize_for_profanity,
     _extract_search_words,
-    _extract_response_content,
     _parse_context_line,
     _normalize_model_id,
     get_ai_client,
@@ -50,25 +49,6 @@ def test_normalize_model_id_replaces_decimal_commas() -> None:
     assert _normalize_model_id("qwen/qwen3，5-flash") == "qwen/qwen3.5-flash"
 
 
-def test_extract_response_content_supports_string() -> None:
-    payload = {"choices": [{"message": {"content": "Привет"}}]}
-    assert _extract_response_content(payload) == "Привет"
-
-
-def test_extract_response_content_supports_content_parts() -> None:
-    payload = {
-        "choices": [
-            {
-                "message": {
-                    "content": [
-                        {"type": "text", "text": "Первая часть"},
-                        {"type": "text", "text": "Вторая часть"},
-                    ]
-                }
-            }
-        ]
-    }
-    assert _extract_response_content(payload) == "Первая часть\nВторая часть"
 
 def test_detects_masked_profanity() -> None:
     normalized = normalize_for_profanity("Да ты б*л_я!")
@@ -213,7 +193,7 @@ def test_moderation_prompt_has_basic_safety_limits() -> None:
 
 
 def test_openrouter_assistant_fallback_on_runtime_error(monkeypatch) -> None:
-    provider = OpenRouterProvider()
+    provider = AnthropicProvider()
 
     async def _raise(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise RuntimeError("network down")
@@ -228,7 +208,7 @@ def test_assistant_stays_silent_when_ungrounded(monkeypatch) -> None:
     """«Реже, но точнее»: фактический вопрос без опоры → честный не-знаю, без вызова модели."""
     from app.services import ai_module
 
-    provider = OpenRouterProvider()
+    provider = AnthropicProvider()
 
     async def _empty(*args, **kwargs):  # type: ignore[no-untyped-def]
         return ""
@@ -270,7 +250,7 @@ def _patch_empty_knowledge(monkeypatch, provider) -> None:
 
 def test_gate_lets_drafting_requests_through(monkeypatch) -> None:
     """Творческая просьба без опоры в KB НЕ гейтится — уходит в модель."""
-    provider = OpenRouterProvider()
+    provider = AnthropicProvider()
     _patch_empty_knowledge(monkeypatch, provider)
 
     called: list[bool] = []
@@ -291,7 +271,7 @@ def test_gate_lets_drafting_requests_through(monkeypatch) -> None:
 
 def test_gate_lets_short_followup_through(monkeypatch) -> None:
     """Короткий follow-up в живом диалоге НЕ гейтится: ответ может быть в контексте."""
-    provider = OpenRouterProvider()
+    provider = AnthropicProvider()
     _patch_empty_knowledge(monkeypatch, provider)
 
     called: list[bool] = []
@@ -314,7 +294,7 @@ def test_gate_lets_short_followup_through(monkeypatch) -> None:
 
 def test_openrouter_assistant_includes_resident_kb_in_context(monkeypatch) -> None:
     """KB-контент передаётся как контекст в AI (не bypasses AI)."""
-    provider = OpenRouterProvider()
+    provider = AnthropicProvider()
 
     kb_text = "Точный ответ из канонической базы"
     monkeypatch.setattr(
@@ -344,7 +324,7 @@ def test_openrouter_assistant_includes_resident_kb_in_context(monkeypatch) -> No
 
 
 def test_openrouter_assistant_includes_history_summary_context(monkeypatch) -> None:
-    provider = OpenRouterProvider()
+    provider = AnthropicProvider()
     summary = "Краткий контекст диалога:\n- Вы: ранее обсуждали шлагбаум"
     captured: list[list[dict]] = []
 
@@ -384,7 +364,7 @@ def test_parse_context_line_maps_summary_to_system() -> None:
 
 
 def test_openrouter_assistant_fallback_on_http_400(monkeypatch) -> None:
-    provider = OpenRouterProvider()
+    provider = AnthropicProvider()
 
     async def _bad_request(*args, **kwargs):  # type: ignore[no-untyped-def]
         request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
@@ -429,7 +409,7 @@ def _patch_completion_env(monkeypatch, provider, create_fn) -> None:
 def test_anthropic_retries_with_fallback_model_on_not_found(monkeypatch) -> None:
     import anthropic
 
-    provider = OpenRouterProvider()
+    provider = AnthropicProvider()
     sent_models: list[str] = []
 
     async def _create(**kwargs):  # type: ignore[no-untyped-def]
@@ -456,7 +436,7 @@ def test_anthropic_retries_with_fallback_model_on_not_found(monkeypatch) -> None
 def test_anthropic_retries_with_fallback_model_on_bad_request(monkeypatch) -> None:
     import anthropic
 
-    provider = OpenRouterProvider()
+    provider = AnthropicProvider()
     sent_models: list[str] = []
 
     async def _create(**kwargs):  # type: ignore[no-untyped-def]
@@ -480,7 +460,7 @@ def test_anthropic_retries_with_fallback_model_on_bad_request(monkeypatch) -> No
     asyncio.run(provider.aclose())
 
 def test_openrouter_summary_fallback_on_runtime_error(monkeypatch) -> None:
-    provider = OpenRouterProvider()
+    provider = AnthropicProvider()
 
     async def _raise(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise RuntimeError("network down")
@@ -492,7 +472,7 @@ def test_openrouter_summary_fallback_on_runtime_error(monkeypatch) -> None:
 
 
 def test_openrouter_chat_completion_raises_on_empty_content(monkeypatch) -> None:
-    provider = OpenRouterProvider()
+    provider = AnthropicProvider()
 
     async def _fake_add_usage(chat_id: int, tokens: int) -> None:
         return None
