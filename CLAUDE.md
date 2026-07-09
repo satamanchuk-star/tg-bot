@@ -36,21 +36,19 @@ app/
 │   ├── admin.py         # /mute, /ban, /strike, /addcoins, /reload_profanity + inline-подтверждения
 │   ├── moderation.py    # Контент-фильтр, антифлуд (catch-all, пропускает FSM)
 │   ├── help.py          # Обработка упоминаний бота, AI-ответы (catch-all, не блокирует)
-│   ├── games.py         # /21 blackjack: команда и callback-и
+│   ├── games.py         # /21 blackjack (роутер ОТКЛЮЧЁН в main.py)
 │   ├── shop.py          # Магазин монет (FSM)
 │   ├── economy.py       # Инициативы жителей — доработки бота за монеты
 │   ├── forms.py         # FSM-анкеты (шлагбаум, соседи)
 │   ├── suggest.py       # Предложить место инфраструктуры ЖК
 │   ├── text_publish.py  # /text — публикация текста от лица бота в топик
 │   ├── personalization.py # /off_nudges, /on_nudges (только DM)
-│   ├── reactions.py     # Emoji-реакции
-│   ├── welcome.py       # Автоприветствие новичков
-│   └── stats.py         # Статистика
+│   └── welcome.py       # Автоприветствие новичков (роутер НЕ подключён)
 ├── services/            # Бизнес-логика (см. «Карта файлов»)
 │   ├── ai_*.py          # AI-слой: ai_module, ai_router, ai_tasks, ai_schemas, ai_usage
 │   ├── rag.py, resident_kb.py, resident_profile.py  # Знания и память
 │   ├── games.py, shop.py, strikes.py, flood.py       # Геймплей и модерация
-│   └── ...              # mood, learning, proactive, health, topic_stats, sheets, proxy и др.
+│   └── ...              # mood, learning, proactive, health, topic_stats, sheets и др.
 └── utils/               # admin (проверки прав), text, time, profanity, safe_telegram, admin_help
 ```
 
@@ -174,9 +172,9 @@ Environment variables in `.env`:
 | Роль | Как определяется | Доступ |
 |------|------------------|--------|
 | **Creator / Administrator** | `utils/admin.is_admin` — статус в чате (`creator`/`administrator`), включая анонимных админов | Все админ-команды (`/mute`, `/ban`, `/strike`, `/addcoins`, `/text`, `/reload_profanity`), правки ответов бота, сброс статистики |
-| **Житель (обычный участник)** | Любой участник форума | Игры (`/21`), магазин, экономика/доработки за монеты, анкеты, предложить место, персональные нажъмы (DM), обычные сообщения с AI-ответами |
+| **Житель (обычный участник)** | Любой участник форума | Игры (`/21` — временно отключены), магазин, экономика/доработки за монеты, анкеты, предложить место, персональные нажъмы (DM), обычные сообщения с AI-ответами |
 | **Бот** | `message.from_user.is_bot` / собственный ID | Публикация от лица бота, реакции, приветствия, проактивные подсказки |
-| **Лог-чат (модераторы)** | `ADMIN_LOG_CHAT_ID` | Получает уведомления модерации; голосованием калибрует модерацию (`moderation_calibration.py`) |
+| **Лог-чат (модераторы)** | `ADMIN_LOG_CHAT_ID` | Получает уведомления модерации и коррекции знаний на подтверждение (кнопки Принять/Отклонить) |
 
 **Правило доступа:** проверка прав — только через `utils/admin.py`. Никогда не
 доверять `user_id` из сообщения как признаку админа без проверки статуса в чате.
@@ -192,20 +190,20 @@ Environment variables in `.env`:
 |--------|-------|
 | **Новая админ-команда** | `handlers/admin.py` (+ проверка `utils/admin.py`); регистрация команд в `main.py` (`_set_admin_commands`); при новой бизнес-логике — сервис в `services/` |
 | **Новая пользовательская команда** | новый/существующий `handlers/*.py`; `dp.include_router(...)` в `main.py` (учесть порядок!); публичные команды — `_set_public_commands` |
-| **Модерация / фильтр контента** | `handlers/moderation.py`, `services/flood.py`, `utils/text.py`, `utils/profanity.py`; калибровка — `services/moderation_calibration.py`, `services/learning.py` |
-| **Игры / блэкджек** | `handlers/games.py` (UI/callbacks), `services/games.py` (логика, рейтинг); таймауты — джоба `check_game_timeouts` в `main.py` |
+| **Модерация / фильтр контента** | `handlers/moderation.py`, `services/flood.py`, `utils/text.py`, `utils/profanity.py`; самообучение/коррекции — `services/learning.py`, `services/admin_corrections.py` |
+| **Игры / блэкджек** | `handlers/games.py` (UI/callbacks, роутер отключён — включить в `main.py` при возврате фичи), `services/games.py` (логика, рейтинг); таймауты — джоба `check_game_timeouts` в `main.py` |
 | **Экономика / монеты / магазин** | `handlers/shop.py` + `services/shop.py`; доработки бота — `handlers/economy.py` + `services/improvements.py`; начисление — `/addcoins` в `admin.py`, модель `UserStat` |
 | **AI-ответы / промпты** | `services/ai_module.py` (генерация), `services/ai_tasks.py` (задачи), `services/ai_router.py` (модель/темп/токены), `services/ai_schemas.py` (структурированный вывод); контекст — `chat_history.py`, `mood.py` |
 | **Новая AI-задача** | добавить запись в `_TASK_CONFIG` (`ai_router.py`) + соответствующие `ai_*_model` поля в `config.py`; вызов через `ai_tasks.py`; квоты — `ai_usage.py` |
-| **База знаний / RAG / память** | `services/rag.py`, `services/resident_kb.py`, `services/resident_profile.py`, `services/faq.py`; веб-поиск — `services/web_search.py` |
+| **База знаний / RAG / память** | `services/rag.py`, `services/resident_kb.py` (перечитать без рестарта — `/kb_reload`), `services/resident_profile.py`, `services/faq.py`; веб-поиск — `services/web_search.py` |
 | **Новая модель БД / поле** | `models.py` (ORM) + идемпотентная миграция в `init_db`/`validate_db` (`main.py`); обслуживание размера — `services/db_maintenance.py` |
 | **Периодическая задача (cron)** | `schedule_jobs` в `main.py` (`scheduler.add_job(...)`); саму логику — в сервис (`daily_messages.py`, `topic_stats.py`, `health.py`, `proactive.py`) |
-| **Статистика / сводки** | `handlers/stats.py`, `services/topic_stats.py`, `services/daily_messages.py`; сброс — `services/admin_stats_reset.py` |
-| **Приветствие / онбординг** | `handlers/welcome.py`, `handlers/forms.py`; топики — поля `topic_*` в `config.py` |
+| **Статистика / сводки** | сбор — `LoggingMiddleware` в `main.py`, `services/topic_stats.py`, `services/daily_messages.py`; сброс — `services/admin_stats_reset.py` |
+| **Приветствие / онбординг** | `handlers/welcome.py` (роутер не подключён), `handlers/forms.py`; топики — поля `topic_*` в `config.py` |
 | **Топики форума** | поля `topic_*` в `config.py` (+ валидатор списка); использование — по всему коду через `settings.topic_*` |
 | **Google Sheets / места** | `services/sheets.py`, `handlers/suggest.py`, модель `Place`; импорт — `scripts/` |
 | **Конфиг / env-переменная** | `config.py` (Pydantic Settings) + `.env.example` (пустое поле); **секрет — только в GitHub Secrets** |
-| **Здоровье / heartbeat / прокси** | `services/health.py`, `services/proxy.py`; джобы `heartbeat_job` в `main.py` |
+| **Здоровье / heartbeat** | `services/health.py`; джоба `heartbeat_job` в `main.py` |
 | **Устойчивость к ошибкам Telegram** | `utils/safe_telegram.py` — оборачивать вызовы API, которые не должны ронять джобу |
 | **Тесты** | `tests/` — зеркалит структуру; фикстуры в `tests/conftest.py`; запуск: `pytest tests/<файл>` |
 | **Деплой / CI** | `.github/workflows/build.yml`, `quality-gate.yml`, `Dockerfile`, `docker-compose.yaml`, `reload.sh` |
