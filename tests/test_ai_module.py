@@ -189,7 +189,8 @@ def test_assistant_prompt_has_human_style_and_limits() -> None:
 
 def test_moderation_prompt_has_basic_safety_limits() -> None:
     assert "Верни только JSON" in _MODERATION_SYSTEM_PROMPT
-    assert "При сомнении между severity 0 и 1 — ставь 0" in _MODERATION_SYSTEM_PROMPT
+    assert "ПРЕЗУМПЦИЯ НЕВИНОВНОСТИ" in _MODERATION_SYSTEM_PROMPT
+    assert "При ЛЮБОМ сомнении понижай severity" in _MODERATION_SYSTEM_PROMPT
 
 
 def test_openrouter_assistant_fallback_on_runtime_error(monkeypatch) -> None:

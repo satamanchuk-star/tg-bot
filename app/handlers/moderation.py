@@ -105,6 +105,11 @@ def is_training_mode() -> bool:
     return settings.moderation_training_mode
 
 
+# Презумпция невиновности: страйк/удаление (severity ≥ 2) выдаём только при
+# высокой уверенности модели. При сомнении понижаем до мягкого замечания —
+# лучше не наказать виновного, чем наказать невиновного соседа за шутку.
+_STRIKE_MIN_CONFIDENCE = 0.8
+
 # Dict message_id → timestamp для идемпотентности модерации
 _MODERATED_MSG_IDS: dict[int, float] = {}
 _MODERATED_MSG_IDS_TTL = 120.0
@@ -291,6 +296,16 @@ async def run_moderation(message: Message, bot: Bot) -> int:
     violation_type = getattr(decision, "violation_type", None)
     confidence = getattr(decision, "confidence", None)
     sentiment = getattr(decision, "sentiment", "neutral")
+
+    # Презумпция невиновности: если модель не уверена, страйк/удаление не выдаём —
+    # понижаем severity до мягкого замечания (1). Явные угрозы и доксинг локальный
+    # детектор ловит с confidence ≥ 0.85, поэтому реальные нарушения не смягчаются.
+    if severity >= 2 and confidence is not None and confidence < _STRIKE_MIN_CONFIDENCE:
+        logger.info(
+            "MOD: severity %d→1, уверенность %.2f < %.2f (презумпция невиновности) text=%r",
+            severity, confidence, _STRIKE_MIN_CONFIDENCE, text[:80],
+        )
+        severity = 1
 
     await _store_message_log(message, severity, sentiment=sentiment)
 
@@ -772,11 +787,10 @@ async def moderate_message(message: Message, bot: Bot) -> None:
     """Модерация сообщений. Пропускает пользователей в FSM-состоянии (заполняют форму)."""
     moderated = await run_moderation(message, bot)
 
-    if not moderated:
-        await _maybe_react(message, bot)
-
     # Регистрируем активность топика для проактивного сервиса
     if message.chat.id == settings.forum_chat_id:
+        if not moderated:
+            await _maybe_react(message, bot)
         try:
             from app.services.proactive import (
                 maybe_topic_comment,
