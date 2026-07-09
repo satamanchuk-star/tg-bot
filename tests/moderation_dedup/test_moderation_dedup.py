@@ -95,10 +95,15 @@ def test_prescreen_skips_clean_medium_message() -> None:
 def test_prescreen_sends_suspicious_to_ai() -> None:
     """Мат/капс/длинные сообщения средней длины — в AI-модерацию."""
     profane_medium = (
-        "иди ты нахер со своими правилами, понял меня? достали уже эти запреты "
+        "Ты п1зд@бол со своими правилами, понял меня? достали уже эти запреты "
         "во дворе, сколько можно указывать людям что делать"
     )
     assert moderation._can_skip_ai_moderation(profane_medium) is False
+    threat_medium = (
+        "я тебя убью если ещё раз увижу твою машину на моём месте у подъезда, "
+        "сколько можно повторять одно и то же каждый день"
+    )
+    assert moderation._can_skip_ai_moderation(threat_medium) is False
     caps = "ЭТО ПРОСТО НЕВЫНОСИМО СКОЛЬКО МОЖНО ТЕРПЕТЬ ЭТОТ БАРДАК ВО ДВОРЕ КАЖДЫЙ ДЕНЬ ОДНО И ТО ЖЕ"
     assert moderation._can_skip_ai_moderation(caps) is False
     long_text = "слово " * 100
