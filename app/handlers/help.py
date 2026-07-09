@@ -1631,13 +1631,15 @@ async def mention_help(message: Message, bot: Bot) -> None:
             # Помечаем запрос как отвеченный для дедупликации
             _mark_prompt_answered(message.chat.id, message.from_user.id, prompt)
 
-            # Извлечение фактов о пользователе (фоново)
-            asyncio.create_task(
-                _extract_and_save_profile(
-                    message.chat.id, message.from_user.id, prompt, reply,
-                    getattr(message.from_user, "full_name", None),
+            # Извлечение фактов о пользователе (фоново) — только если в сообщении
+            # есть личные маркеры: экономим LLM-вызов на «где аптека?»-вопросах.
+            if _has_personal_markers(prompt):
+                asyncio.create_task(
+                    _extract_and_save_profile(
+                        message.chat.id, message.from_user.id, prompt, reply,
+                        getattr(message.from_user, "full_name", None),
+                    )
                 )
-            )
 
             # Трекаем вопрос в FAQ (не блокируем ответ при ошибке)
             try:
@@ -1814,6 +1816,17 @@ async def _track_faq(chat_id: int, question_key: str, answer: str) -> None:
             await session.commit()
     except Exception:
         logger.warning("Не удалось обновить FAQ-трекинг.")
+
+
+_PERSONAL_MARKER_RE = re.compile(
+    r"(?i)\b(я|меня|мне|мо[йяёи]|наш[аеи]?|у нас|жив[уё]м?|зовут|работаю|"
+    r"мужа?|жен[аы]|дет[ией]|сын|доч|корпус|квартир|машин)\b"
+)
+
+
+def _has_personal_markers(prompt: str) -> bool:
+    """Есть ли в сообщении личные факты, ради которых стоит звать экстрактор."""
+    return bool(_PERSONAL_MARKER_RE.search(prompt))
 
 
 async def _extract_and_save_profile(

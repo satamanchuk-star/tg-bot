@@ -1257,6 +1257,16 @@ class AnthropicProvider:
         # Логируем какие контексты были найдены и источник ответа
         has_factual_context = bool(resident_context) or bool(rag_text) or bool(faq_answer) or bool(places_context)
 
+        # Кэш ответов: только фактические ответы с опорой в базе и без личной
+        # истории (короткий/пустой контекст) — повторный частый вопрос
+        # («как заказать пропуск?») отдаём без LLM-вызова.
+        _answer_cache_allowed = has_factual_context and len(context) <= 2
+        if _answer_cache_allowed:
+            _cached_reply = _cache_get(_normalize_cache_key(safe_prompt))
+            if _cached_reply:
+                logger.info("ANSWER_CACHE: hit prompt=%r", safe_prompt[:60])
+                return _cached_reply
+
         # Style-hint по интенту (после вычисления контекста — от него зависит пул).
         # Hint уходит в финальное user-сообщение (не в system), чтобы не ломать
         # prompt caching статичного префикса.
@@ -1406,6 +1416,8 @@ class AnthropicProvider:
                 model=settings.ai_reply_model,
             )
             reply = content[:500]
+            if _answer_cache_allowed:
+                _cache_set(_normalize_cache_key(safe_prompt), reply)
             return reply
         except RuntimeError as exc:
             self._record_runtime_error(exc)

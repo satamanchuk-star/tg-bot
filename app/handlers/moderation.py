@@ -55,15 +55,29 @@ _GATE_REQUEST_ACTION_WORDS = (
 
 
 def _can_skip_ai_moderation(text: str) -> bool:
-    """True → сообщение тривиально, достаточно local_moderation (экономит ~70% запросов).
+    """True → достаточно local_moderation, LLM-вызов не нужен.
 
-    Используется только когда ai_feature_moderation=True; при False и так идёт local.
+    Короткие сообщения скипаются как раньше; средние (до 400 символов) —
+    только если локальные детекторы (мат, агрессия, КАПС) молчат. Всё
+    подозрительное и длинное по-прежнему уходит в AI-модерацию.
     """
-    if len(text) > 60:
-        return False
-    if len(text.split()) > 8:
-        return False
     if _LINK_PATTERN.search(text):
+        return False
+    if len(text) <= 60 and len(text.split()) <= 8:
+        return True
+    if len(text) > 400:
+        return False
+    from app.services.ai_module import (
+        detect_profanity,
+        local_moderation,
+        normalize_for_profanity,
+    )
+    if detect_profanity(normalize_for_profanity(text)):
+        return False
+    if local_moderation(text).severity > 0:
+        return False
+    letters = [c for c in text if c.isalpha()]
+    if letters and sum(c.isupper() for c in letters) / len(letters) > 0.6:
         return False
     return True
 
