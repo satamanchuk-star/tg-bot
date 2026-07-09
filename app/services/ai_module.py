@@ -100,27 +100,43 @@ def _key_to_tokens(key: str) -> frozenset[str]:
     return frozenset(key.split("|")) if key else frozenset()
 
 
+def _split_scope(key: str) -> tuple[str, frozenset[str]]:
+    """Разбивает ключ кэша «chat_id|tok1|tok2|…» на (scope_prefix, content_tokens).
+
+    Токен чата НЕ участвует в сравнении сходства, а scope_prefix («chat_id|»)
+    изолирует fuzzy-поиск по чату: иначе для 4-словного вопроса совпало бы 4 из
+    6 токенов (Jaccard 0.67 > порога 0.65) и ответ из лог-чата утёк бы в форум.
+    """
+    chat_part, sep, norm_part = key.partition("|")
+    if not sep:
+        return "", _key_to_tokens(key)
+    return chat_part + "|", _key_to_tokens(norm_part)
+
+
 def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
 
 
-def _cache_find_similar(tokens: frozenset[str]) -> str | None:
-    """Ищет семантически похожий ответ в кэше по Jaccard-сходству токенов."""
-    if not tokens or not _ASSISTANT_CACHE_TOKENS:
+def _cache_find_similar(content_tokens: frozenset[str], scope_prefix: str) -> str | None:
+    """Ищет похожий ответ по Jaccard-сходству токенов ВНУТРИ того же чата."""
+    if not content_tokens or not _ASSISTANT_CACHE_TOKENS:
         return None
     now = time.time()
     best_score = _CACHE_SIMILARITY_THRESHOLD
     best_key: str | None = None
     for cached_key, cached_tokens in _ASSISTANT_CACHE_TOKENS.items():
+        # Разные чаты не смешиваем: fuzzy-match только в пределах своего scope.
+        if scope_prefix and not cached_key.startswith(scope_prefix):
+            continue
         entry = _ASSISTANT_CACHE.get(cached_key)
         if entry is None:
             continue
         _, ts = entry
         if now - ts > _CACHE_TTL_SECONDS:
             continue
-        score = _jaccard(tokens, cached_tokens)
+        score = _jaccard(content_tokens, cached_tokens)
         if score > best_score:
             best_score = score
             best_key = cached_key
@@ -133,9 +149,9 @@ def _cache_find_similar(tokens: frozenset[str]) -> str | None:
 def _cache_get(key: str) -> str | None:
     entry = _ASSISTANT_CACHE.get(key)
     if entry is None:
-        # Точного совпадения нет — ищем семантически похожий ответ
-        tokens = _key_to_tokens(key)
-        return _cache_find_similar(tokens)
+        # Точного совпадения нет — ищем семантически похожий ответ в том же чате
+        scope_prefix, content_tokens = _split_scope(key)
+        return _cache_find_similar(content_tokens, scope_prefix)
     answer, timestamp = entry
     if time.time() - timestamp > _CACHE_TTL_SECONDS:
         _ASSISTANT_CACHE.pop(key, None)
@@ -161,7 +177,9 @@ def _cache_set(key: str, answer: str) -> None:
         _ASSISTANT_CACHE.pop(oldest_key, None)
         _ASSISTANT_CACHE_TOKENS.pop(oldest_key, None)
     _ASSISTANT_CACHE[key] = (answer, time.time())
-    _ASSISTANT_CACHE_TOKENS[key] = _key_to_tokens(key)
+    # В индекс сходства кладём только контент-токены (без префикса чата).
+    _, content_tokens = _split_scope(key)
+    _ASSISTANT_CACHE_TOKENS[key] = content_tokens
 
 
 def clear_assistant_cache() -> int:

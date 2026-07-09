@@ -617,3 +617,37 @@ def test_static_prompt_cache_invalidation() -> None:
     second = get_static_assistant_prompt()
     assert first == second  # содержимое то же (KB не менялась)
     assert first is not second  # но объект пересобран
+
+
+def test_answer_cache_is_isolated_between_chats() -> None:
+    """Fuzzy-кэш не должен смешивать чаты: ответ из лог-чата не течёт в форум."""
+    from app.services.ai_module import (
+        _cache_get, _cache_set, _normalize_cache_key, clear_assistant_cache,
+    )
+
+    clear_assistant_cache()
+    key_a = f"100|{_normalize_cache_key('как оформить пропуск на гостя машину')}"
+    _cache_set(key_a, "ОТВЕТ ИЗ ЧАТА A")
+
+    # Точно тот же вопрос в другом чате — fuzzy не должен вернуть ответ чата A
+    key_b = f"200|{_normalize_cache_key('как оформить пропуск на гостя машину')}"
+    assert _cache_get(key_b) is None
+
+    # Близкая переформулировка в том же чате — fuzzy обязан сработать
+    key_a2 = f"100|{_normalize_cache_key('оформить пропуск на гостя машину быстро')}"
+    assert _cache_get(key_a2) == "ОТВЕТ ИЗ ЧАТА A"
+    clear_assistant_cache()
+
+
+def test_social_shortcut_only_for_pure_greetings() -> None:
+    """«Привет, телефон УК» — это запрос, дежурную фразу отдавать нельзя."""
+    from app.handlers.help import _is_pure_social, _local_social_reply
+
+    assert _is_pure_social("привет")
+    assert _is_pure_social("спасибо большое")
+    assert _is_pure_social("здравствуй, жабот")
+    assert not _is_pure_social("привет, телефон УК")
+    assert not _is_pure_social("добрый день, режим работы")
+
+    assert _local_social_reply("привет, телефон УК", 1, 1) is None
+    assert _local_social_reply("спасибо большое", 1, 1) is not None
