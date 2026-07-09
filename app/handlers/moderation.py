@@ -447,8 +447,10 @@ async def _apply_strike_threshold(bot: Bot, message: Message, user_id: int, stri
             await clear_strikes(session, user_id, settings.forum_chat_id)
             await session.commit()
         await _warn_user(message, "слишком много нарушений — бан.", bot)
-    elif strike_count >= 3:
-        # Мут 24ч
+    elif strike_count == 3:
+        # Мут 24ч ровно на 3-м страйке. Точное сравнение (не >=): при гонке
+        # двух конкурентных страйков счётчик даёт 3 и 4 — мут не задваивается.
+        # 4-й страйк — только предупреждение, эскалация дальше на 5-м (бан).
         until = datetime.now(timezone.utc) + timedelta(hours=24)
         permissions = ChatPermissions(can_send_messages=False)
         await safe_call(

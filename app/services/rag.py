@@ -436,7 +436,10 @@ def format_rag_context(messages: list[RagMessage]) -> str:
     for idx, msg in enumerate(unique_by_key.values(), 1):
         category = msg.rag_category or "общее"
         knowledge = msg.rag_canonical_text or msg.message_text
-        parts.append(f"[{idx}] ({category}) {knowledge}")
+        # Метка [АДМИН] реально выводится — промпт ассистента велит ставить
+        # такие записи выше остальных при конфликте фактов внутри RAG-блока.
+        admin_tag = "[АДМИН] " if getattr(msg, "is_admin", False) else ""
+        parts.append(f"[{idx}] {admin_tag}({category}) {knowledge}")
     return "\n".join(parts)
 
 

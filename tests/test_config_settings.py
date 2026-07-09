@@ -58,16 +58,6 @@ def test_settings_reads_anthropic_api_key_alias() -> None:
     assert settings.ai_key == "sk-ant-test-key"
 
 
-def test_settings_reads_openrouter_api_key_alias() -> None:
-    """Старый алиас оставлен для обратной совместимости со старыми деплоями."""
-    settings = Settings(
-        **BASE_ENV,
-        _env_file=None,
-        OPENROUTER_API_KEY="or-test-key",
-    )
-
-    assert settings.ai_key == "or-test-key"
-
 
 def test_settings_reads_ai_api_key_alias() -> None:
     settings = Settings(

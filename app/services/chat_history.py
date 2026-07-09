@@ -42,15 +42,21 @@ async def load_context(
     *,
     limit: int = HISTORY_LIMIT,
 ) -> list[str]:
-    """Загружает историю диалога для подстановки в промпт ИИ."""
+    """Загружает историю диалога для подстановки в промпт ИИ.
+
+    Берём НОВЕЙШИЕ `limit` записей (desc + limit), затем разворачиваем в
+    хронологический порядок. Иначе при накоплении summary-записей (они не
+    вытесняются лимитом) `asc().limit()` отдавал бы старые строки, отбрасывая
+    самые свежие реплики — у активных пользователей контекст «застревал» в прошлом.
+    """
     stmt = (
         select(ChatHistory)
         .where(ChatHistory.chat_id == chat_id, ChatHistory.user_id == user_id)
-        .order_by(ChatHistory.created_at.asc())
+        .order_by(ChatHistory.created_at.desc())
         .limit(limit)
     )
     result = await session.execute(stmt)
-    rows = result.scalars().all()
+    rows = list(reversed(result.scalars().all()))
     lines: list[str] = []
     for r in rows:
         if r.role == "structured_summary" and r.message:

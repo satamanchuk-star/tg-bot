@@ -19,7 +19,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.db import get_session
 from app.models import Place
-from app.services.ai_usage import add_usage, can_consume_ai, get_usage_stats
+from app.services.ai_usage import add_tokens, add_usage, get_usage_stats, try_reserve_request
 from app.services.faq import get_faq_answer
 from app.services.resident_kb import build_resident_answer, build_resident_context, search_resident_kb
 from app.services.web_search import format_search_context, search_duckduckgo, should_search_web
@@ -52,50 +52,6 @@ _CACHE_STOP_WORDS = {
     "тут", "там", "про", "под", "над", "без", "еще", "уже", "тоже",
 }
 
-
-
-def _strip_think_tags(text: str) -> str:
-    """Удаляет теги <think>...</think> из ответов моделей (Qwen, DeepSeek и др.)."""
-    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-    return cleaned
-
-
-def _extract_response_content(data: dict[str, object]) -> str:
-    """Извлекает текст ответа OpenRouter из разных совместимых форматов."""
-    choices = data.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise RuntimeError("AI вернул ответ без choices")
-
-    first_choice = choices[0]
-    if not isinstance(first_choice, dict):
-        raise RuntimeError("AI вернул некорректный формат choices")
-
-    message = first_choice.get("message")
-    if not isinstance(message, dict):
-        raise RuntimeError("AI вернул ответ без message")
-
-    content_raw = message.get("content")
-    if isinstance(content_raw, str):
-        return content_raw
-    if content_raw is None:
-        return ""
-    if isinstance(content_raw, list):
-        parts: list[str] = []
-        for item in content_raw:
-            if isinstance(item, str):
-                parts.append(item)
-                continue
-            if not isinstance(item, dict):
-                continue
-            # Пропускаем reasoning/thinking-блоки — они не должны попадать в ответ.
-            # Инлайн-вариант <think>...</think> обрабатывается в _strip_think_tags.
-            if item.get("type") in ("reasoning", "thinking"):
-                continue
-            text_part = item.get("text")
-            if isinstance(text_part, str) and text_part.strip():
-                parts.append(text_part)
-        return "\n".join(parts)
-    return str(content_raw)
 
 
 def _extract_text_from_message(message: object) -> str:
@@ -442,9 +398,46 @@ _FALLBACK_VARIANTS = (
     "Этого в моей базе сейчас нет.",
 )
 
+# Ответы для гейта «нет опоры в базе знаний». Каждая фраза гарантированно
+# распознаётся как uncertain (_is_uncertain_reply в help.py) → при отсутствии
+# «?» бот молчит, при прямом вопросе даёт одну честную строку.
+_UNGROUNDED_REPLIES = (
+    "Не знаю — точной информации по этому вопросу у меня нет.",
+    "Честно, не знаю: надёжных данных по этому у меня нет.",
+    "Не уверен и не хочу гадать — таких данных у меня нет.",
+)
+
 
 # Последний использованный style-hint per (chat_id, user_id) — чтобы не повторялся подряд.
 _LAST_STYLE_HINT_BY_USER: dict[tuple[int, int], str] = {}
+
+
+# Маркеры фактического вопроса (адрес/телефон/график/тариф/процедура) — только
+# такие вопросы требуют опоры в базе знаний. Творческие просьбы («сформулируй»,
+# «напиши объявление») и рассуждения гейт не трогает.
+_FACTUAL_QUESTION_PATTERNS = re.compile(
+    r"(?ix)"
+    r"\b(где|куда|когда|во\s+сколько|сколько|почём|телефон|адрес|контакт|номер|"
+    r"график|расписание|режим\s+работы|тариф|стоимост\w*|цен[аыу]|"
+    r"как\s+(оформить|получить|записаться|попасть|подключить|заказать|вызвать|оплатить|добраться|проехать|передать)|"
+    r"работает\s+ли|есть\s+ли|чей|куда\s+звонить|куда\s+обращаться|кто\s+отвеча\w*)\b"
+)
+
+# Творческие/редакторские просьбы: модель работает с текстом из диалога,
+# опора в базе знаний не нужна — гейт не применяем.
+_DRAFTING_REQUEST_PATTERNS = re.compile(
+    r"(?i)\b(напиши|напечатай|сформулируй|составь|придумай|перепиши|переведи|"
+    r"сократи|подправь|исправь|оформи|помоги\s+(написать|составить|сформулировать))\b"
+)
+
+
+def _asks_local_facts(text: str) -> bool:
+    """Фактический ли это вопрос, требующий опоры в базе знаний."""
+    if not text:
+        return False
+    if _DRAFTING_REQUEST_PATTERNS.search(text):
+        return False
+    return bool(_FACTUAL_QUESTION_PATTERNS.search(text))
 
 
 _SMALLTALK_PATTERNS = re.compile(
@@ -480,13 +473,20 @@ def _parse_context_line(raw_line: str) -> tuple[str, str]:
     if not line:
         return ("system", "")
 
+    # Служебные сводки (профиль жителя, настроение чата, сжатая история)
+    # приходят с префиксом `summary:` и должны попадать в модель как system-контекст,
+    # а не как реплика пользователя — иначе Haiku путает, кто что сказал.
+    lowered = line.lower()
+    if lowered.startswith("summary:"):
+        return ("system", line[len("summary:"):].strip())
+
     for pattern, role in _CONTEXT_LINE_PATTERNS:
         match = pattern.match(line)
         if match:
             text = match.group(1).strip()
             return (role, text)
 
-    if line.lower().startswith("краткий контекст диалога"):
+    if lowered.startswith("краткий контекст диалога"):
         return ("system", line)
 
     return ("user", line)
@@ -834,6 +834,7 @@ class AnthropicProvider:
         temperature: float,
         response_format: dict | None,
         fallback_model: str,
+        request_reserved: bool = False,
     ) -> tuple[str, int]:
         """Единая точка вызова Anthropic Messages API. Возвращает (текст, токены).
         SDK сам ретраит 429/5xx (max_retries); здесь — один retry на fallback-модель
@@ -892,20 +893,33 @@ class AnthropicProvider:
             except anthropic.AnthropicError as exc:
                 raise RuntimeError(f"Некорректный ответ AI API: {exc}") from exc
 
-            content = _strip_think_tags(_extract_text_from_message(response))
+            content = _extract_text_from_message(response).strip()
             if not content:
                 raise RuntimeError("AI вернул пустой текст")
             usage = getattr(response, "usage", None)
             tokens = 0
+            cache_read = 0
+            cache_write = 0
             if usage is not None:
                 tokens = int(getattr(usage, "input_tokens", 0) or 0) + int(
                     getattr(usage, "output_tokens", 0) or 0
                 )
-            await _add_remote_usage(chat_id, tokens)
+                cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+                cache_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+            if request_reserved:
+                # Запрос уже учтён атомарным резервом — дописываем только токены.
+                await _add_remote_tokens(chat_id, tokens)
+            else:
+                await _add_remote_usage(chat_id, tokens)
             if used_fallback and model_id == self._model and current_model != self._model:
                 logger.warning("AI model switched to fallback for runtime stability: %r", current_model)
                 self._model = current_model
-            logger.info("AI response <- tokens=%s chat_id=%s", tokens, chat_id)
+            # cache_read=0 при повторных запросах → prompt caching не работает
+            # (например, статичный префикс короче минимума модели).
+            logger.info(
+                "AI response <- tokens=%s cache_read=%s cache_write=%s chat_id=%s",
+                tokens, cache_read, cache_write, chat_id,
+            )
             return content, tokens
 
     async def _chat_completion(
@@ -920,10 +934,12 @@ class AnthropicProvider:
     ) -> tuple[str, int]:
         if not settings.ai_key:
             raise RuntimeError("AI_KEY не задан")
+        request_reserved = False
         if not bypass_limit:
             allowed, reason = await _can_use_remote_ai(chat_id)
             if not allowed:
                 raise RuntimeError(f"AI лимит: {reason or 'превышен'}")
+            request_reserved = True
         model_id = self._model if model is None else _normalize_model_id(model)
         return await self._messages_create(
             model_id,
@@ -933,6 +949,7 @@ class AnthropicProvider:
             temperature=temperature,
             response_format=response_format,
             fallback_model=_normalize_model_id(settings.ai_fallback_model),
+            request_reserved=request_reserved,
         )
 
     async def _chat_completion_with_model(
@@ -991,6 +1008,7 @@ class AnthropicProvider:
                     {"role": "user", "content": user_content},
                 ],
                 chat_id=chat_id,
+                temperature=0.2,
                 response_format={"type": "json_object"},
             )
             # Убираем markdown-обёртку ```json ... ``` если модель всё же добавила её
@@ -1110,6 +1128,25 @@ class AnthropicProvider:
             safe_prompt[:80], user_id, topic_id,
         )
 
+        # «Реже, но точнее»: фактический вопрос без опоры в базе знаний → честный
+        # «не знаю» вместо генерации (модель не выдумывает, вызов к API экономится).
+        # Гейт бьёт ТОЛЬКО по фактическим вопросам (_asks_local_facts): болтовня,
+        # творческие просьбы («сформулируй», «напиши объявление») и рассуждения
+        # уходят в модель — там точность фактов не нужна, а no_kb_notice ниже
+        # всё равно запрещает выдумывать факты о ЖК. Короткий follow-up в живом
+        # диалоге тоже пропускаем: ответ может содержаться в контексте беседы.
+        _is_short_followup = bool(context) and len(safe_prompt) < 40
+        if (
+            settings.ai_require_grounding
+            and not has_factual_context
+            and not web_context
+            and not _looks_like_smalltalk(safe_prompt)
+            and _asks_local_facts(safe_prompt)
+            and not _is_short_followup
+        ):
+            logger.info("ANSWER_GATE: ungrounded factual question → honest 'не знаю' prompt=%r", safe_prompt[:80])
+            return random.choice(_UNGROUNDED_REPLIES)
+
         if resident_context:
             dynamic_system_parts.append(
                 "<knowledge_base source=\"resident_canonical\">\n"
@@ -1137,6 +1174,23 @@ class AnthropicProvider:
                 f"<knowledge_base source=\"web\">\n{web_context}\n</knowledge_base>"
             )
 
+        # Разделяем контекст на служебный (профиль жителя, настроение чата,
+        # сжатые сводки — role=system) и реальный диалог (user/assistant).
+        # Служебный контекст уходит отдельными system-сообщениями (их извлечёт
+        # _split_system_and_messages в system-параметр) и НЕ обрезается окном
+        # истории — иначе у активных пользователей персонализация теряется
+        # (окно берёт последние N реплик, а профиль/настроение вставлялись в начало).
+        dialogue_lines: list[tuple[str, str]] = []
+        system_context_lines: list[str] = []
+        for line in context:
+            role, text = _parse_context_line(line)
+            if not text:
+                continue
+            if role == "system":
+                system_context_lines.append(text)
+            else:
+                dialogue_lines.append((role, text))
+
         if not has_factual_context:
             dynamic_system_parts.append(
                 "<no_kb_notice>В knowledge_base нет данных по этому вопросу. "
@@ -1146,21 +1200,22 @@ class AnthropicProvider:
 
         dynamic_system_text = "\n\n".join(dynamic_system_parts).strip()
 
-        # Сборка system-сообщения. Для Anthropic-моделей через OpenRouter
-        # используем content-blocks с cache_control на статичной части —
-        # это даёт prompt caching и заметную экономию токенов/латентности.
+        # Сборка system-сообщения: статичная часть с cache_control (prompt caching),
+        # динамическая — контекст знаний и диалога.
         system_message = self._build_system_message(static_system_prompt, dynamic_system_text)
 
-        # Формируем историю как отдельные user/assistant сообщения.
-        # Гибридная обрезка: последние 6 реплик — до 1500 символов, остальные — до 500.
+        # Служебный контекст — отдельными system-сообщениями (не обрезается окном).
         messages: list[dict] = [system_message]
-        history_window = context[-30:]
+        for sys_text in system_context_lines:
+            messages.append({"role": "system", "content": sys_text})
+
+        # Реальный диалог как отдельные user/assistant сообщения.
+        # Гибридная обрезка: последние 6 реплик — до 1500 символов, остальные — до 500.
+        history_window = dialogue_lines[-30:]
         recent_cutoff = max(0, len(history_window) - 6)
-        for idx, line in enumerate(history_window):
+        for idx, (role, text) in enumerate(history_window):
             char_limit = 1500 if idx >= recent_cutoff else 500
-            role, text = _parse_context_line(line)
-            if text:
-                messages.append({"role": role, "content": text[:char_limit]})
+            messages.append({"role": role, "content": text[:char_limit]})
 
         # Style-hint добавляем к финальному запросу пользователя — рядом с
         # текстом, который Claude должен переформулировать.
@@ -1234,6 +1289,8 @@ class AnthropicProvider:
                     {"role": "user", "content": text[:2000]},
                 ],
                 chat_id=chat_id,
+                temperature=0.2,
+                response_format={"type": "json_object"},
             )
             data = json.loads(content)
             category = str(data.get("category", "общее"))
@@ -1260,6 +1317,7 @@ class AnthropicProvider:
                     {"role": "user", "content": conversation[:3000]},
                 ],
                 chat_id=chat_id,
+                temperature=0.3,
             )
             return content[:500]
         except RuntimeError as exc:
@@ -1279,6 +1337,8 @@ class AnthropicProvider:
                     {"role": "user", "content": dialog[:2000]},
                 ],
                 chat_id=chat_id,
+                temperature=0.2,
+                response_format={"type": "json_object"},
             )
             return content[:500]
         except RuntimeError as exc:
@@ -1943,14 +2003,16 @@ async def _get_faq_answer(chat_id: int, query: str) -> str | None:
 
 
 async def _get_rag_context(chat_id: int, query: str) -> str:
-    """Подгружает весь RAG-контекст, ранжируя его по релевантности запроса."""
+    """Подгружает весь RAG-контекст, ранжируя его по релевантности запроса.
+
+    Только чтение: систематизация (перезапись категорий/канонических текстов)
+    вынесена в ночную джобу планировщика — записи в БД на каждом ответе
+    ассистента давали лишнюю латентность в hot-path.
+    """
     try:
-        from app.services.rag import build_rag_context, systematize_rag
+        from app.services.rag import build_rag_context
 
         async for session in get_session():
-            changed = await systematize_rag(session, chat_id)
-            if changed:
-                await session.commit()
             return await build_rag_context(session, chat_id=chat_id, query=query, top_k=8)
     except Exception as exc:
         logger.warning("RAG search failed: %s", exc)
@@ -2136,9 +2198,10 @@ reload_profanity_runtime()
 
 
 async def _can_use_remote_ai(chat_id: int) -> tuple[bool, str | None]:
+    """Атомарно резервирует запрос в счёт дневного лимита (проверка+инкремент одной операцией)."""
     date_key = now_tz().date().isoformat()
     async for session in get_session():
-        allowed, reason = await can_consume_ai(
+        allowed, reason = await try_reserve_request(
             session,
             date_key=date_key,
             chat_id=chat_id,
@@ -2150,9 +2213,18 @@ async def _can_use_remote_ai(chat_id: int) -> tuple[bool, str | None]:
 
 
 async def _add_remote_usage(chat_id: int, tokens: int) -> None:
+    """Полный учёт (запрос + токены) — для путей без предварительного резерва."""
     date_key = now_tz().date().isoformat()
     async for session in get_session():
         await add_usage(session, date_key=date_key, chat_id=chat_id, tokens_used=tokens)
+        return
+
+
+async def _add_remote_tokens(chat_id: int, tokens: int) -> None:
+    """Только токены — запрос уже учтён резервом в _can_use_remote_ai."""
+    date_key = now_tz().date().isoformat()
+    async for session in get_session():
+        await add_tokens(session, date_key=date_key, chat_id=chat_id, tokens_used=tokens)
         return
 
 
@@ -2164,10 +2236,6 @@ def get_ai_runtime_status() -> AiRuntimeStatus:
         profanity_prefix_count=len(_PROFANITY_RUNTIME["prefixes"]),
         profanity_exceptions_count=len(_PROFANITY_RUNTIME["exceptions"]),
     )
-
-
-# Обратносовместимый алиас: исторически провайдер назывался OpenRouterProvider.
-OpenRouterProvider = AnthropicProvider
 
 
 def resolve_provider_mode() -> Literal["remote", "stub"]:

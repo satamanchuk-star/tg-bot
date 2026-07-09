@@ -47,25 +47,13 @@ class Settings(BaseSettings):
     timezone: str = "Europe/Moscow"
     build_version: str = "dev"
 
-    # Прокси для доступа к Telegram API.
-    # Поддерживается либо автоподбор HTTP/SOCKS-прокси из публичных GitHub-списков,
-    # либо ручной адрес через PROXY_MANUAL (имеет приоритет).
-    proxy_enabled: bool = False
-    proxy_refresh_interval_min: int = 30
-    proxy_manual: str | None = None  # напр. socks5://user:pass@host:1080
-    proxy_working_pool_size: int = 5
-    proxy_test_limit: int = 500
-    proxy_state_path: str = "data/working_proxies.json"
-
     ai_enabled: bool = True
     # Опциональный override эндпоинта Anthropic (например, корпоративный прокси).
     # Пусто → официальный https://api.anthropic.com через anthropic SDK.
     ai_api_url: str | None = None
     ai_key: str | None = Field(
         default=None,
-        validation_alias=AliasChoices(
-            "ANTHROPIC_API_KEY", "AI_KEY", "OPENROUTER_API_KEY", "AI_API_KEY"
-        ),
+        validation_alias=AliasChoices("ANTHROPIC_API_KEY", "AI_KEY", "AI_API_KEY"),
     )
     ai_model: str = Field(
         default="claude-haiku-4-5",
@@ -79,6 +67,10 @@ class Settings(BaseSettings):
     ai_feature_moderation: bool = True
     ai_feature_assistant: bool = True
     ai_feature_web_search: bool = True
+    # «Отвечать реже, но точнее»: на фактический вопрос без опоры в базе знаний
+    # (KB/RAG/FAQ/places/web) бот честно говорит «не знаю» вместо генерации догадки.
+    # Болтовня/приветствия этим гейтом не затрагиваются.
+    ai_require_grounding: bool = True
     # Проактивный режим: бот сам подсказывает, когда может помочь
     ai_feature_proactive: bool = True
     # Профили жителей: бот запоминает факты о пользователях из диалогов
@@ -214,12 +206,6 @@ class Settings(BaseSettings):
             db_path = Path(self.database_url.removeprefix(prefix))
             return db_path.expanduser().resolve().parent
         return Path("/app/data")
-
-    @property
-    def ai_model_is_default(self) -> bool:
-        """Показывает, был ли AI_MODEL задан явно через окружение/.env."""
-        return "ai_model" not in self.model_fields_set
-
 
 def _load_settings() -> Settings:
     try:

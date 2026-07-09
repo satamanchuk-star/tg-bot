@@ -6,11 +6,11 @@ import asyncio
 
 import httpx
 
-from app.services.ai_module import OpenRouterProvider
+from app.services.ai_module import AnthropicProvider
 
 
 def test_assistant_reply_falls_back_on_timeout(monkeypatch) -> None:
-    provider = OpenRouterProvider()
+    provider = AnthropicProvider()
 
     async def _timeout(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise httpx.ReadTimeout("timeout")
@@ -23,7 +23,7 @@ def test_assistant_reply_falls_back_on_timeout(monkeypatch) -> None:
 
 
 def test_assistant_reply_falls_back_on_http_error(monkeypatch) -> None:
-    provider = OpenRouterProvider()
+    provider = AnthropicProvider()
 
     async def _bad_request(*args, **kwargs):  # type: ignore[no-untyped-def]
         request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")

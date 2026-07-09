@@ -1463,7 +1463,10 @@ async def mention_help(message: Message, bot: Bot) -> None:
                             bot=bot,
                         )
                         if applied:
-                            await message.reply("Спасибо за поправку! Записал, в следующий раз не ошибусь 📝")
+                            await message.reply(
+                                "Спасибо за поправку! Передал администраторам на проверку — "
+                                "после подтверждения учту 📝"
+                            )
                             return
                         break
                 except Exception:
@@ -1728,7 +1731,13 @@ async def _check_faq(chat_id: int, question_key: str) -> str | None:
 
 
 async def _track_faq(chat_id: int, question_key: str, answer: str) -> None:
-    """Трекает вопрос в FAQ."""
+    """Трекает вопрос в FAQ.
+
+    «Не знаю»-ответы не трекаем: иначе неинформативный ответ может закрепиться
+    как best_answer и выдаваться дословно из FAQ вместо честного поиска ответа.
+    """
+    if _is_uncertain_reply(answer):
+        return
     try:
         async for session in get_session():
             await track_question(session, chat_id=chat_id, question_key=question_key, answer=answer)

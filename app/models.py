@@ -241,40 +241,6 @@ class ResidentProfile(Base):
     )
 
 
-class ResidentService(Base):
-    """Почему: каталог услуг от жителей ЖК — бот подсказывает соседей-специалистов."""
-    __tablename__ = "resident_services"
-    __table_args__ = (
-        UniqueConstraint(
-            "chat_id",
-            "source_message_id",
-            name="uq_resident_services_chat_source_message",
-        ),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    chat_id: Mapped[int] = mapped_column(Integer, index=True)
-    # Текст оригинального сообщения об услуге
-    message_text: Mapped[str] = mapped_column(Text)
-    # Краткое описание услуги (AI-генерированное или из текста)
-    description: Mapped[str] = mapped_column(Text)
-    # Ключевые слова для поиска (через запятую, lowercase)
-    keywords: Mapped[str] = mapped_column(Text, default="")
-    # Категория услуги (кондитерская, ремонт, красота, обучение и т.д.)
-    category: Mapped[str] = mapped_column(String(100), default="общее", index=True)
-    # ID автора услуги (кто написал сообщение в топике)
-    provider_user_id: Mapped[int] = mapped_column(Integer, index=True)
-    provider_name: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # ID сообщения в топике услуг (для ссылки)
-    source_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # Кто добавил (админ)
-    added_by_user_id: Mapped[int] = mapped_column(Integer)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), index=True
-    )
-
-
 class Place(Base):
     """Почему: справочник инфраструктуры нужен для быстрых ответов бота без внешних API."""
 
@@ -303,19 +269,6 @@ class Place(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
-
-
-class ModerationCalibration(Base):
-    """Почему: хранит историю автокалибровки модерации на основе feedback."""
-    __tablename__ = "moderation_calibrations"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    violation_type: Mapped[str] = mapped_column(String(50))
-    original_severity: Mapped[int] = mapped_column(Integer)
-    adjusted_severity: Mapped[int] = mapped_column(Integer)
-    reason: Mapped[str] = mapped_column(Text)
-    sample_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class BotImprovement(Base):
