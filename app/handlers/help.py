@@ -415,6 +415,102 @@ def _mark_message_processed(message_id: int) -> None:
     _PROCESSED_MSG_IDS.add(message_id)
 
 
+_GREETING_RE = re.compile(
+    r"(?i)\b(привет|здравствуй|здорово|добр(ое|ый)\s+(утро|день|вечер)|хай|салют|доброй\s+ночи)\b"
+)
+_THANKS_RE = re.compile(r"(?i)\b(спасибо|благодарю|пасиб\w*|спс|мерси|выручил\w*)\b")
+
+# Слова, которые допустимо соседствуют с чистым приветствием/спасибо и НЕ
+# делают сообщение содержательным запросом («привет, как дела», «спасибо
+# большое»). Всё, что осталось после вычитания приветствия/благодарности и
+# этих слов, считаем запросом — тогда шорткат не срабатывает.
+_SOCIAL_FILLER = frozenset({
+    "жабот", "жаб", "бот", "ботик", "приветик", "доброго", "хорошего",
+    "дня", "утра", "вечера", "ночи", "как", "дела", "делишки", "жизнь",
+    "поживаешь", "ты", "вы", "тут", "здесь", "там", "всем", "народ",
+    "друзья", "ребят", "ребята", "дорогой", "дорогая", "пожалуйста",
+    "плиз", "сосед", "соседи", "уважаемый", "друг", "дружище", "большое",
+    "огромное", "тебе", "вам", "мой", "наш", "всё", "все", "очень",
+    "братан", "чувак", "взаимно", "опять", "снова", "ну", "же", "бы",
+    "ещё", "еще", "и", "а", "тоже",
+})
+
+
+def _is_pure_social(text: str) -> bool:
+    """True → в сообщении нет содержательного запроса, только приветствие/спасибо.
+
+    Вычитаем приветствие/благодарность и допустимый филлер; если остались
+    значимые слова («телефон», «ук») — это запрос, шорткат не применяем.
+    """
+    residual = _GREETING_RE.sub(" ", _THANKS_RE.sub(" ", text))
+    for word in re.findall(r"[а-яёa-z]+", residual.lower()):
+        if len(word) >= 3 and word not in _SOCIAL_FILLER:
+            return False
+    return True
+
+# Локальные ответы на чистые приветствия/благодарности: 0 токенов, 0 LLM-вызовов.
+_GREETING_REPLIES = (
+    "Привет! Дежурю, как всегда. Что подсказать?",
+    "О, привет, сосед! Чем помочь?",
+    "Здравствуй! У окна с чаем, двор под контролем. Слушаю.",
+    "Привет-привет. Лифт работает, шлагбаум тоже — день начался хорошо. Что нужно?",
+    "Салют! Спрашивай, не стесняйся.",
+    "Добрый! Я тут, никуда не выходил. Чем помочь?",
+)
+_THANKS_REPLIES = (
+    "Обращайся. Я всё равно никуда не выхожу.",
+    "Всегда пожалуйста, сосед!",
+    "Рад, что пригодился. Заходи ещё.",
+    "Да не за что — для того и дежурю.",
+    "Пожалуйста! Передавай показания вовремя — это лучшая благодарность.",
+    "На здоровье. Если что — ты знаешь, где меня найти. Везде.",
+)
+_LAST_SOCIAL_REPLY: dict[tuple[int, int], str] = {}
+
+
+def _local_social_reply(prompt: str, chat_id: int, user_id: int) -> str | None:
+    """Чистое приветствие/спасибо без вопроса → локальный ответ без LLM."""
+    text = prompt.strip()
+    if "?" in text or len(text) > 60:
+        return None
+    # «Привет, ты дебил» не должен получать радостный ответ: при любых
+    # локальных признаках мата/агрессии уходим в обычный путь с модерацией.
+    from app.services.ai_module import (
+        detect_profanity,
+        local_moderation,
+        normalize_for_profanity,
+    )
+    if detect_profanity(normalize_for_profanity(text)) or local_moderation(text).severity > 0:
+        return None
+    # Шорткат только для ЧИСТО социальных сообщений: «привет, телефон УК» —
+    # это фактический запрос, его нельзя гасить дежурной фразой.
+    if not _is_pure_social(text):
+        return None
+    pool: tuple[str, ...] | None = None
+    if _THANKS_RE.search(text):
+        pool = _THANKS_REPLIES
+    elif _GREETING_RE.search(text) and len(text) <= 40:
+        pool = _GREETING_REPLIES
+    if pool is None:
+        return None
+    key = (chat_id, user_id)
+    prev = _LAST_SOCIAL_REPLY.get(key)
+    candidates = [r for r in pool if r != prev] or list(pool)
+    reply = random.choice(candidates)
+    _LAST_SOCIAL_REPLY[key] = reply
+    return reply
+
+
+async def _send_typing(bot: Bot, message: Message) -> None:
+    """Индикатор «печатает…» перед генерацией — бот ощущается живым."""
+    try:
+        await bot.send_chat_action(
+            message.chat.id, "typing", message_thread_id=message.message_thread_id,
+        )
+    except Exception:  # noqa: BLE001 — индикатор не критичен
+        pass
+
+
 def _next_mention_reply() -> str:
     return random.choice(MENTION_REPLIES)
 
@@ -1279,6 +1375,9 @@ async def ai_command(message: Message) -> None:
 
         context = await _get_ai_context_persistent(message.chat.id, message.from_user.id)
         ai_client = get_ai_client()
+        _bot = getattr(message, "bot", None)
+        if _bot:
+            await _send_typing(_bot, message)
         try:
             reply = await ai_client.assistant_reply(
                 prompt,
@@ -1421,6 +1520,22 @@ async def mention_help(message: Message, bot: Bot) -> None:
 
     # Проверяем модерацию перед ответом ассистента (только severity >= 2 блокирует)
     prompt = _extract_ai_prompt(message)
+
+    # Чистое «привет»/«спасибо» — локальный ответ: экономим и модерационный,
+    # и ассистентский LLM-вызов (частый сценарий, юмор из готового пула).
+    if prompt and message.from_user:
+        social = _local_social_reply(prompt, message.chat.id, message.from_user.id)
+        if social:
+            # Кулдаун общий с AI-ответами: спам «Жабот, привет» не усиливаем —
+            # при лимите просто молчим (без текста-отповеди, чтобы не шуметь).
+            if _is_ai_reply_rate_limited(message.chat.id, message.from_user.id):
+                logger.info("OUT: MENTION_SOCIAL_RATE_LIMITED")
+                return
+            await message.reply(social)
+            _mark_prompt_answered(message.chat.id, message.from_user.id, prompt)
+            logger.info("OUT: MENTION_REPLY_LOCAL_SOCIAL prompt=%r", prompt[:60])
+            return
+
     if prompt:
         from app.handlers.moderation import run_moderation
 
@@ -1528,6 +1643,7 @@ async def mention_help(message: Message, bot: Bot) -> None:
             if dialog_depth >= 5:
                 full_prompt += "\n[Продолжительный диалог — после ответа предложи итог или спроси «Ещё что-то?»]"
 
+            await _send_typing(bot, message)
             reply = await get_ai_client().assistant_reply(
                 full_prompt, context, chat_id=message.chat.id,
                 user_id=message.from_user.id,
@@ -1561,13 +1677,15 @@ async def mention_help(message: Message, bot: Bot) -> None:
             # Помечаем запрос как отвеченный для дедупликации
             _mark_prompt_answered(message.chat.id, message.from_user.id, prompt)
 
-            # Извлечение фактов о пользователе (фоново)
-            asyncio.create_task(
-                _extract_and_save_profile(
-                    message.chat.id, message.from_user.id, prompt, reply,
-                    getattr(message.from_user, "full_name", None),
+            # Извлечение фактов о пользователе (фоново) — только если в сообщении
+            # есть личные маркеры: экономим LLM-вызов на «где аптека?»-вопросах.
+            if _has_personal_markers(prompt):
+                asyncio.create_task(
+                    _extract_and_save_profile(
+                        message.chat.id, message.from_user.id, prompt, reply,
+                        getattr(message.from_user, "full_name", None),
+                    )
                 )
-            )
 
             # Трекаем вопрос в FAQ (не блокируем ответ при ошибке)
             try:
@@ -1744,6 +1862,17 @@ async def _track_faq(chat_id: int, question_key: str, answer: str) -> None:
             await session.commit()
     except Exception:
         logger.warning("Не удалось обновить FAQ-трекинг.")
+
+
+_PERSONAL_MARKER_RE = re.compile(
+    r"(?i)\b(я|меня|мне|мо[йяёи]|наш[аеи]?|у нас|жив[уё]м?|зовут|работаю|"
+    r"мужа?|жен[аы]|дет[ией]|сын|доч|корпус|квартир|машин)\b"
+)
+
+
+def _has_personal_markers(prompt: str) -> bool:
+    """Есть ли в сообщении личные факты, ради которых стоит звать экстрактор."""
+    return bool(_PERSONAL_MARKER_RE.search(prompt))
 
 
 async def _extract_and_save_profile(

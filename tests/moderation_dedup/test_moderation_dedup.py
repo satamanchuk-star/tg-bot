@@ -20,11 +20,17 @@ def clear_moderated_cache() -> None:
 
 
 def _build_message(message_id: int) -> SimpleNamespace:
-    # Текст длиннее 60 символов и 8 слов, чтобы пройти _can_skip_ai_moderation pre-filter
+    # Текст длиннее 400 символов: усиленный _can_skip_ai_moderation скипает LLM
+    # для чистых сообщений средней длины, а длинные всегда идут в AI-модерацию —
+    # это и нужно тесту дедупликации AI-вызовов.
+    long_text = (
+        "обычное тестовое сообщение для проверки системы дедупликации модерации "
+        "сообщений в чате жилого комплекса " * 5
+    )
     return SimpleNamespace(
         chat=SimpleNamespace(id=12345),
         from_user=SimpleNamespace(id=777, mention_html=lambda: "@u"),
-        text="обычное тестовое сообщение для проверки системы дедупликации модерации сообщений",
+        text=long_text,
         message_id=message_id,
         message_thread_id=99,
         delete=AsyncMock(),
@@ -75,3 +81,30 @@ def test_dedup_cache_is_trimmed_when_overflow(monkeypatch) -> None:
 
     assert before > moderation._MODERATED_MSG_IDS_MAX
     assert len(moderation._MODERATED_MSG_IDS) <= moderation._MODERATED_MSG_IDS_MAX // 2 + 2
+
+
+def test_prescreen_skips_clean_medium_message() -> None:
+    """Чистое сообщение средней длины не требует LLM-модерации."""
+    clean = (
+        "Соседи, подскажите пожалуйста, во сколько завтра планируется собрание "
+        "жильцов и нужно ли брать с собой документы на квартиру"
+    )
+    assert moderation._can_skip_ai_moderation(clean) is True
+
+
+def test_prescreen_sends_suspicious_to_ai() -> None:
+    """Мат/капс/длинные сообщения средней длины — в AI-модерацию."""
+    profane_medium = (
+        "Ты п1зд@бол со своими правилами, понял меня? достали уже эти запреты "
+        "во дворе, сколько можно указывать людям что делать"
+    )
+    assert moderation._can_skip_ai_moderation(profane_medium) is False
+    threat_medium = (
+        "я тебя убью если ещё раз увижу твою машину на моём месте у подъезда, "
+        "сколько можно повторять одно и то же каждый день"
+    )
+    assert moderation._can_skip_ai_moderation(threat_medium) is False
+    caps = "ЭТО ПРОСТО НЕВЫНОСИМО СКОЛЬКО МОЖНО ТЕРПЕТЬ ЭТОТ БАРДАК ВО ДВОРЕ КАЖДЫЙ ДЕНЬ ОДНО И ТО ЖЕ"
+    assert moderation._can_skip_ai_moderation(caps) is False
+    long_text = "слово " * 100
+    assert moderation._can_skip_ai_moderation(long_text) is False

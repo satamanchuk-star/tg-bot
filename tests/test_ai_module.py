@@ -189,7 +189,8 @@ def test_assistant_prompt_has_human_style_and_limits() -> None:
 
 def test_moderation_prompt_has_basic_safety_limits() -> None:
     assert "Верни только JSON" in _MODERATION_SYSTEM_PROMPT
-    assert "При сомнении между severity 0 и 1 — ставь 0" in _MODERATION_SYSTEM_PROMPT
+    assert "ПРЕЗУМПЦИЯ НЕВИНОВНОСТИ" in _MODERATION_SYSTEM_PROMPT
+    assert "При ЛЮБОМ сомнении понижай severity" in _MODERATION_SYSTEM_PROMPT
 
 
 def test_openrouter_assistant_fallback_on_runtime_error(monkeypatch) -> None:
@@ -581,3 +582,72 @@ def test_runtime_toggle_recreates_client(monkeypatch) -> None:
     assert first is not second
 
     asyncio.run(second.aclose())
+
+
+def test_static_prompt_exceeds_cache_minimum() -> None:
+    """Статичный префикс должен превышать минимум prompt caching Haiku (4096 ток.)."""
+    from app.services.ai_module import get_static_assistant_prompt, invalidate_static_prompt_cache
+
+    invalidate_static_prompt_cache()
+    prompt = get_static_assistant_prompt()
+    # ~1.7 символа/токен для русского: 7500+ символов ≈ 4400+ токенов
+    assert len(prompt) > 7500, f"префикс слишком короткий для кэша: {len(prompt)} символов"
+    # Все блоки на месте
+    assert "<persona_bio>" in prompt
+    assert "<humor_guide>" in prompt
+    assert "<examples>" in prompt
+    assert "<kb_core>" in prompt
+    # Базовые правила не потерялись
+    assert "Ты — бот-помощник" in prompt
+    assert "400 символов" in prompt
+
+
+def test_static_prompt_is_byte_stable_between_calls() -> None:
+    """Байт-в-байт стабильность между вызовами — иначе Anthropic-кэш не сработает."""
+    from app.services.ai_module import get_static_assistant_prompt
+
+    assert get_static_assistant_prompt() is get_static_assistant_prompt()
+
+
+def test_static_prompt_cache_invalidation() -> None:
+    from app.services.ai_module import get_static_assistant_prompt, invalidate_static_prompt_cache
+
+    first = get_static_assistant_prompt()
+    invalidate_static_prompt_cache()
+    second = get_static_assistant_prompt()
+    assert first == second  # содержимое то же (KB не менялась)
+    assert first is not second  # но объект пересобран
+
+
+def test_answer_cache_is_isolated_between_chats() -> None:
+    """Fuzzy-кэш не должен смешивать чаты: ответ из лог-чата не течёт в форум."""
+    from app.services.ai_module import (
+        _cache_get, _cache_set, _normalize_cache_key, clear_assistant_cache,
+    )
+
+    clear_assistant_cache()
+    key_a = f"100|{_normalize_cache_key('как оформить пропуск на гостя машину')}"
+    _cache_set(key_a, "ОТВЕТ ИЗ ЧАТА A")
+
+    # Точно тот же вопрос в другом чате — fuzzy не должен вернуть ответ чата A
+    key_b = f"200|{_normalize_cache_key('как оформить пропуск на гостя машину')}"
+    assert _cache_get(key_b) is None
+
+    # Близкая переформулировка в том же чате — fuzzy обязан сработать
+    key_a2 = f"100|{_normalize_cache_key('оформить пропуск на гостя машину быстро')}"
+    assert _cache_get(key_a2) == "ОТВЕТ ИЗ ЧАТА A"
+    clear_assistant_cache()
+
+
+def test_social_shortcut_only_for_pure_greetings() -> None:
+    """«Привет, телефон УК» — это запрос, дежурную фразу отдавать нельзя."""
+    from app.handlers.help import _is_pure_social, _local_social_reply
+
+    assert _is_pure_social("привет")
+    assert _is_pure_social("спасибо большое")
+    assert _is_pure_social("здравствуй, жабот")
+    assert not _is_pure_social("привет, телефон УК")
+    assert not _is_pure_social("добрый день, режим работы")
+
+    assert _local_social_reply("привет, телефон УК", 1, 1) is None
+    assert _local_social_reply("спасибо большое", 1, 1) is not None

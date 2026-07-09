@@ -511,7 +511,12 @@ async def kb_reload(message: Message, bot: Bot) -> None:
     if not await _ensure_admin(message, bot):
         return
     from app.services.resident_kb import load_resident_kb
+    from app.services.ai_module import clear_assistant_cache, invalidate_static_prompt_cache
     load_resident_kb.cache_clear()
+    invalidate_static_prompt_cache()
+    # Кэш готовых ответов тоже сбрасываем — иначе старый факт может
+    # отдаваться до часа после правки базы.
+    clear_assistant_cache()
     entries = load_resident_kb()
     await message.reply(
         f"База знаний перечитана: {len(entries)} записей. "

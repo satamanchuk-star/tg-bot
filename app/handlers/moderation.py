@@ -55,15 +55,29 @@ _GATE_REQUEST_ACTION_WORDS = (
 
 
 def _can_skip_ai_moderation(text: str) -> bool:
-    """True → сообщение тривиально, достаточно local_moderation (экономит ~70% запросов).
+    """True → достаточно local_moderation, LLM-вызов не нужен.
 
-    Используется только когда ai_feature_moderation=True; при False и так идёт local.
+    Короткие сообщения скипаются как раньше; средние (до 400 символов) —
+    только если локальные детекторы (мат, агрессия, КАПС) молчат. Всё
+    подозрительное и длинное по-прежнему уходит в AI-модерацию.
     """
-    if len(text) > 60:
-        return False
-    if len(text.split()) > 8:
-        return False
     if _LINK_PATTERN.search(text):
+        return False
+    if len(text) <= 60 and len(text.split()) <= 8:
+        return True
+    if len(text) > 400:
+        return False
+    from app.services.ai_module import (
+        detect_profanity,
+        local_moderation,
+        normalize_for_profanity,
+    )
+    if detect_profanity(normalize_for_profanity(text)):
+        return False
+    if local_moderation(text).severity > 0:
+        return False
+    letters = [c for c in text if c.isalpha()]
+    if letters and sum(c.isupper() for c in letters) / len(letters) > 0.6:
         return False
     return True
 
@@ -90,6 +104,11 @@ def is_training_mode() -> bool:
         return _TRAINING_MODE_OVERRIDE
     return settings.moderation_training_mode
 
+
+# Презумпция невиновности: страйк/удаление (severity ≥ 2) выдаём только при
+# высокой уверенности модели. При сомнении понижаем до мягкого замечания —
+# лучше не наказать виновного, чем наказать невиновного соседа за шутку.
+_STRIKE_MIN_CONFIDENCE = 0.8
 
 # Dict message_id → timestamp для идемпотентности модерации
 _MODERATED_MSG_IDS: dict[int, float] = {}
@@ -277,6 +296,16 @@ async def run_moderation(message: Message, bot: Bot) -> int:
     violation_type = getattr(decision, "violation_type", None)
     confidence = getattr(decision, "confidence", None)
     sentiment = getattr(decision, "sentiment", "neutral")
+
+    # Презумпция невиновности: если модель не уверена, страйк/удаление не выдаём —
+    # понижаем severity до мягкого замечания (1). Явные угрозы и доксинг локальный
+    # детектор ловит с confidence ≥ 0.85, поэтому реальные нарушения не смягчаются.
+    if severity >= 2 and confidence is not None and confidence < _STRIKE_MIN_CONFIDENCE:
+        logger.info(
+            "MOD: severity %d→1, уверенность %.2f < %.2f (презумпция невиновности) text=%r",
+            severity, confidence, _STRIKE_MIN_CONFIDENCE, text[:80],
+        )
+        severity = 1
 
     await _store_message_log(message, severity, sentiment=sentiment)
 
@@ -711,6 +740,48 @@ async def handle_training_action(callback: CallbackQuery, bot: Bot) -> None:
         logger.exception("Ошибка при обработке тренировочного callback")
 
 
+# ---------------------------------------------------------------------------
+# Эмодзи-реакции: живость за 0 токенов. Telegram-native, без LLM.
+# ---------------------------------------------------------------------------
+_REACTION_POSITIVE_RE = re.compile(
+    r"(?i)\b(спасибо|благодарю|ура|поздравля|с днём рождения|с новым годом|"
+    r"наконец-то|отлично|супер|красота|молодц)\b"
+)
+_REACTION_POSITIVE_EMOJI = ("👍", "❤", "🔥", "🎉")
+_REACTION_RANDOM_EMOJI = ("👍", "😁", "🔥")
+_LAST_REACTION_AT: dict[int, datetime] = {}
+_REACTION_MIN_GAP = timedelta(minutes=3)
+_REACTION_RANDOM_CHANCE = 0.015  # ~1 реакция на ~70 обычных сообщений
+
+
+async def _maybe_react(message: Message, bot: Bot) -> None:
+    """Изредка ставит эмодзи-реакцию: на позитив — часто, на обычное — редко."""
+    try:
+        text = (message.text or "").strip()
+        if not text or message.from_user is None or message.from_user.is_bot:
+            return
+        now = datetime.now(timezone.utc)
+        last = _LAST_REACTION_AT.get(message.chat.id)
+        if last and now - last < _REACTION_MIN_GAP:
+            return
+        emoji: str | None = None
+        if _REACTION_POSITIVE_RE.search(text) and random.random() < 0.5:
+            emoji = random.choice(_REACTION_POSITIVE_EMOJI)
+        elif len(text) > 40 and random.random() < _REACTION_RANDOM_CHANCE:
+            emoji = random.choice(_REACTION_RANDOM_EMOJI)
+        if emoji is None:
+            return
+        from aiogram.types import ReactionTypeEmoji
+        await bot.set_message_reaction(
+            message.chat.id,
+            message.message_id,
+            reaction=[ReactionTypeEmoji(emoji=emoji)],
+        )
+        _LAST_REACTION_AT[message.chat.id] = now
+    except Exception:  # noqa: BLE001 — реакция не критична
+        pass
+
+
 @router.message(StateFilter(None), flags={"block": False})
 async def moderate_message(message: Message, bot: Bot) -> None:
     """Модерация сообщений. Пропускает пользователей в FSM-состоянии (заполняют форму)."""
@@ -718,6 +789,8 @@ async def moderate_message(message: Message, bot: Bot) -> None:
 
     # Регистрируем активность топика для проактивного сервиса
     if message.chat.id == settings.forum_chat_id:
+        if not moderated:
+            await _maybe_react(message, bot)
         try:
             from app.services.proactive import (
                 maybe_topic_comment,

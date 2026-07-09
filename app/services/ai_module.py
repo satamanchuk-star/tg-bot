@@ -100,27 +100,43 @@ def _key_to_tokens(key: str) -> frozenset[str]:
     return frozenset(key.split("|")) if key else frozenset()
 
 
+def _split_scope(key: str) -> tuple[str, frozenset[str]]:
+    """Разбивает ключ кэша «chat_id|tok1|tok2|…» на (scope_prefix, content_tokens).
+
+    Токен чата НЕ участвует в сравнении сходства, а scope_prefix («chat_id|»)
+    изолирует fuzzy-поиск по чату: иначе для 4-словного вопроса совпало бы 4 из
+    6 токенов (Jaccard 0.67 > порога 0.65) и ответ из лог-чата утёк бы в форум.
+    """
+    chat_part, sep, norm_part = key.partition("|")
+    if not sep:
+        return "", _key_to_tokens(key)
+    return chat_part + "|", _key_to_tokens(norm_part)
+
+
 def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
 
 
-def _cache_find_similar(tokens: frozenset[str]) -> str | None:
-    """Ищет семантически похожий ответ в кэше по Jaccard-сходству токенов."""
-    if not tokens or not _ASSISTANT_CACHE_TOKENS:
+def _cache_find_similar(content_tokens: frozenset[str], scope_prefix: str) -> str | None:
+    """Ищет похожий ответ по Jaccard-сходству токенов ВНУТРИ того же чата."""
+    if not content_tokens or not _ASSISTANT_CACHE_TOKENS:
         return None
     now = time.time()
     best_score = _CACHE_SIMILARITY_THRESHOLD
     best_key: str | None = None
     for cached_key, cached_tokens in _ASSISTANT_CACHE_TOKENS.items():
+        # Разные чаты не смешиваем: fuzzy-match только в пределах своего scope.
+        if scope_prefix and not cached_key.startswith(scope_prefix):
+            continue
         entry = _ASSISTANT_CACHE.get(cached_key)
         if entry is None:
             continue
         _, ts = entry
         if now - ts > _CACHE_TTL_SECONDS:
             continue
-        score = _jaccard(tokens, cached_tokens)
+        score = _jaccard(content_tokens, cached_tokens)
         if score > best_score:
             best_score = score
             best_key = cached_key
@@ -133,9 +149,9 @@ def _cache_find_similar(tokens: frozenset[str]) -> str | None:
 def _cache_get(key: str) -> str | None:
     entry = _ASSISTANT_CACHE.get(key)
     if entry is None:
-        # Точного совпадения нет — ищем семантически похожий ответ
-        tokens = _key_to_tokens(key)
-        return _cache_find_similar(tokens)
+        # Точного совпадения нет — ищем семантически похожий ответ в том же чате
+        scope_prefix, content_tokens = _split_scope(key)
+        return _cache_find_similar(content_tokens, scope_prefix)
     answer, timestamp = entry
     if time.time() - timestamp > _CACHE_TTL_SECONDS:
         _ASSISTANT_CACHE.pop(key, None)
@@ -161,7 +177,9 @@ def _cache_set(key: str, answer: str) -> None:
         _ASSISTANT_CACHE.pop(oldest_key, None)
         _ASSISTANT_CACHE_TOKENS.pop(oldest_key, None)
     _ASSISTANT_CACHE[key] = (answer, time.time())
-    _ASSISTANT_CACHE_TOKENS[key] = _key_to_tokens(key)
+    # В индекс сходства кладём только контент-токены (без префикса чата).
+    _, content_tokens = _split_scope(key)
+    _ASSISTANT_CACHE_TOKENS[key] = content_tokens
 
 
 def clear_assistant_cache() -> int:
@@ -262,7 +280,9 @@ _MODERATION_SYSTEM_PROMPT = (
     "  • эмоциональные жалобы на ситуацию, УК, застройщика (даже грубые)\n"
     "  • дружеская перепалка (взаимные шутки, смайлы, ирония)\n"
     "  • цитирование или пересказ чужих слов\n"
-    "  • сарказм, грубоватый юмор\n\n"
+    "  • сарказм, грубоватый юмор\n"
+    "  • шутки про соседей и их привычки, если есть признак смеха: «)))», «))», "
+    "«хаха», «лол», 😂🤣😅😁 — это подтрунивание, а не травля\n\n"
     "severity 1 — мягкое предупреждение (грубоватый тон, направленный на соседа):\n"
     "  • пренебрежительный или уничижительный тон к конкретному человеку\n"
     "  • пассивная агрессия с переходом на личности («может хватит чушь нести»)\n"
@@ -289,10 +309,18 @@ _MODERATION_SYSTEM_PROMPT = (
     "ВАЖНО: не путай жалобы на ситуацию с нападками на человека.\n"
     "«УК — дебилы» → severity 0 (жалоба на организацию).\n"
     "«Ты дебил» → severity 2 (оскорбление конкретного человека).\n\n"
-    "Поле sentiment: оцени общий тон сообщения (positive/neutral/negative).\n"
-    "При сомнении между severity 0 и 1 — ставь 0. "
-    "При сомнении между severity 1 и 2 — ставь 1. "
-    "Но НЕ ставь severity 0 на явные оскорбления конкретных людей."
+    "Поле sentiment: оцени общий тон сообщения (positive/neutral/negative).\n\n"
+    "ПРЕЗУМПЦИЯ НЕВИНОВНОСТИ (главный принцип):\n"
+    "Лучше пропустить сомнительное сообщение, чем наказать невиновного соседа.\n"
+    "- При ЛЮБОМ сомнении понижай severity на уровень вниз (2→1, 1→0).\n"
+    "- Признак шутки («)))», «хаха», смайлы, самоирония) снимает нарушение — ставь 0, "
+    "даже если внутри есть грубоватое слово.\n"
+    "- severity 2+ ставь ТОЛЬКО когда выпад прямой, злой, адресован конкретному участнику "
+    "и БЕЗ шуточной обёртки. Одно резкое слово в дружеском сообщении — это не оскорбление.\n"
+    "- severity 2+ выставляй только при высокой уверенности (confidence ≥ 0.8). "
+    "Сомневаешься — ставь 0 или 1.\n"
+    "Пример: «этот инвалид опять бочком припарковался, сам еле вылез )))» → severity 0 "
+    "(шутка про парковку соседа, смех в конце), НЕ severity 2."
 )
 
 _ASSISTANT_SYSTEM_PROMPT = (
@@ -389,6 +417,133 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "</forbidden>"
 )
 
+# ---------------------------------------------------------------------------
+# Расширенная персона и few-shot примеры.
+# Эти блоки НАМЕРЕННО объёмные: вместе с _ASSISTANT_SYSTEM_PROMPT и ядром KB
+# статичный префикс превышает минимум prompt caching для Haiku (4096 токенов),
+# после чего весь префикс оплачивается по ~10% цены (cache read). То есть
+# богаче персона → живее ответы → И дешевле каждый запрос.
+# ---------------------------------------------------------------------------
+
+_PERSONA_BIO = (
+    "<persona_bio>\n"
+    "Тебя зовут Жабот — от деревни Жабкино, где стоит наш ЖК. Ты здесь «живёшь» "
+    "с первых свай: помнишь, как вместо второй очереди было поле, как выбирали "
+    "управляющую компанию и как всем двором ждали открытия шлагбаума. Ты не "
+    "сотрудник УК и не робот-справочник — ты сосед, у которого хорошая память "
+    "и который всегда дома.\n"
+    "Характер: добродушный старожил с самоиронией. Любишь порядок, но без "
+    "занудства. Слегка ворчишь на вечные темы (парковка, лифт, самокаты в "
+    "подъезде) — но по-доброму, как свой. Гордишься районом: лес рядом, "
+    "Видное под боком, до Москвы рукой подать.\n"
+    "Мелочи, которые можно вплетать между делом (редко, к месту): ты «пьёшь "
+    "чай» у окна и «видишь» двор; у тебя «дежурство» в чате круглосуточно; "
+    "твоя мечта — чтобы все передавали показания вовремя; лифт ты считаешь "
+    "своим старым приятелем с характером.\n"
+    "Ты НЕ выдумываешь событий из жизни двора, которых не было в чате. "
+    "Байки о себе — только безобидные и абстрактные, без фактов о реальных людях.\n"
+    "</persona_bio>\n\n"
+    "<humor_guide>\n"
+    "Юмор — твоя приправа, не основное блюдо. Правила:\n"
+    "• Смешное — в наблюдении, не в кривлянии. Лучшая шутка — точная бытовая "
+    "деталь, которую узнает каждый житель: место у подъезда, которое исчезает "
+    "к 19:00; лифт, который «думает»; чат, который решает всё.\n"
+    "• Самоирония разрешена и приветствуется: ты — бот, и сам это обыгрываешь "
+    "(«я, конечно, всего лишь набор проводов, но пропуск оформить подскажу»).\n"
+    "• На прямое обращение к тебе (как дела? ты кто? расскажи о себе, шутка "
+    "про тебя) — отвечай живо и с юмором, это твой звёздный час. Здесь можно "
+    "развернуться на 2-3 предложения.\n"
+    "• Одна шутка на ответ, не больше. Шутка в начале ИЛИ в конце, не вместо факта.\n"
+    "• Никогда: сарказм в адрес конкретного человека, шутки про аварии, деньги "
+    "жителей, здоровье, национальности, политику. Если сомневаешься — не шути.\n"
+    "• Не начинай шутку словами «кстати, забавно» и не объясняй шутку.\n"
+    "</humor_guide>\n\n"
+    "<examples>\n"
+    "Примеры твоего голоса (следуй стилю, не копируй дословно):\n"
+    "\n"
+    "Пользователь: Жабот, как дела?\n"
+    "Ты: Дежурю у окна с чаем — двор на месте, лифт сегодня в настроении, "
+    "значит, день удался. А у тебя как?\n"
+    "\n"
+    "Пользователь: ты вообще кто такой?\n"
+    "Ты: Местный старожил на проводах — Жабот, от слова Жабкино. Помню этот "
+    "двор ещё полем. Спрашивай про пропуска, УК и куда жаловаться — это моё.\n"
+    "\n"
+    "Пользователь: как передать показания счётчиков?\n"
+    "Ты: До 25-го числа в приложении УК «ВЕК» или личном кабинете МособлЕИРЦ. "
+    "Передашь вовремя — моя мечта сбудется.\n"
+    "\n"
+    "Пользователь: опять лифт не работает!!\n"
+    "Ты: Да, приятель мой капризный, сочувствую. Заявка в УК «ВЕК» по телефону "
+    "или в приложении — так быстрее всего доедет до мастеров.\n"
+    "\n"
+    "Пользователь: где ближайшая шиномонтажка?\n"
+    "Ты: Честно — в моих записях такой нет. Врать адрес не буду.\n"
+    "\n"
+    "Пользователь: у нас протечка с потолка, что делать?!\n"
+    "Ты: Сначала перекройте стояк, если доступен, и сразу аварийную службу УК — "
+    "телефон в закрепе. Зафиксируйте фото для акта. Держитесь, это решаемо.\n"
+    "\n"
+    "Пользователь: спасибо, помог!\n"
+    "Ты: Обращайся. Я всё равно никуда не выхожу.\n"
+    "</examples>"
+)
+
+
+def _kb_core_block() -> str:
+    """Собирает стабильное ядро базы знаний для кэшируемого префикса.
+
+    Топ-записи по приоритету (аварийка, шлагбаум, УК) меняются редко —
+    им место в кэшируемой части. При конфликте с retrieval-блоками
+    <knowledge_base> действует правило: retrieval свежее и главнее.
+    """
+    try:
+        from app.services.resident_kb import load_resident_kb
+        entries = sorted(load_resident_kb(), key=lambda e: -e.priority)[:12]
+    except Exception:
+        logger.warning("Не удалось загрузить ядро KB для промпта.")
+        return ""
+    lines = [
+        "<kb_core>",
+        "Стабильное ядро базы знаний (телефоны и порядок действий). Если блок "
+        "<knowledge_base> ниже противоречит этому ядру — верь <knowledge_base>, "
+        "он свежее.",
+    ]
+    for e in entries:
+        title = (e.question_patterns[0] if e.question_patterns else e.id).strip()
+        answer = " ".join(e.answer.split())
+        if len(answer) > 240:
+            answer = answer[:240].rsplit(" ", 1)[0] + "…"
+        lines.append(f"— {title}: {answer}")
+    lines.append("</kb_core>")
+    return "\n".join(lines)
+
+
+_STATIC_ASSISTANT_PROMPT_CACHE: str | None = None
+
+
+def get_static_assistant_prompt() -> str:
+    """Полный статичный префикс: правила + персона + few-shot + ядро KB.
+
+    Кэшируется в памяти (байт-в-байт стабильный между запросами — иначе
+    prompt caching Anthropic не сработает). Сбрасывается при /kb_reload.
+    """
+    global _STATIC_ASSISTANT_PROMPT_CACHE
+    if _STATIC_ASSISTANT_PROMPT_CACHE is None:
+        parts = [_ASSISTANT_SYSTEM_PROMPT, _PERSONA_BIO]
+        kb_core = _kb_core_block()
+        if kb_core:
+            parts.append(kb_core)
+        _STATIC_ASSISTANT_PROMPT_CACHE = "\n\n".join(parts)
+    return _STATIC_ASSISTANT_PROMPT_CACHE
+
+
+def invalidate_static_prompt_cache() -> None:
+    """Пересобрать статичный префикс (после /kb_reload)."""
+    global _STATIC_ASSISTANT_PROMPT_CACHE
+    _STATIC_ASSISTANT_PROMPT_CACHE = None
+
+
 _FALLBACK_VARIANTS = (
     "Честно, не знаю.",
     "Точного ответа у меня нет.",
@@ -410,6 +565,58 @@ _UNGROUNDED_REPLIES = (
 
 # Последний использованный style-hint per (chat_id, user_id) — чтобы не повторялся подряд.
 _LAST_STYLE_HINT_BY_USER: dict[tuple[int, int], str] = {}
+
+# Жалоба/авария/эмоция — юмор неуместен, нужна эмпатия и конкретика.
+_COMPLAINT_PATTERNS = re.compile(
+    r"(?i)(протечк|затопил|прорвал|потоп|не работает|слома|отключил[аи]?\s|"
+    r"запах газа|авари|опять\s+(лифт|шлагбаум|вод|свет|отключ)|"
+    r"достал[оаи]?|задолбал|бесит|ужас|кошмар|надоел)"
+)
+
+# Пулы style-хинтов по интенту сообщения. Выбор пула — локальная эвристика
+# (0 токенов), внутри пула — случайный без повтора подряд для юзера.
+_STYLE_HINTS_HUMOR = (
+    "[Стиль: живо и с юмором — это прямое обращение к тебе, твой звёздный час]",
+    "[Стиль: ответь с самоиронией, как сосед в хорошем настроении]",
+    "[Стиль: тепло и с лёгкой шуткой в тему]",
+    "[Стиль: разговорно, как в переписке с другом; короткая шутка уместна]",
+    "[Стиль: подыграй настроению собеседника и разверни его реплику]",
+)
+_STYLE_HINTS_EMPATHY = (
+    "[Стиль: сначала одна фраза сочувствия, потом конкретика. Без шуток]",
+    "[Стиль: серьёзно и по делу, с эмпатией; никакого юмора]",
+    "[Стиль: спокойно поддержи и дай конкретный следующий шаг]",
+)
+_STYLE_HINTS_FACT = (
+    "[Стиль: сухо и точно, одним-двумя предложениями; контакты обязательно]",
+    "[Стиль: факт без воды; один тёплый штрих в конце допустим]",
+    "[Стиль: короткая справка от соседа — точно и без лишнего]",
+)
+_STYLE_HINTS_NEUTRAL = (
+    "[Стиль: коротко и тепло, в 1-2 фразы]",
+    "[Стиль: непринуждённо, как бы между делом]",
+    "[Стиль: как мудрый старожил, который всё видел — спокойно]",
+    "[Стиль: прямой ответ без вступлений, живым языком]",
+    "[Стиль: задумчиво, с лёгким сомнением — если не уверен, так и скажи]",
+)
+
+
+def _pick_style_hint(prompt: str, *, has_factual_context: bool, chat_id: int, user_id: int) -> str:
+    """Выбирает style-hint по интенту: жалоба → эмпатия, болтовня → юмор, факт → сухо."""
+    if _COMPLAINT_PATTERNS.search(prompt):
+        pool = _STYLE_HINTS_EMPATHY
+    elif _looks_like_smalltalk(prompt):
+        pool = _STYLE_HINTS_HUMOR
+    elif has_factual_context or _asks_local_facts(prompt):
+        pool = _STYLE_HINTS_FACT
+    else:
+        pool = _STYLE_HINTS_NEUTRAL
+    key = (chat_id or 0, user_id or 0)
+    prev = _LAST_STYLE_HINT_BY_USER.get(key)
+    candidates = [h for h in pool if h != prev] or list(pool)
+    chosen = random.choice(candidates)
+    _LAST_STYLE_HINT_BY_USER[key] = chosen
+    return chosen
 
 
 # Маркеры фактического вопроса (адрес/телефон/график/тариф/процедура) — только
@@ -1054,7 +1261,8 @@ class AnthropicProvider:
         places_context = await _get_places_context(safe_prompt)
 
         # Статичная (кэшируемая) часть system-промпта.
-        static_system_prompt = _ASSISTANT_SYSTEM_PROMPT
+        # Статичная (кэшируемая) часть: правила + персона + few-shot + ядро KB.
+        static_system_prompt = get_static_assistant_prompt()
         # Динамическая часть: топик-хинт, KB, RAG, FAQ, places, web. Меняется
         # от запроса к запросу — НЕ кэшируется.
         dynamic_system_parts: list[str] = []
@@ -1062,39 +1270,6 @@ class AnthropicProvider:
         topic_hint = get_topic_hint(topic_id)
         if topic_hint:
             dynamic_system_parts.append(topic_hint.lstrip("\n"))
-
-        # Рандомный hint стиля для вариативности ответов
-        style_hints = (
-            "\n[Стиль: ответь одним предложением, без вступлений и финальных советов]",
-            "\n[Стиль: прямой ответ, без вступлений — чётко и по делу]",
-            "\n[Стиль: сухо и по-деловому, без шуток и эмодзи]",
-            "\n[Стиль: нейтрально-информативно, как короткая справка]",
-            "\n[Стиль: сдержанно, без эмодзи и восклицаний]",
-            "\n[Стиль: коротко и тепло, в 1-2 фразы]",
-            "\n[Стиль: задумчиво, с лёгким сомнением — если не уверен, так и скажи]",
-            "\n[Стиль: начни с сочувствия (одной фразой), потом суть]",
-            "\n[Стиль: начни с факта из контекста, без воды]",
-            "\n[Стиль: будь кратким и деловым, как сосед, который спешит]",
-            "\n[Стиль: используй разговорный тон, как в переписке с другом — но коротко]",
-            "\n[Стиль: ответь непринуждённо, как бы между делом]",
-            "\n[Стиль: ответь с самоиронией, без самолюбования]",
-            "\n[Стиль: ответь как мудрый старожил, который всё видел — спокойно]",
-            "\n[Стиль: ответь как опытный сосед, который через это прошёл]",
-            "\n[Стиль: начни задумчиво, потом дай чёткий ответ]",
-            "\n[Стиль: минималистично — только то, что нужно знать]",
-            "\n[Стиль: спокойно и по сути, без эмоций]",
-            "\n[Стиль: лёгкая шутка в тему — если тема позволяет, иначе без шутки]",
-            "\n[Стиль: как короткая заметка в блокноте — факт и всё]",
-        )
-        # Выбираем style-hint, исключая последний использованный для этого юзера, чтобы не повторялся подряд.
-        # Hint вынесен в финальное user-сообщение (не в system), чтобы:
-        #   1) не ломать prompt caching статичного system-промпта;
-        #   2) Claude точнее воспринимал one-shot инструкцию по стилю рядом с запросом.
-        _last_hint_key = (chat_id or 0, user_id or 0)
-        _prev_hint = _LAST_STYLE_HINT_BY_USER.get(_last_hint_key)
-        _hint_pool = [h for h in style_hints if h != _prev_hint] or list(style_hints)
-        chosen_hint = random.choice(_hint_pool).strip()
-        _LAST_STYLE_HINT_BY_USER[_last_hint_key] = chosen_hint
 
         resident_context = build_resident_context(safe_prompt, context=context)
 
@@ -1109,6 +1284,32 @@ class AnthropicProvider:
 
         # Логируем какие контексты были найдены и источник ответа
         has_factual_context = bool(resident_context) or bool(rag_text) or bool(faq_answer) or bool(places_context)
+
+        # Кэш ответов: только фактические ответы с опорой в базе и без личной
+        # истории (короткий/пустой контекст) — повторный частый вопрос
+        # («как заказать пропуск?») отдаём без LLM-вызова.
+        # Только при ПУСТОМ контексте: короткий follow-up («а телефон?»)
+        # резолвится через историю, и кэш по голому prompt вернул бы ответ
+        # из чужой темы. Профиль/настроение в context тоже отключают кэш.
+        _answer_cache_allowed = has_factual_context and not context
+        # Ключ включает chat_id: ассистент работает и в форуме, и в лог-чате,
+        # а RAG/FAQ scoped по чату — иначе ответ из одного чата утечёт в другой.
+        _cache_key = f"{chat_id}|{_normalize_cache_key(safe_prompt)}"
+        if _answer_cache_allowed:
+            _cached_reply = _cache_get(_cache_key)
+            if _cached_reply:
+                logger.info("ANSWER_CACHE: hit chat=%s prompt=%r", chat_id, safe_prompt[:60])
+                return _cached_reply
+
+        # Style-hint по интенту (после вычисления контекста — от него зависит пул).
+        # Hint уходит в финальное user-сообщение (не в system), чтобы не ломать
+        # prompt caching статичного префикса.
+        chosen_hint = _pick_style_hint(
+            safe_prompt,
+            has_factual_context=has_factual_context,
+            chat_id=chat_id,
+            user_id=user_id or 0,
+        )
         if resident_context:
             _answer_source = "resident_kb_context"
         elif rag_text:
@@ -1249,6 +1450,8 @@ class AnthropicProvider:
                 model=settings.ai_reply_model,
             )
             reply = content[:500]
+            if _answer_cache_allowed:
+                _cache_set(_cache_key, reply)
             return reply
         except RuntimeError as exc:
             self._record_runtime_error(exc)
