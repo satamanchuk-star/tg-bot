@@ -711,10 +711,55 @@ async def handle_training_action(callback: CallbackQuery, bot: Bot) -> None:
         logger.exception("Ошибка при обработке тренировочного callback")
 
 
+# ---------------------------------------------------------------------------
+# Эмодзи-реакции: живость за 0 токенов. Telegram-native, без LLM.
+# ---------------------------------------------------------------------------
+_REACTION_POSITIVE_RE = re.compile(
+    r"(?i)\b(спасибо|благодарю|ура|поздравля|с днём рождения|с новым годом|"
+    r"наконец-то|отлично|супер|красота|молодц)\b"
+)
+_REACTION_POSITIVE_EMOJI = ("👍", "❤", "🔥", "🎉")
+_REACTION_RANDOM_EMOJI = ("👍", "😁", "🔥")
+_LAST_REACTION_AT: dict[int, datetime] = {}
+_REACTION_MIN_GAP = timedelta(minutes=3)
+_REACTION_RANDOM_CHANCE = 0.015  # ~1 реакция на ~70 обычных сообщений
+
+
+async def _maybe_react(message: Message, bot: Bot) -> None:
+    """Изредка ставит эмодзи-реакцию: на позитив — часто, на обычное — редко."""
+    try:
+        text = (message.text or "").strip()
+        if not text or message.from_user is None or message.from_user.is_bot:
+            return
+        now = datetime.now(timezone.utc)
+        last = _LAST_REACTION_AT.get(message.chat.id)
+        if last and now - last < _REACTION_MIN_GAP:
+            return
+        emoji: str | None = None
+        if _REACTION_POSITIVE_RE.search(text) and random.random() < 0.5:
+            emoji = random.choice(_REACTION_POSITIVE_EMOJI)
+        elif len(text) > 40 and random.random() < _REACTION_RANDOM_CHANCE:
+            emoji = random.choice(_REACTION_RANDOM_EMOJI)
+        if emoji is None:
+            return
+        from aiogram.types import ReactionTypeEmoji
+        await bot.set_message_reaction(
+            message.chat.id,
+            message.message_id,
+            reaction=[ReactionTypeEmoji(emoji=emoji)],
+        )
+        _LAST_REACTION_AT[message.chat.id] = now
+    except Exception:  # noqa: BLE001 — реакция не критична
+        pass
+
+
 @router.message(StateFilter(None), flags={"block": False})
 async def moderate_message(message: Message, bot: Bot) -> None:
     """Модерация сообщений. Пропускает пользователей в FSM-состоянии (заполняют форму)."""
     moderated = await run_moderation(message, bot)
+
+    if not moderated:
+        await _maybe_react(message, bot)
 
     # Регистрируем активность топика для проактивного сервиса
     if message.chat.id == settings.forum_chat_id:
