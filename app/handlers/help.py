@@ -1213,8 +1213,18 @@ def _is_abilities_question(text: str | None) -> bool:
     return any(kw in lowered for kw in _ABILITIES_KEYWORDS)
 
 
+# Клички, на которые бот отзывается в начале сообщения помимо Telegram-имени.
+# Жители зовут его кириллицей («Жабот»), а Telegram first_name — латиницей
+# («Jabot»), поэтому одного first_name мало: без алиасов «Жабот, привет»
+# не распознаётся как обращение и бот молчит.
+_BOT_NAME_ALIASES = (
+    "жабот", "жаботик", "жаб", "жаба",
+    "jabot", "алекс", "alex",
+)
+
+
 def _is_bot_name_called(text: str | None, bot_user: object) -> bool:
-    """Проверяет обращение к боту по имени без @.
+    """Проверяет обращение к боту по имени/кличке без @.
 
     Имя должно быть В НАЧАЛЕ сообщения (позиция обращения), чтобы
     не срабатывать на упоминания вроде "спроси у Жабота" в середине предложения.
@@ -1223,14 +1233,18 @@ def _is_bot_name_called(text: str | None, bot_user: object) -> bool:
         return False
     # Берём только начало сообщения — позиция обращения
     first_part = text[:40].casefold()
+    names = set(_BOT_NAME_ALIASES)
     first_name = getattr(bot_user, "first_name", None)
-    if not first_name:
-        return False
-    name_lower = str(first_name).casefold()
-    # Имя должно быть в самом начале, возможно после пробелов, перед запятой/двоеточием/пробелом
-    pattern = rf"^\s*{re.escape(name_lower)}(?:\s*[,!:\s])"
-    if re.match(pattern, first_part):
-        return True
+    if first_name:
+        names.add(str(first_name).casefold())
+    for name in names:
+        if not name:
+            continue
+        # Имя в самом начале, перед запятой/воскл./двоеточием/пробелом ИЛИ в конце
+        # сообщения (чистое «Жабот»). Так «Жаботина» и «жабры» не срабатывают.
+        pattern = rf"^\s*{re.escape(name)}(?:\s*[,!:.?\s]|$)"
+        if re.match(pattern, first_part):
+            return True
     return False
 
 
