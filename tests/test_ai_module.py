@@ -581,3 +581,38 @@ def test_runtime_toggle_recreates_client(monkeypatch) -> None:
     assert first is not second
 
     asyncio.run(second.aclose())
+
+
+def test_static_prompt_exceeds_cache_minimum() -> None:
+    """Статичный префикс должен превышать минимум prompt caching Haiku (4096 ток.)."""
+    from app.services.ai_module import get_static_assistant_prompt, invalidate_static_prompt_cache
+
+    invalidate_static_prompt_cache()
+    prompt = get_static_assistant_prompt()
+    # ~1.7 символа/токен для русского: 7500+ символов ≈ 4400+ токенов
+    assert len(prompt) > 7500, f"префикс слишком короткий для кэша: {len(prompt)} символов"
+    # Все блоки на месте
+    assert "<persona_bio>" in prompt
+    assert "<humor_guide>" in prompt
+    assert "<examples>" in prompt
+    assert "<kb_core>" in prompt
+    # Базовые правила не потерялись
+    assert "Ты — бот-помощник" in prompt
+    assert "400 символов" in prompt
+
+
+def test_static_prompt_is_byte_stable_between_calls() -> None:
+    """Байт-в-байт стабильность между вызовами — иначе Anthropic-кэш не сработает."""
+    from app.services.ai_module import get_static_assistant_prompt
+
+    assert get_static_assistant_prompt() is get_static_assistant_prompt()
+
+
+def test_static_prompt_cache_invalidation() -> None:
+    from app.services.ai_module import get_static_assistant_prompt, invalidate_static_prompt_cache
+
+    first = get_static_assistant_prompt()
+    invalidate_static_prompt_cache()
+    second = get_static_assistant_prompt()
+    assert first == second  # содержимое то же (KB не менялась)
+    assert first is not second  # но объект пересобран
