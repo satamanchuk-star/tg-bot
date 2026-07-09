@@ -21,8 +21,11 @@ from aiogram.types import (
     User,
 )
 
+from sqlalchemy import and_, select
+
 from app.config import settings
 from app.db import get_session
+from app.models import MessageLog
 from app.services.ai_module import get_ai_client, _normalize_cache_key
 from app.services.chat_history import (
     load_context,
@@ -914,6 +917,45 @@ def _remember_ai_exchange(chat_id: int, user_id: int, prompt: str, reply: str) -
     history.append(f"assistant: {reply[:800]}")
 
 
+async def _get_recent_topic_messages(
+    chat_id: int, topic_id: int | None, current_text: str, limit: int = 6
+) -> list[str]:
+    """Последние сообщения из той же темы — контекст беседы для ассистента.
+
+    Почему: бот должен отвечать, видя, о чём говорили ПЕРЕД репликой
+    («Не отрывается шлаг» перед «Что делать?»), а не в вакууме. Берём из
+    MessageLog (его наполняет модерация форума), текущее сообщение убираем.
+    """
+    if topic_id is None:
+        return []
+    try:
+        async for session in get_session():
+            result = await session.execute(
+                select(MessageLog.text)
+                .where(
+                    and_(
+                        MessageLog.chat_id == chat_id,
+                        MessageLog.topic_id == topic_id,
+                        MessageLog.text.isnot(None),
+                    )
+                )
+                .order_by(MessageLog.created_at.desc())
+                .limit(limit + 3)
+            )
+            texts = [t for (t,) in result.all() if t and t.strip()]
+            # Идём от старых к новым; исключаем текущее сообщение (оно уже в prompt).
+            ordered = list(reversed(texts))
+            cur = current_text.strip()
+            if ordered and ordered[-1].strip() == cur:
+                ordered = ordered[:-1]
+            else:
+                ordered = [t for t in ordered if t.strip() != cur]
+            return ordered[-limit:]
+    except Exception:
+        logger.warning("Не удалось загрузить контекст темы для ассистента.")
+        return []
+
+
 async def _get_ai_context_persistent(chat_id: int, user_id: int) -> list[str]:
     """Загружает контекст из БД (персистентный) с fallback на in-memory."""
     try:
@@ -1648,6 +1690,20 @@ async def mention_help(message: Message, bot: Bot) -> None:
                         f"[Продолжение диалога — предыдущий ответ бота: "
                         f"{bot_prev_text[:400]}]\n\n{prompt}"
                     )
+
+        # Контекст темы: последние реплики соседей перед вопросом. Без него бот
+        # отвечает на «Что делать?» в вакууме, не связывая с «Не отрывается шлаг».
+        recent_topic = await _get_recent_topic_messages(
+            message.chat.id, message.message_thread_id, prompt
+        )
+        if recent_topic:
+            convo = "\n".join(f"- {m[:200]}" for m in recent_topic)
+            full_prompt = (
+                "[Недавние сообщения в этой теме — контекст беседы]\n"
+                f"{convo}\n\n"
+                "[Реплика, на которую отвечаешь]\n"
+                f"{full_prompt}"
+            )
 
         try:
             question_key = _normalize_cache_key(prompt)
