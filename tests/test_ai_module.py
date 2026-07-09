@@ -651,3 +651,22 @@ def test_social_shortcut_only_for_pure_greetings() -> None:
 
     assert _local_social_reply("привет, телефон УК", 1, 1) is None
     assert _local_social_reply("спасибо большое", 1, 1) is not None
+
+
+def test_bot_name_called_recognizes_cyrillic_alias() -> None:
+    """Жители зовут «Жабот» (кириллица), Telegram-имя — «Jabot» (латиница)."""
+    from app.handlers.help import _is_bot_name_called
+
+    class _Profile:
+        first_name = "Jabot"
+        username = "alexjk_bot"
+
+    prof = _Profile()
+    assert _is_bot_name_called("Жабот, привет", prof)
+    assert _is_bot_name_called("Жабот", prof)
+    assert _is_bot_name_called("Жаб, как дела", prof)
+    assert _is_bot_name_called("Jabot, hi", prof)
+    # Не обращение: имя в середине, производные слова
+    assert not _is_bot_name_called("спроси у Жабота потом", prof)
+    assert not _is_bot_name_called("Жаботина сломалась", prof)
+    assert not _is_bot_name_called("привет всем", prof)
