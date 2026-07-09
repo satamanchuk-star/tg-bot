@@ -445,6 +445,15 @@ def _local_social_reply(prompt: str, chat_id: int, user_id: int) -> str | None:
     text = prompt.strip()
     if "?" in text or len(text) > 60:
         return None
+    # «Привет, ты дебил» не должен получать радостный ответ: при любых
+    # локальных признаках мата/агрессии уходим в обычный путь с модерацией.
+    from app.services.ai_module import (
+        detect_profanity,
+        local_moderation,
+        normalize_for_profanity,
+    )
+    if detect_profanity(normalize_for_profanity(text)) or local_moderation(text).severity > 0:
+        return None
     pool: tuple[str, ...] | None = None
     if _THANKS_RE.search(text):
         pool = _THANKS_REPLIES
@@ -1485,6 +1494,11 @@ async def mention_help(message: Message, bot: Bot) -> None:
     if prompt and message.from_user:
         social = _local_social_reply(prompt, message.chat.id, message.from_user.id)
         if social:
+            # Кулдаун общий с AI-ответами: спам «Жабот, привет» не усиливаем —
+            # при лимите просто молчим (без текста-отповеди, чтобы не шуметь).
+            if _is_ai_reply_rate_limited(message.chat.id, message.from_user.id):
+                logger.info("OUT: MENTION_SOCIAL_RATE_LIMITED")
+                return
             await message.reply(social)
             _mark_prompt_answered(message.chat.id, message.from_user.id, prompt)
             logger.info("OUT: MENTION_REPLY_LOCAL_SOCIAL prompt=%r", prompt[:60])

@@ -1260,7 +1260,10 @@ class AnthropicProvider:
         # Кэш ответов: только фактические ответы с опорой в базе и без личной
         # истории (короткий/пустой контекст) — повторный частый вопрос
         # («как заказать пропуск?») отдаём без LLM-вызова.
-        _answer_cache_allowed = has_factual_context and len(context) <= 2
+        # Только при ПУСТОМ контексте: короткий follow-up («а телефон?»)
+        # резолвится через историю, и кэш по голому prompt вернул бы ответ
+        # из чужой темы. Профиль/настроение в context тоже отключают кэш.
+        _answer_cache_allowed = has_factual_context and not context
         if _answer_cache_allowed:
             _cached_reply = _cache_get(_normalize_cache_key(safe_prompt))
             if _cached_reply:
