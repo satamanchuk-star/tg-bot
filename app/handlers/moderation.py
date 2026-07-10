@@ -790,8 +790,3 @@ async def moderate_message(message: Message, bot: Bot) -> None:
     if message.chat.id == settings.forum_chat_id:
         if not moderated:
             await _maybe_react(message, bot)
-        try:
-            from app.services.proactive import register_message_activity
-            register_message_activity(message.chat.id, message.message_thread_id)
-        except Exception:
-            pass

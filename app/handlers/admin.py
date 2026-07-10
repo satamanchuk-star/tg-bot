@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from app.config import settings
 from app.db import get_session
 from app.models import GameState
-from app.services.games import get_or_create_stats
+from app.services.coins import get_or_create_stats
 from app.services.strikes import add_strike, clear_strikes
 from app.utils.admin import extract_target_user, is_admin
 from app.utils.safe_telegram import safe_call
