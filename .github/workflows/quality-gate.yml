@@ -22,8 +22,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run subsystem critical tests
+      # Полный прогон: раньше гонялись только 2 подсистемы, и правки через
+      # веб-интерфейс GitHub могли сломать остальное незаметно.
+      - name: Run full test suite
         run: |
-          pytest -q \
-            tests/moderation_dedup/test_moderation_dedup.py \
-            tests/circuit_breaker/test_circuit_breaker.py
+          pytest -q tests/ infra_catalog/tests/
