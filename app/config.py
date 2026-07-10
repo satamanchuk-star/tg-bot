@@ -71,8 +71,6 @@ class Settings(BaseSettings):
     # (KB/RAG/FAQ/places/web) бот честно говорит «не знаю» вместо генерации догадки.
     # Болтовня/приветствия этим гейтом не затрагиваются.
     ai_require_grounding: bool = True
-    # Проактивный режим: бот сам подсказывает, когда может помочь
-    ai_feature_proactive: bool = True
     # Профили жителей: бот запоминает факты о пользователях из диалогов
     ai_feature_profiles: bool = True
     # Еженедельные персональные косания в DM по фактам из профиля. Off-by-default:

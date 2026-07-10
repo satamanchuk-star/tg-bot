@@ -13,7 +13,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from app.config import settings
 from app.db import get_session
-from app.services.games import get_or_create_stats
+from app.services.coins import get_or_create_stats
 from app.services.shop import SHOP_CATALOG, get_item, record_purchase
 
 router = Router()

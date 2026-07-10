@@ -44,14 +44,6 @@ from app.handlers import (
 )
 from app.models import MigrationFlag, UserStat
 from app.services.topic_stats import bump_topic_stat
-from app.services.games import (
-    clear_game_command_messages,
-    end_game,
-    get_all_active_games,
-    get_game_command_messages,
-    get_weekly_leaderboard,
-    is_game_timed_out,
-)
 from app.services.health import get_health_state, update_heartbeat, update_notice
 from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
@@ -379,38 +371,6 @@ async def drop_orphaned_tables(session: AsyncSession) -> None:
     logger.info("Удалены осиротевшие таблицы: %s", ", ".join(orphaned))
 
 
-async def send_weekly_leaderboard(bot: Bot) -> None:
-    if settings.topic_games is None:
-        logger.info("Еженедельный рейтинг игр пропущен: topic_games не задан.")
-        return
-    async for session in get_session():
-        top_coins, top_games = await get_weekly_leaderboard(
-            session, settings.forum_chat_id
-        )
-        break
-    else:
-        logger.error("Не удалось получить сессию БД для еженедельного рейтинга.")
-        return
-    if not top_coins and not top_games:
-        return
-    lines = ["Еженедельный рейтинг игр:"]
-    if top_coins:
-        lines.append("Топ по монетам:")
-        for stats_row in top_coins:
-            name = stats_row.display_name or str(stats_row.user_id)
-            lines.append(f"• {name}: {stats_row.coins} монет")
-    if top_games:
-        lines.append("Топ по играм:")
-        for stats_row in top_games:
-            name = stats_row.display_name or str(stats_row.user_id)
-            lines.append(f"• {name}: {stats_row.games_played} игр")
-    await bot.send_message(
-        settings.forum_chat_id,
-        "\n".join(lines),
-        message_thread_id=settings.topic_games,
-    )
-
-
 async def heartbeat_job(bot: Bot) -> None:
     now = datetime.now(timezone.utc)
     async for session in get_session():
@@ -442,43 +402,6 @@ async def heartbeat_job(bot: Bot) -> None:
                     await update_notice(session, now)
         await update_heartbeat(session, now)
         await session.commit()
-
-
-async def check_game_timeouts(bot: Bot) -> None:
-    """Проверяет и отменяет просроченные игры (таймаут 10 минут)."""
-    if settings.topic_games is None:
-        logger.info("Проверка таймаутов игр пропущена: topic_games не задан.")
-        return
-    now = datetime.now(timezone.utc)
-    async for session in get_session():
-        games = await get_all_active_games(session)
-        for user_id, chat_id, game_state in games:
-            if is_game_timed_out(game_state, now):
-                await end_game(session, user_id, chat_id)
-                await session.commit()
-                try:
-                    await bot.send_message(
-                        chat_id,
-                        "Время вышло! Игра отменена.",
-                        message_thread_id=settings.topic_games,
-                    )
-                except Exception:
-                    pass  # Не блокируем, если не удалось отправить
-
-
-async def cleanup_blackjack_commands(bot: Bot) -> None:
-    """Удаляет команды игры 21, отправленные в окно 22:00-00:00."""
-    messages = []
-    async for session in get_session():
-        messages = await get_game_command_messages(session, settings.forum_chat_id)
-        await clear_game_command_messages(session, settings.forum_chat_id)
-        await session.commit()
-
-    for record in messages:
-        try:
-            await bot.delete_message(record.chat_id, record.message_id)
-        except Exception:
-            pass
 
 
 async def _systematize_rag_job() -> None:
@@ -556,25 +479,9 @@ def _cleanup_flood_tracker() -> None:
 async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
     scheduler.add_job(
-        send_weekly_leaderboard,
-        "cron",
-        day_of_week="sat",
-        hour=21,
-        minute=0,
-        args=[bot],
-    )
-    scheduler.add_job(
         heartbeat_job, "interval", minutes=HEARTBEAT_INTERVAL_MIN, args=[bot]
     )
-    scheduler.add_job(check_game_timeouts, "interval", minutes=1, args=[bot])
     scheduler.add_job(_cleanup_flood_tracker, "interval", minutes=10)
-    scheduler.add_job(
-        cleanup_blackjack_commands,
-        "cron",
-        hour=0,
-        minute=1,
-        args=[bot],
-    )
     scheduler.add_job(
         cleanup_database,
         "cron",
@@ -999,7 +906,10 @@ async def main() -> None:
     # Порядок важен: упоминания должны ловиться до остальных обработчиков
     dp.include_router(help_handler.router)  # mention-help (catch-all, не блокирует)
     dp.include_router(admin.router)  # админ-команды
-    # games.router отключен: игровой модуль исключен из запуска диспетчера
+    # ТОЧКА РАСШИРЕНИЯ — игры. Блэкджек удалён (июль 2026); для будущего игрового
+    # движка: создать app/handlers/<game>.py со своим Router и подключить здесь
+    # (до модерации). Экономика монет готова: app/services/coins.py
+    # (get_or_create_stats, transfer_coins), баланс — UserStat.coins.
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     dp.include_router(shop.router)  # магазин монет (FSM, перед economy)
     dp.include_router(economy_handler.router)  # инициативы жителей (доработки бота)
@@ -1031,8 +941,6 @@ async def main() -> None:
                             "message",
                             "edited_message",
                             "callback_query",
-                            # chat_member оставлен под приветствие новичков
-                            # (handlers/welcome.py — сейчас не подключён).
                             "chat_member",
                         ],
                     )
