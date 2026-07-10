@@ -56,7 +56,11 @@ from app.services.health import get_health_state, update_heartbeat, update_notic
 from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
 from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, set_ai_admin_notifier
-from app.services.daily_messages import send_morning_greeting
+from app.services.daily_messages import (
+    send_morning_greeting,
+    send_presence_morning,
+    send_presence_evening,
+)
 from app.services.personalization import send_weekly_nudges
 from app.services.sheets import sync_places_from_sheet
 from app.services.resident_kb import load_resident_kb
@@ -612,6 +616,14 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
             minute=0,
             args=[bot],
         )
+    # Напоминания «бот отвечает только по запросу»: утро 10:00 и вечер 21:00
+    # в главном чате. Подчёркивают, что сам бот в разговоры не встревает.
+    scheduler.add_job(
+        send_presence_morning, "cron", hour=10, minute=0, args=[bot],
+    )
+    scheduler.add_job(
+        send_presence_evening, "cron", hour=21, minute=0, args=[bot],
+    )
     scheduler.start()
     return scheduler
 
