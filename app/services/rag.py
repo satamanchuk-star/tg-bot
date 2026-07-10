@@ -81,7 +81,9 @@ def _tokenize(text: str) -> list[str]:
 
 
 def _normalize_token(token: str) -> str:
-    return token.replace("ё", "е")
+    # Лемматизация выравнивает падежи: «шлагбаума» и «шлагбаум» — один токен.
+    from app.utils.morphology import lemmatize
+    return lemmatize(token.replace("ё", "е"))
 
 
 def _content_tokens(text: str) -> list[str]:
