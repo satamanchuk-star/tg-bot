@@ -673,6 +673,24 @@ def test_bot_name_called_recognizes_cyrillic_alias() -> None:
     assert not _is_bot_name_called("Жаботина сломалась", prof)
     assert not _is_bot_name_called("боты захватят мир", prof)
     assert not _is_bot_name_called("привет всем", prof)
+    # Старое имя «Алекс» убрано — бот только Жабот
+    assert not _is_bot_name_called("Алекс, привет", prof)
+
+
+def test_bot_identity_is_zhabot_everywhere() -> None:
+    """Бот представляется только Жаботом — никаких «Алекс» в текстах."""
+    from app.handlers.help import _ABILITIES_CONTEXT, HELP_MENU_TEXT
+
+    assert "Жабот" in _ABILITIES_CONTEXT
+    assert "Алекс" not in _ABILITIES_CONTEXT
+    assert "Жабот" in HELP_MENU_TEXT
+    assert "Алекс" not in HELP_MENU_TEXT
+    # Справка описывает реальное поведение: как позвать и что на реплаи отвечает всегда
+    assert "реплаем" in _ABILITIES_CONTEXT or "реплай" in _ABILITIES_CONTEXT
+    assert "только по запросу" in _ABILITIES_CONTEXT.lower()
+    # Мёртвых функций в справке нет
+    assert "Проактивный" not in _ABILITIES_CONTEXT
+    assert "подарить" not in HELP_MENU_TEXT
 
 
 def test_reactions_fire_only_on_meaningful_messages() -> None:
