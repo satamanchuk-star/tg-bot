@@ -102,7 +102,8 @@ def test_assistant_reply_uses_local_fallback() -> None:
 
 def test_local_assistant_reply_handles_rules_and_mentions() -> None:
     reply = build_local_assistant_reply("@jabchat_bot какие правила по шуму ночью?")
-    assert "правил" in reply.lower() or "уваж" in reply.lower()
+    # После лемматизации топ-ответ — «Закон о тишине» (точнее, чем правила чата)
+    assert any(w in reply.lower() for w in ("правил", "уваж", "тишин", "шум"))
 
 
 
@@ -713,3 +714,23 @@ def test_reactions_fire_only_on_meaningful_messages() -> None:
     assert not _matches("Кто-нибудь знает во сколько завтра отключат воду")
     assert not _matches("Машина у второго подъезда мешает проезду")
     assert not _matches("Сегодня опять пробки на въезде")
+
+
+def test_lemmatize_normalizes_russian_cases() -> None:
+    """Морфология: падежи и число сводятся к нормальной форме."""
+    from app.utils.morphology import lemmatize
+
+    assert lemmatize("шлагбаума") == "шлагбаум"
+    assert lemmatize("пропусками") == "пропуск"
+    assert lemmatize("ключи") == "ключ"
+    # Числа и незнакомое — без изменений
+    assert lemmatize("123") == "123"
+    assert lemmatize("") == ""
+
+
+def test_kb_search_finds_entries_by_inflected_query() -> None:
+    """Поиск по базе знаний находит запись при другом падеже в запросе."""
+    from app.services.resident_kb import search_resident_kb
+
+    result = search_resident_kb("вопрос про пропуска на машину")
+    assert result.matches, "запрос с падежом должен находить запись про пропуск"
