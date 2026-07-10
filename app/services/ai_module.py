@@ -356,6 +356,9 @@ _ASSISTANT_SYSTEM_PROMPT = (
     "<format>\n"
     "Русский язык, грамотно: правильная пунктуация, кавычки «ёлочки», тире (—) "
     "между частями предложения, а не дефис. Без висячих знаков и лишних восклицаний.\n"
+    "БЕЗ Markdown: никаких **звёздочек**, __подчёркиваний__, # заголовков, `бэктиков` — "
+    "сообщение уходит обычным текстом, и эти символы будут видны как мусор. "
+    "Выделение — только эмодзи или ЗАГЛАВНОЕ слово.\n"
     "Жёсткий потолок: 400 символов. НИКОГДА не превышай.\n"
     "Целевая длина:\n"
     "• Простой факт-вопрос → 1 предложение, максимум 2.\n"
@@ -1346,6 +1349,15 @@ class AnthropicProvider:
             and not _is_short_followup
         ):
             logger.info("ANSWER_GATE: ungrounded factual question → honest 'не знаю' prompt=%r", safe_prompt[:80])
+            # Петля роста: вопрос без ответа копится для еженедельного дайджеста
+            # админам (fire-and-forget — ответ жителю не ждёт записи в БД).
+            try:
+                from app.services.unanswered import log_unanswered
+                asyncio.get_running_loop().create_task(
+                    log_unanswered(chat_id, safe_prompt)
+                )
+            except Exception:
+                pass
             return random.choice(_UNGROUNDED_REPLIES)
 
         if resident_context:
