@@ -402,6 +402,10 @@ def _patch_completion_env(monkeypatch, provider, create_fn) -> None:
 
     monkeypatch.setattr("app.services.ai_module.settings.ai_key", "test-key", raising=False)
     monkeypatch.setattr("app.services.ai_module.settings.ai_fallback_model", "claude-haiku-4-5", raising=False)
+    # Герметичность: основная модель провайдера фиксируется ОТЛИЧНОЙ от fallback —
+    # иначе результат зависит от env AI_MODEL (retry на fallback не происходит,
+    # когда основная модель уже равна fallback).
+    monkeypatch.setattr(provider, "_model", "claude-test-primary", raising=False)
     monkeypatch.setattr("app.services.ai_module._can_use_remote_ai", _allow)
     monkeypatch.setattr("app.services.ai_module._add_remote_usage", _fake_add_usage)
     monkeypatch.setattr(provider._client.messages, "create", create_fn)

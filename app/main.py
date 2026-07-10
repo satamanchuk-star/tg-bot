@@ -48,6 +48,7 @@ from app.services.health import get_health_state, update_heartbeat, update_notic
 from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
 from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, set_ai_admin_notifier
+from app.services.backup import send_db_backup
 from app.services.daily_messages import (
     send_morning_greeting,
     send_presence_morning,
@@ -530,6 +531,10 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     )
     scheduler.add_job(
         send_presence_evening, "cron", hour=21, minute=0, args=[bot],
+    )
+    # Ночной бэкап БД в админ-чат (3:30) — офсайт-копия на случай потери сервера.
+    scheduler.add_job(
+        send_db_backup, "cron", hour=3, minute=30, args=[bot],
     )
     scheduler.start()
     return scheduler
