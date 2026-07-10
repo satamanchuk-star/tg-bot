@@ -338,3 +338,28 @@ class AiTaskLog(Base):
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     success: Mapped[bool] = mapped_column(Boolean, default=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class UnansweredQuestion(Base):
+    """Вопросы, на которые бот честно ответил «не знаю» — сырьё для пополнения базы.
+
+    Петля роста: гейт точности логирует вопрос → еженедельный дайджест в админ-чат →
+    админ отвечает реплаем → ответ уходит в RAG, статус становится answered.
+    """
+
+    __tablename__ = "unanswered_questions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    question: Mapped[str] = mapped_column(Text)
+    # Нормализованный ключ для группировки повторов одного и того же вопроса
+    norm_key: Mapped[str] = mapped_column(String(200), index=True)
+    hits: Mapped[int] = mapped_column(Integer, default=1)
+    # open | answered | dismissed
+    status: Mapped[str] = mapped_column(String(16), default="open", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    last_asked_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )

@@ -576,6 +576,71 @@ async def correction_review_cb(callback: CallbackQuery, bot: Bot) -> None:
         )
 
 
+@router.callback_query(F.data.startswith("unq:"))
+async def unanswered_digest_cb(callback: CallbackQuery, bot: Bot) -> None:
+    """Кнопки еженедельного дайджеста «не знаю»-вопросов: ответить / скрыть."""
+    if not await _ensure_admin_cb(callback, bot):
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3:
+        await callback.answer()
+        return
+    _, action, qid_str = parts
+    try:
+        qid = int(qid_str)
+    except ValueError:
+        await callback.answer()
+        return
+
+    from app.services.unanswered import register_pending_answer, set_status
+
+    if action == "skip":
+        async for session in get_session():
+            q = await set_status(session, qid, "dismissed")
+            break
+        await callback.answer("Скрыто.")
+        if callback.message and q is not None:
+            await callback.message.edit_text(f"🙈 Скрыто: {q.question[:300]}")
+        return
+
+    if action == "ans":
+        if callback.message:
+            # Реплай принимаем и на сам вопрос, и на приглашение
+            register_pending_answer(callback.message.message_id, qid)
+            await callback.message.edit_reply_markup(reply_markup=None)
+            sent = await callback.message.reply(
+                "Пришлите ответ РЕПЛАЕМ на это сообщение — я запишу его в базу знаний."
+            )
+            if sent is not None:
+                register_pending_answer(sent.message_id, qid)
+        await callback.answer()
+
+
+@router.message(
+    F.reply_to_message,
+    F.chat.id == settings.admin_log_chat_id,
+    flags={"block": False},
+)
+async def unanswered_admin_reply(message: Message, bot: Bot) -> None:
+    """Ловит ответ админа реплаем на приглашение дайджеста → пишет в RAG."""
+    if message.reply_to_message is None or message.text is None:
+        return
+    from app.services.unanswered import peek_pending_answer, pop_pending_answer, save_admin_answer
+    qid = peek_pending_answer(message.reply_to_message.message_id)
+    if qid is None:
+        return
+    if not await _ensure_admin(message, bot):
+        return
+    question = await save_admin_answer(qid, message.text, message.from_user.id if message.from_user else 0)
+    if question is None:
+        await message.reply("Не получилось сохранить ответ — попробуйте ещё раз.")
+        return
+    pop_pending_answer(message.reply_to_message.message_id)
+    await message.reply(
+        f"✅ Записал в базу знаний.\nВопрос: {question[:200]}\nТеперь бот будет отвечать сам."
+    )
+
+
 @router.message(Command("reset_routing_state"))
 async def reset_routing_state(message: Message, bot: Bot) -> None:
     if not await _ensure_admin(message, bot):

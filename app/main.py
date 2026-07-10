@@ -33,12 +33,10 @@ from app.config import settings
 from app.db import Base, engine, get_session
 from app.handlers import (
     admin,
-    economy as economy_handler,
     forms,
     help as help_handler,
     moderation,
     personalization as personalization_handler,
-    shop,
     suggest,
     text_publish,
 )
@@ -49,6 +47,8 @@ from app.services.db_maintenance import cleanup_old_data, optimize_sqlite
 from app.utils.time import now_tz
 from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, set_ai_admin_notifier
 from app.services.backup import send_db_backup
+from app.services.daily_report import send_daily_report
+from app.services.unanswered import send_unanswered_digest
 from app.services.daily_messages import (
     send_morning_greeting,
     send_presence_morning,
@@ -536,6 +536,14 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler.add_job(
         send_db_backup, "cron", hour=3, minute=30, args=[bot],
     )
+    # Петля роста: понедельник 11:00 — дайджест «не знаю»-вопросов админам.
+    scheduler.add_job(
+        send_unanswered_digest, "cron", day_of_week="mon", hour=11, minute=0, args=[bot],
+    )
+    # Вечерняя сводка работы бота в лог-чат (22:30, без звука).
+    scheduler.add_job(
+        send_daily_report, "cron", hour=22, minute=30, args=[bot],
+    )
     scheduler.start()
     return scheduler
 
@@ -916,8 +924,9 @@ async def main() -> None:
     # (до модерации). Экономика монет готова: app/services/coins.py
     # (get_or_create_stats, transfer_coins), баланс — UserStat.coins.
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
-    dp.include_router(shop.router)  # магазин монет (FSM, перед economy)
-    dp.include_router(economy_handler.router)  # инициативы жителей (доработки бота)
+    # shop.router и economy_handler.router отключены: монеты и голосования
+    # убраны из продукта (июль 2026). Код и таблицы сохранены — вернутся
+    # вместе с будущим игровым движком (см. точку расширения выше).
     dp.include_router(suggest.router)   # предложить место в инфраструктуру ЖК
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
     dp.include_router(personalization_handler.router)  # /off_nudges, /on_nudges (только в DM)
