@@ -158,8 +158,9 @@ class BotMentionFilter(BaseFilter):
 
         has_direct_mention = _is_bot_mentioned(message, me) or _is_bot_name_called(text, me)
 
-        # Реплай на бота: отвечаем только если это реальный вопрос (есть "?").
-        # Комментарии, жалобы и эмоциональные реакции без вопроса — игнорируем.
+        # Реплай на сообщение бота — отвечаем ВСЕГДА (это прямое обращение к нему),
+        # даже без «?». Исключаем только пустышки/односложные реакции («ок», «лол»)
+        # и команды, чтобы не плодить бессмысленные ответы.
         is_reply_to_bot = False
         if (
             not has_direct_mention
@@ -170,23 +171,16 @@ class BotMentionFilter(BaseFilter):
             stripped = text.strip()
             stripped_lower = stripped.lower()
             if (
-                "?" in stripped
-                and len(stripped) >= 2
+                len(stripped) >= 2
                 and not stripped.startswith("/")
                 and stripped_lower not in _REPLY_REACTION_PHRASES
             ):
                 is_reply_to_bot = True
 
-        # Активный диалог: продолжаем разговор только если пользователь задаёт вопрос.
-        # Без "?" бот не вмешивается в общий чат, даже если недавно отвечал.
-        is_active_dialog = False
-        if not has_direct_mention and not is_reply_to_bot and message.from_user:
-            stripped = text.strip() if text else ""
-            if "?" in stripped and len(stripped) >= 3 and not stripped.startswith("/"):
-                if _is_in_active_dialog(message.chat.id, message.from_user.id, message.message_thread_id):
-                    is_active_dialog = True
-
-        return has_direct_mention or is_reply_to_bot or is_active_dialog
+        # Бот НЕ вмешивается сам: отвечает только когда к нему обратились
+        # (упоминание/имя) или ответили на его сообщение. Проактивных ответов
+        # на чужие вопросы в чате больше нет — там он лишь ставит реакции.
+        return has_direct_mention or is_reply_to_bot
 
 
 HELP_MENU_TEXT = (
@@ -1261,6 +1255,7 @@ def _is_abilities_question(text: str | None) -> bool:
 # не распознаётся как обращение и бот молчит.
 _BOT_NAME_ALIASES = (
     "жабот", "жаботик", "жаб", "жаба",
+    "бот", "ботик",
     "jabot", "алекс", "alex",
 )
 

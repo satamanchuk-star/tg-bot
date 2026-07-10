@@ -371,32 +371,8 @@ async def run_moderation(message: Message, bot: Bot) -> int:
             except Exception:  # noqa: BLE001
                 pass
 
-        # Topic classification: только в общем чате (без топика)
-        elif (
-            message.message_thread_id is None
-            and settings.ai_enabled
-            and settings.ai_feature_assistant
-        ):
-            now_ts = time.time()
-            if now_ts - _topic_hint_last_user.get(user_id, 0) > _TOPIC_HINT_COOLDOWN:
-                try:
-                    from app.services.ai_tasks import classify_topic
-                    topic_res = await classify_topic(text, chat_id=chat_id, user_id=user_id)
-                    if (
-                        topic_res.confidence >= 0.75
-                        and topic_res.topic_key
-                        and topic_res.suggestion_text
-                    ):
-                        key = topic_res.topic_key
-                        if now_ts - _topic_hint_last_key.get(key, 0) > _TOPIC_HINT_COOLDOWN:
-                            await safe_call(
-                                message.reply(topic_res.suggestion_text),
-                                log_ctx="topic_hint",
-                            )
-                            _topic_hint_last_user[user_id] = now_ts
-                            _topic_hint_last_key[key] = now_ts
-                except Exception:  # noqa: BLE001
-                    pass
+        # Непрошеных подсказок «напиши в топик X» больше нет — бот не пишет
+        # сам в общий чат, только отвечает на прямое обращение.
 
         return 0
 
@@ -743,34 +719,56 @@ async def handle_training_action(callback: CallbackQuery, bot: Bot) -> None:
 # ---------------------------------------------------------------------------
 # Эмодзи-реакции: живость за 0 токенов. Telegram-native, без LLM.
 # ---------------------------------------------------------------------------
-_REACTION_POSITIVE_RE = re.compile(
-    r"(?i)\b(спасибо|благодарю|ура|поздравля|с днём рождения|с новым годом|"
-    r"наконец-то|отлично|супер|красота|молодц)\b"
+# Реакции ставим ТОЛЬКО на осмысленные поводы (благодарность, поздравление,
+# хорошая новость, похвала, явно смешное) — и подбираем уместный эмодзи.
+# Случайных реакций на «любое длинное сообщение» больше нет: они и были той
+# «ерундой», на которую бот лепил лайки без причины.
+_REACT_RULES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
+    # Благодарность
+    (re.compile(r"(?i)\b(спасибо|благодар\w+|пасиб\w*|выручил\w*|спасли)\b"),
+     ("👍", "❤")),
+    # Поздравления и праздники
+    (re.compile(r"(?i)(поздравля\w*|с\s+днём\s+рождения|с\s+др\b|с\s+новосельем|"
+                r"с\s+праздник\w*|с\s+новым\s+годом|ура+\b)"),
+     ("🎉", "❤")),
+    # Хорошая новость: что-то починили/заработало/решилось
+    (re.compile(r"(?i)(наконец-то|починил\w+|заработал\w*|всё\s+работает|"
+                r"решил\w+\s+проблем\w+|уже\s+сделал\w*|готово\b)"),
+     ("🔥", "👍")),
+    # Похвала/восторг
+    (re.compile(r"(?i)\b(отличн\w+|супер\w*|класс\b|огонь\b|красота\b|"
+                r"молодц\w*|шикарн\w+|прекрасн\w+|топ\b)\b"),
+     ("🔥", "👍")),
+    # Явно смешное
+    (re.compile(r"(?i)(😂|🤣|ахах\w*|хах\w*|ржу|угар\w*|\bлол\b)"),
+     ("😁",)),
 )
-_REACTION_POSITIVE_EMOJI = ("👍", "❤", "🔥", "🎉")
-_REACTION_RANDOM_EMOJI = ("👍", "😁", "🔥")
 _LAST_REACTION_AT: dict[int, datetime] = {}
 _REACTION_MIN_GAP = timedelta(minutes=3)
-_REACTION_RANDOM_CHANCE = 0.015  # ~1 реакция на ~70 обычных сообщений
+_REACTION_CHANCE = 0.6  # даже на подходящее — не всегда, чтобы было живо, а не механически
 
 
 async def _maybe_react(message: Message, bot: Bot) -> None:
-    """Изредка ставит эмодзи-реакцию: на позитив — часто, на обычное — редко."""
+    """Ставит эмодзи-реакцию только на осмысленный повод, с кулдауном."""
     try:
         text = (message.text or "").strip()
         if not text or message.from_user is None or message.from_user.is_bot:
+            return
+        # В группе блэкджека бот молчит полностью — ни ответов, ни реакций.
+        if settings.topic_games is not None and message.message_thread_id == settings.topic_games:
             return
         now = datetime.now(timezone.utc)
         last = _LAST_REACTION_AT.get(message.chat.id)
         if last and now - last < _REACTION_MIN_GAP:
             return
-        emoji: str | None = None
-        if _REACTION_POSITIVE_RE.search(text) and random.random() < 0.5:
-            emoji = random.choice(_REACTION_POSITIVE_EMOJI)
-        elif len(text) > 40 and random.random() < _REACTION_RANDOM_CHANCE:
-            emoji = random.choice(_REACTION_RANDOM_EMOJI)
-        if emoji is None:
+        emoji_pool: tuple[str, ...] | None = None
+        for pattern, pool in _REACT_RULES:
+            if pattern.search(text):
+                emoji_pool = pool
+                break
+        if emoji_pool is None or random.random() > _REACTION_CHANCE:
             return
+        emoji = random.choice(emoji_pool)
         from aiogram.types import ReactionTypeEmoji
         await bot.set_message_reaction(
             message.chat.id,
@@ -787,21 +785,13 @@ async def moderate_message(message: Message, bot: Bot) -> None:
     """Модерация сообщений. Пропускает пользователей в FSM-состоянии (заполняют форму)."""
     moderated = await run_moderation(message, bot)
 
-    # Регистрируем активность топика для проактивного сервиса
+    # Бот НЕ комментирует и не отвечает сам — только реагирует эмодзи на
+    # подходящие сообщения. Отвечает лишь когда к нему обращаются (см. help.py).
     if message.chat.id == settings.forum_chat_id:
         if not moderated:
             await _maybe_react(message, bot)
         try:
-            from app.services.proactive import (
-                maybe_topic_comment,
-                maybe_proactive_reply,
-                register_message_activity,
-            )
+            from app.services.proactive import register_message_activity
             register_message_activity(message.chat.id, message.message_thread_id)
-            # Подключаемся к активным дискуссиям
-            await maybe_topic_comment(message, bot)
-            # Проактивный ответ на вопросы (когда топик не активен)
-            if not moderated:
-                await maybe_proactive_reply(message, bot)
         except Exception:
             pass

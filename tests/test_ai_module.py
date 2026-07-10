@@ -666,7 +666,28 @@ def test_bot_name_called_recognizes_cyrillic_alias() -> None:
     assert _is_bot_name_called("Жабот", prof)
     assert _is_bot_name_called("Жаб, как дела", prof)
     assert _is_bot_name_called("Jabot, hi", prof)
+    assert _is_bot_name_called("бот, помоги", prof)
+    assert _is_bot_name_called("Ботик, ты тут?", prof)
     # Не обращение: имя в середине, производные слова
     assert not _is_bot_name_called("спроси у Жабота потом", prof)
     assert not _is_bot_name_called("Жаботина сломалась", prof)
+    assert not _is_bot_name_called("боты захватят мир", prof)
     assert not _is_bot_name_called("привет всем", prof)
+
+
+def test_reactions_fire_only_on_meaningful_messages() -> None:
+    """Реакции — только на осмысленный повод, не на «ерунду»."""
+    from app.handlers.moderation import _REACT_RULES
+
+    def _matches(text: str) -> bool:
+        return any(p.search(text) for p, _ in _REACT_RULES)
+
+    # Повод есть
+    assert _matches("Спасибо, сосед, выручил!")
+    assert _matches("Поздравляю с новосельем 🎉")
+    assert _matches("Наконец-то починили лифт")
+    assert _matches("Отличная новость, класс!")
+    # Повода нет — бот не лайкает
+    assert not _matches("Кто-нибудь знает во сколько завтра отключат воду")
+    assert not _matches("Машина у второго подъезда мешает проезду")
+    assert not _matches("Сегодня опять пробки на въезде")
