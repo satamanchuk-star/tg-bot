@@ -524,6 +524,47 @@ async def kb_reload(message: Message, bot: Bot) -> None:
     )
 
 
+@router.message(Command("kb_stale"))
+async def kb_stale(message: Message, bot: Bot) -> None:
+    """Отчёт о несвежих данных: места и записи KB, не проверявшиеся > 90 дней."""
+    if not await _ensure_admin(message, bot):
+        return
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+    from app.models import Place
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+    lines: list[str] = []
+
+    async for session in get_session():
+        places = (await session.execute(
+            select(Place).where(Place.is_active.is_(True))
+        )).scalars().all()
+        stale_places = [
+            p for p in places
+            if p.verified_at is None or p.verified_at.replace(tzinfo=timezone.utc) < cutoff
+        ]
+        if stale_places:
+            lines.append(f"📍 Места без проверки > 90 дней: {len(stale_places)} из {len(places)}")
+            for p in stale_places[:15]:
+                when = p.verified_at.strftime("%m.%Y") if p.verified_at else "никогда"
+                lines.append(f"• {p.name} ({p.category}) — проверено: {when}")
+            if len(stale_places) > 15:
+                lines.append(f"…и ещё {len(stale_places) - 15}")
+        break
+
+    from app.services.resident_kb import load_resident_kb
+    kb_entries = load_resident_kb()
+    kb_no_date = sum(1 for e in kb_entries if not getattr(e, "verified_at", None))
+    lines.append(f"\n📚 Записей KB без даты проверки: {kb_no_date} из {len(kb_entries)}")
+    lines.append(
+        "\nПроверили место — обновите verified_at в data/places_seed.json "
+        "и сделайте /kb_reload."
+    )
+    await message.reply("\n".join(lines) if lines else "Все данные свежие 👍")
+
+
 @router.callback_query(F.data.startswith("corr:"))
 async def correction_review_cb(callback: CallbackQuery, bot: Bot) -> None:
     """Подтверждение/отклонение коррекции жителя перед записью в RAG."""

@@ -31,6 +31,8 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "work_time": ("work_time", "режим работы", "график"),
     "description": ("description", "описание", "комментарий"),
     "is_active": ("is_active", "active", "активен"),
+    "verified_at": ("verified_at", "проверено", "дата проверки"),
+    "verified_by": ("verified_by", "кто проверил"),
 }
 
 
@@ -91,7 +93,20 @@ def _row_to_payload(row: dict[str, str], column_map: dict[str, str]) -> dict[str
         "work_time": _clean_str(row.get(column_map.get("work_time", ""))),
         "description": _clean_str(row.get(column_map.get("description", ""))),
         "is_active": _parse_bool(row.get(column_map.get("is_active", ""))),
+        "verified_by": _clean_str(row.get(column_map.get("verified_by", ""))),
     }
+
+    raw_verified = _clean_str(row.get(column_map.get("verified_at", "")))
+    verified_at = None
+    if raw_verified:
+        from datetime import datetime
+        for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+            try:
+                verified_at = datetime.strptime(raw_verified, fmt)
+                break
+            except ValueError:
+                continue
+    payload["verified_at"] = verified_at
 
     payload["lat"] = _parse_float(row.get(column_map.get("lat", "")))
     payload["lon"] = _parse_float(row.get(column_map.get("lon", "")))
@@ -161,6 +176,10 @@ async def run_import(*, dry_run: bool) -> ImportStats:
                     stats.created += 1
                 else:
                     for key, value in payload.items():
+                        # Пустые ячейки паспорта достоверности не затирают
+                        # существующие даты проверки.
+                        if key in ("verified_at", "verified_by") and value is None:
+                            continue
                         setattr(existing, key, value)
                     existing.updated_at = datetime.utcnow()
                     stats.updated += 1

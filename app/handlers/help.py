@@ -1081,6 +1081,10 @@ def _build_kb_action_keyboard(
             text="\U0001f44e",
             callback_data=f"{FEEDBACK_PREFIX}:down:{bot_message_id}",
         ),
+        InlineKeyboardButton(
+            text="⚠️ Устарело",
+            callback_data=f"{FEEDBACK_PREFIX}:stale:{bot_message_id}",
+        ),
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -1860,6 +1864,25 @@ async def ai_feedback_callback(callback: CallbackQuery) -> None:
         except Exception:
             logger.debug("Не удалось отправить список «Ещё про …».", exc_info=True)
         await callback.answer()
+        return
+
+    if action == "stale":
+        # Житель сообщил, что данные в ответе устарели (закрылось/переехало/
+        # другой график) — репорт админам с полным контекстом для правки базы.
+        try:
+            report = (
+                "⚠️ Житель сообщил: данные в ответе бота УСТАРЕЛИ.\n\n"
+                f"Вопрос: {prompt_text[:300]}\n\n"
+                f"Ответ бота: {reply_text[:600]}\n\n"
+                "Проверьте место: если закрылось — is_active=false в "
+                "data/places_seed.json + /kb_reload, либо поправьте resident_kb."
+            )
+            if callback.message and callback.message.bot:
+                await callback.message.bot.send_message(settings.admin_log_chat_id, report)
+            await callback.answer("Спасибо! Передал администраторам на проверку 🙏")
+        except Exception:
+            logger.warning("Не удалось отправить репорт об устаревших данных.")
+            await callback.answer("Не получилось отправить — попробуйте позже.")
         return
 
     if action not in {"up", "down"}:

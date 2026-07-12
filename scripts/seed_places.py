@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import delete, select
@@ -16,6 +17,17 @@ logger = logging.getLogger(__name__)
 SEED_FILE = Path(__file__).resolve().parent.parent / "data" / "places_seed.json"
 # Fallback: bind mount data/ может перекрывать файл, но kb/ всегда доступен в образе
 SEED_FILE_FALLBACK = Path(__file__).resolve().parent.parent / "kb" / "places_seed.json"
+
+
+def _parse_verified_at(item: dict) -> "datetime | None":
+    """Парсит дату проверки из seed («2026-04-07» или ISO)."""
+    raw = item.get("verified_at")
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw))
+    except ValueError:
+        return None
 
 
 def _load_seed_data() -> list[dict[str, object]]:
@@ -79,6 +91,26 @@ async def seed_places(session: AsyncSession) -> int:
         if not all((name, address, category)):
             continue
         if (name, address, category) in existing_keys:
+            # Seed — источник истины для статуса и даты проверки: если запись
+            # уже есть, синхронизируем is_active/verified_at (иначе пометка
+            # «закрыто» в JSON никогда не доехала бы до живой БД).
+            existing = (
+                await session.execute(
+                    select(Place).where(
+                        Place.name == name,
+                        Place.address == address,
+                        Place.category == category,
+                    ).limit(1)
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                seed_active = bool(item.get("is_active", True))
+                seed_verified = _parse_verified_at(item)
+                if existing.is_active != seed_active:
+                    existing.is_active = seed_active
+                if seed_verified and existing.verified_at != seed_verified:
+                    existing.verified_at = seed_verified
+                    existing.verified_by = item.get("verified_by") or "seed"
             continue
 
         place = Place(
@@ -95,6 +127,8 @@ async def seed_places(session: AsyncSession) -> int:
             distance_km=item.get("distance_km"),
             source=item.get("source"),
             is_active=item.get("is_active", True),
+            verified_at=_parse_verified_at(item),
+            verified_by=item.get("verified_by") or "seed",
         )
         session.add(place)
         added += 1

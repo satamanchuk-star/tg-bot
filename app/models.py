@@ -262,6 +262,9 @@ class Place(Base):
     source: Mapped[str | None] = mapped_column(String(255), nullable=True)
     work_time: Mapped[str | None] = mapped_column(String(255), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Паспорт достоверности: когда и кем данные проверялись в последний раз
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    verified_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(

@@ -48,6 +48,7 @@ from app.utils.time import now_tz
 from app.services.ai_module import clear_assistant_cache, close_ai_client, get_ai_client, set_ai_admin_notifier
 from app.services.backup import send_db_backup
 from app.services.daily_report import send_daily_report
+from app.services.place_verify import verify_places
 from app.services.unanswered import send_unanswered_digest
 from app.services.daily_messages import (
     send_morning_greeting,
@@ -199,6 +200,20 @@ async def init_db(async_engine: AsyncEngine) -> None:
                 if "display_name" not in columns:
                     sync_conn.execute(
                         text("ALTER TABLE user_stats ADD COLUMN display_name TEXT")
+                    )
+
+            # Миграция places: паспорт достоверности
+            if inspector.has_table("places"):
+                columns = {
+                    column["name"] for column in inspector.get_columns("places")
+                }
+                if "verified_at" not in columns:
+                    sync_conn.execute(
+                        text("ALTER TABLE places ADD COLUMN verified_at DATETIME")
+                    )
+                if "verified_by" not in columns:
+                    sync_conn.execute(
+                        text("ALTER TABLE places ADD COLUMN verified_by VARCHAR(120)")
                     )
 
             # Миграция moderation_events
@@ -539,6 +554,10 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     # Петля роста: понедельник 11:00 — дайджест «не знаю»-вопросов админам.
     scheduler.add_job(
         send_unanswered_digest, "cron", day_of_week="mon", hour=11, minute=0, args=[bot],
+    )
+    # Достоверность инфраструктуры: вторник 12:00 — сверка мест с первоисточниками.
+    scheduler.add_job(
+        verify_places, "cron", day_of_week="tue", hour=12, minute=0, args=[bot],
     )
     # Вечерняя сводка работы бота в лог-чат (22:30, без звука).
     scheduler.add_job(

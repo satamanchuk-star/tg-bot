@@ -12,7 +12,9 @@
     "lon": 37.639294,
     "distance_km": 2.622,
     "source": "https://yesdantist.ru/ ; Yandex Maps ; 2GIS",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Видновская клиническая больница",
@@ -23,11 +25,13 @@
     "website": "https://lpu.zdrav.mosreg.ru/gbuz_mo_vidnovskaya_klinicheskaya_bolnitsa",
     "work_time": "круглосуточно",
     "description": "Основной стационар ГБУЗ МО «Видновская клиническая больница».",
-    "lat": 55.553910,
+    "lat": 55.55391,
     "lon": 37.728939,
     "distance_km": 5.692,
     "source": "https://lpu.zdrav.mosreg.ru/gbuz_mo_vidnovskaya_klinicheskaya_bolnitsa ; Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Гемотест",
@@ -38,11 +42,13 @@
     "website": "https://gemotest.ru/lopatino/address/sukhanovskaya-ulitsa-9/",
     "work_time": "пн-пт 07:30–19:30; сб-вс 07:30–14:30",
     "description": "Медицинская лаборатория и пункт сдачи анализов.",
-    "lat": 55.534400,
-    "lon": 37.639300,
+    "lat": 55.5344,
+    "lon": 37.6393,
     "distance_km": 2.411,
     "source": "https://gemotest.ru/lopatino/address/sukhanovskaya-ulitsa-9/ ; Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Планета здоровья",
@@ -57,7 +63,9 @@
     "lon": 37.641171,
     "distance_km": 2.377,
     "source": "https://planetazdorovo.ru/ ; 2GIS / Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Трифарма",
@@ -72,7 +80,9 @@
     "lon": 37.635027,
     "distance_km": 2.177,
     "source": "https://trifarma.ru/ ; Yandex Maps (отметка «больше не работает»)",
-    "is_active": false
+    "is_active": false,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Поликлиника №1 Видновской клинической больницы",
@@ -87,7 +97,9 @@
     "lon": 37.728775,
     "distance_km": 5.682,
     "source": "https://lpu.zdrav.mosreg.ru/gbuz_mo_vidnovskaya_klinicheskaya_bolnitsa/o_nas/clinics/vzroslaya_poliklinika_ ; региональный портал здравоохранения",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "GoldenMed",
@@ -102,7 +114,9 @@
     "lon": 37.645923,
     "distance_km": 2.674,
     "source": "https://www.goldenmed.ru/clinics-adress/lopatino-1/ ; Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "GoldenMed",
@@ -115,9 +129,11 @@
     "description": "Частный медцентр (ранее в источниках встречается как «Карта здоровья»).",
     "lat": 55.536405,
     "lon": 37.636724,
-    "distance_km": 2.190,
+    "distance_km": 2.19,
     "source": "https://www.goldenmed.ru/clinics-adress/lopatino-2/ ; Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Mishka Bakery",
@@ -132,7 +148,9 @@
     "lon": 37.640737,
     "distance_km": 2.281,
     "source": "ТЦ «Аструм-Видное», раздел «Рестораны»",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Буханка",
@@ -147,7 +165,9 @@
     "lon": 37.637802,
     "distance_km": 0.047,
     "source": "Yandex Maps (ЖК Живописный, 2 / Буханка)",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "LA'VANDA Coffee",
@@ -162,7 +182,9 @@
     "lon": 37.640737,
     "distance_km": 2.281,
     "source": "ТЦ «Аструм-Видное», раздел «Рестораны»",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Суши Wok",
@@ -177,7 +199,9 @@
     "lon": 37.641171,
     "distance_km": 2.377,
     "source": "Yandex Maps / 2GIS / официальная сеть Sushi Wok",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Burger King",
@@ -192,7 +216,9 @@
     "lon": 37.640737,
     "distance_km": 2.281,
     "source": "ТЦ «Аструм-Видное», раздел арендаторов / Burger King card",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Администрация Ленинского городского округа",
@@ -203,11 +229,13 @@
     "website": "https://adm-vidnoe.ru/municipality/administratsiya-okruga/kontakty/",
     "work_time": "пн-чт 09:00–18:00; пт 09:00–16:45",
     "description": "Официальная администрация округа.",
-    "lat": 55.557000,
-    "lon": 37.708100,
+    "lat": 55.557,
+    "lon": 37.7081,
     "distance_km": 4.377,
     "source": "https://adm-vidnoe.ru/municipality/administratsiya-okruga/kontakty/ ; Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Видновский городской суд",
@@ -218,11 +246,13 @@
     "website": "https://vidnoe--mo.sudrf.ru/",
     "work_time": null,
     "description": "Суд общей юрисдикции.",
-    "lat": 55.558860,
+    "lat": 55.55886,
     "lon": 37.716378,
     "distance_km": 4.906,
     "source": "https://vidnoe--mo.sudrf.ru/ ; Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "МосОблЕИРЦ",
@@ -237,7 +267,9 @@
     "lon": 37.697361,
     "distance_km": 3.702,
     "source": "https://мособлеирц.рф/ ; Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Отдел по вопросам миграции УМВД России по Ленинскому городскому округу",
@@ -252,7 +284,9 @@
     "lon": 37.714015,
     "distance_km": 4.816,
     "source": "Yandex Maps / regional reference sources",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "УМВД России по Ленинскому городскому округу",
@@ -267,7 +301,9 @@
     "lon": 37.717429,
     "distance_km": 4.975,
     "source": "https://adm-vidnoe.ru/bezopasnost/obshchestvennaya-bezopasnost/umvd/ ; Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Окружное управление социального развития №15",
@@ -282,7 +318,9 @@
     "lon": 37.711527,
     "distance_km": 4.832,
     "source": "https://adm-vidnoe.ru/residense/sotsialnaya-sfera-i-zdravookhranenie/okruzhnoe-upravlenie-sotsialnogo-razvitiya-15/ ; Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Межрайонная ИФНС России №14 по Московской области",
@@ -297,7 +335,9 @@
     "lon": 37.718327,
     "distance_km": 5.024,
     "source": "https://www.nalog.gov.ru/rn50/ifns/imns50_03/ ; Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Почта России 142700",
@@ -312,7 +352,9 @@
     "lon": 37.710063,
     "distance_km": 4.501,
     "source": "https://www.pochta.ru/offices/142700 ; Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Почта России 142703",
@@ -327,7 +369,9 @@
     "lon": 37.693067,
     "distance_km": 3.433,
     "source": "https://www.pochta.ru/offices/142703 ; Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Почта России 142710",
@@ -340,9 +384,11 @@
     "description": "Отделение Почты России в Лопатино.",
     "lat": 55.536405,
     "lon": 37.636724,
-    "distance_km": 2.190,
+    "distance_km": 2.19,
     "source": "https://www.pochta.ru/offices/142710 ; Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Почта России 142718",
@@ -352,12 +398,14 @@
     "phone": "+7 (495) 549-35-77",
     "website": "https://www.pochta.ru/offices/142718",
     "work_time": null,
-    "description": "В источниках есть отметка о временной работе по другому адресу; требуется проверка перед промышленной загрузкой.",
+    "description": "ЗАКРЫТО (по сообщениям жителей, июль 2026). Ближайшее действующее отделение — 142710 в рп Лопатино, ул. Сухановская, 2.",
     "lat": 55.562775,
     "lon": 37.644648,
     "distance_km": 0.839,
     "source": "https://www.pochta.ru/offices/142718 ; Yandex Maps",
-    "is_active": true
+    "is_active": false,
+    "verified_at": "2026-07-10",
+    "verified_by": "residents-report"
   },
   {
     "name": "Мои документы, офис \"Бутово-Парк\"",
@@ -372,7 +420,9 @@
     "lon": 37.586589,
     "distance_km": 3.486,
     "source": "https://mfcvidnoe.ru/index/0-64 ; https://2gis.ru/moscow/firm/70000001037124564",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Мои документы, офис \"Лопатино\"",
@@ -387,7 +437,9 @@
     "lon": 37.641374,
     "distance_km": 2.312,
     "source": "https://mfcvidnoe.ru/index/0-348 ; https://2gis.ru/moscow/firm/70000001069971141",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Мои документы, центральный офис Видное",
@@ -402,7 +454,9 @@
     "lon": 37.692627,
     "distance_km": 3.416,
     "source": "https://mfcvidnoe.ru/index/0-60 ; https://mfcvidnoe.ru/index/0-10",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Лопатинская СОШ №3, дошкольное отделение",
@@ -417,7 +471,9 @@
     "lon": 37.635611,
     "distance_km": 2.867,
     "source": "https://lensch-lopatino.edumsko.ru/contacts ; TopCheck / Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Лопатинская школа, дошкольное отделение (ЖК Живописный)",
@@ -432,7 +488,9 @@
     "lon": 37.638925,
     "distance_km": 0.095,
     "source": "https://lensch-lopatino.edumsko.ru/contacts ; новости об открытии детсада в ЖК Живописный",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Лопатинская школа, дошкольное отделение (Сухановская 11с1)",
@@ -447,7 +505,9 @@
     "lon": 37.641225,
     "distance_km": 2.493,
     "source": "https://lensch-lopatino.edumsko.ru/contacts ; Yandex Maps ; 2GIS",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Bananaclass",
@@ -462,7 +522,9 @@
     "lon": 37.645043,
     "distance_km": 2.531,
     "source": "https://bananamama-solnechnyj-bulvar.clients.site/ ; Yandex Maps ; 2GIS",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Ежата",
@@ -475,9 +537,11 @@
     "description": "Частный детский сад в ЖК «Государев Дом».",
     "lat": 55.531443,
     "lon": 37.639878,
-    "distance_km": 2.740,
+    "distance_km": 2.74,
     "source": "Yandex Maps / тематические справочники (Сухановская, 21 / Ежата)",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Жар-птица",
@@ -492,7 +556,9 @@
     "lon": 37.635503,
     "distance_km": 2.326,
     "source": "Yandex Maps / 2GIS (Сухановская, 8с1 / Жар-птица)",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Лопатинская средняя школа",
@@ -507,7 +573,9 @@
     "lon": 37.643893,
     "distance_km": 2.634,
     "source": "https://lensch-lopatino.edumsko.ru/contacts ; 2GIS",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Видное Парк",
@@ -520,9 +588,11 @@
     "description": "Ритейл-парк; якорные арендаторы включают Ленту и Лемана ПРО.",
     "lat": 55.566608,
     "lon": 37.689626,
-    "distance_km": 3.420,
+    "distance_km": 3.42,
     "source": "https://vidnoepark.ru/ ; https://shopandmall.ru/torgovye-centry/vidnoe_park-vidnoe-staro-nagornaya_d_20 ; https://2gis.ru/vdn/firm/70000001055481814",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Галерея 9-18",
@@ -537,7 +607,9 @@
     "lon": 37.699094,
     "distance_km": 3.993,
     "source": "https://yandex.ru/maps/org/galereya_9_18/179082141298/ ; https://shopandmall.ru/torgovye-centry/galereya_9-18-vidnoe-olimpiyskaya_ulica_6_korp_1 ; https://www.moscowmap.ru/sprav2/showkont.asp?id=1324032",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Аструм-Видное",
@@ -552,7 +624,9 @@
     "lon": 37.640737,
     "distance_km": 2.281,
     "source": "https://vidnoe-astrum.ru/ ; https://vidnoe-astrum.ru/shedule/ ; Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Курс",
@@ -567,7 +641,9 @@
     "lon": 37.702544,
     "distance_km": 4.055,
     "source": "https://www.tc-kurs.ru/tcz-kurs-g-vidnoe ; https://2gis.ru/vdn/firm/4504127908394085",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Все для вас",
@@ -582,7 +658,9 @@
     "lon": 37.647046,
     "distance_km": 1.597,
     "source": "Yandex Maps / 2GIS (Ольгинская, 51 / Все для вас)",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Гипер Лента",
@@ -595,9 +673,11 @@
     "description": "Гипермаркет в ТЦ «Видное Парк».",
     "lat": 55.566608,
     "lon": 37.689626,
-    "distance_km": 3.420,
+    "distance_km": 3.42,
     "source": "https://2gis.ru/vdn/firm/70000001058975315 ; https://yandex.ru/maps/org/giper_lenta/192675033812/",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "ВкусВилл",
@@ -612,7 +692,9 @@
     "lon": 37.640737,
     "distance_km": 2.281,
     "source": "ТЦ «Аструм-Видное», список арендаторов / VkusVill store card",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Первым делом",
@@ -627,7 +709,9 @@
     "lon": 37.637802,
     "distance_km": 0.047,
     "source": "https://zoon.ru/msk/shops/minimarket_pervym_delom_v_zhk_zhivopisnyj/ ; Yandex Maps (ЖК Живописный, 2)",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Верный",
@@ -639,10 +723,12 @@
     "work_time": null,
     "description": "Сетевой супермаркет в районе КП Старт.",
     "lat": 55.561736,
-    "lon": 37.631730,
+    "lon": 37.63173,
     "distance_km": 0.761,
     "source": "2GIS / Yandex Maps (КП Старт, 35 / Верный)",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "ВкусВилл",
@@ -657,7 +743,9 @@
     "lon": 37.702544,
     "distance_km": 4.055,
     "source": "https://vkusvill.ru/shops/?shop_id=3401 ; https://2gis.ru/moscow/firm/70000001021906836",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Магнит",
@@ -670,9 +758,11 @@
     "description": "Сетевой продуктовый магазин в Измайлово.",
     "lat": 55.563065,
     "lon": 37.645097,
-    "distance_km": 0.880,
+    "distance_km": 0.88,
     "source": "Yandex Maps / 2GIS (Измайлово, 12А / Магнит)",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Перекрёсток",
@@ -687,7 +777,9 @@
     "lon": 37.699094,
     "distance_km": 3.993,
     "source": "https://www.perekrestok.ru/shops/shop/1041 ; Yandex Maps",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Перекрёсток",
@@ -702,7 +794,9 @@
     "lon": 37.702544,
     "distance_km": 4.055,
     "source": "https://www.perekrestok.ru/shops/shop/693 ; https://2gis.ru/moscow/firm/4504127909010592",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Перекрёсток",
@@ -717,7 +811,9 @@
     "lon": 37.640737,
     "distance_km": 2.281,
     "source": "https://vidnoe-astrum.ru/shedule/ ; Yandex Maps / 2GIS (ТЦ Аструм-Видное, Перекрёсток)",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Лемана ПРО",
@@ -730,9 +826,11 @@
     "description": "Строительный гипермаркет; в части источников фигурирует как бывший «Леруа Мерлен». Рекомендуется точечная перепроверка статуса перед production-импортом.",
     "lat": 55.566608,
     "lon": 37.689626,
-    "distance_km": 3.420,
+    "distance_km": 3.42,
     "source": "https://shopandmall.ru/torgovye-centry/vidnoe_park-vidnoe-staro-nagornaya_d_20 ; https://lemanapro.ru/ ; отраслевые справочники",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Петрович",
@@ -747,7 +845,9 @@
     "lon": 37.608598,
     "distance_km": 3.306,
     "source": "https://petrovich.ru/ ; Yandex Maps ; 2GIS",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "100 Дверей",
@@ -760,9 +860,11 @@
     "description": "Специализированный магазин дверей и комплектующих.",
     "lat": 55.566608,
     "lon": 37.689626,
-    "distance_km": 3.420,
+    "distance_km": 3.42,
     "source": "https://yandex.ru/maps/org/100_dverey/212041900960/ ; 2GIS search results",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Строй Маркет",
@@ -775,9 +877,11 @@
     "description": "Локальный магазин строительных материалов.",
     "lat": 55.563065,
     "lon": 37.645097,
-    "distance_km": 0.880,
+    "distance_km": 0.88,
     "source": "Yandex Maps / 2GIS (Измайлово, 12А / Строй Маркет)",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "Строймаркет",
@@ -792,7 +896,9 @@
     "lon": 37.640246,
     "distance_km": 2.455,
     "source": "Yandex Maps / 2GIS (Сухановская, 11 / Строймаркет)",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   },
   {
     "name": "СтройHome",
@@ -807,6 +913,8 @@
     "lon": 37.637802,
     "distance_km": 0.047,
     "source": "https://2gis.ru/moscow/firm/70000001097281548 ; Yandex Maps (ЖК Живописный, 2 / СтройHome)",
-    "is_active": true
+    "is_active": true,
+    "verified_at": "2026-04-07",
+    "verified_by": "research-2026-04"
   }
 ]
