@@ -61,3 +61,12 @@ def test_search_post_office_points_to_working_one(seeded_places) -> None:
     """«Почта» не должна выдавать закрытое отделение 142718 (Измайлово)."""
     ctx = _search("ближайшая почта")
     assert "142718" not in ctx  # закрытое отделение отфильтровано (is_active=false)
+
+
+def test_search_natural_phrasing_via_synonyms(seeded_places) -> None:
+    """Бытовые формулировки без ключевого слова карточки (заправка→АЗС и др.)."""
+    assert "АЗС" in _search("где заправка")          # не только «азс»
+    assert "анкомат" in _search("нужен банкомат")     # Банкомат/банкомат
+    assert "аршрутка" in _search("как доехать в москву") or "етро" in _search("как доехать в москву")
+    assert "ВетЛис" in _search("ветеринар рядом")
+    assert "равмпункт" in _search("травмпункт где")
