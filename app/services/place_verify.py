@@ -25,6 +25,7 @@ from app.models import Place
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 10
+_CONCURRENCY = 5  # одновременных проверок URL — вежливо к источникам, но не последовательно
 _URL_RE = re.compile(r"https?://[^\s;,)]+")
 # Маркеры закрытия в карточках Яндекс.Карт / 2GIS / зумерских справочников
 _CLOSED_MARKERS = (
@@ -80,14 +81,20 @@ async def verify_places(bot: Bot) -> None:
             return
 
         suspicions: list[str] = []
+        sem = asyncio.Semaphore(_CONCURRENCY)
+
+        async def _guarded(place: Place) -> tuple[Place, str | None]:
+            async with sem:
+                return place, await _check_place(client, place)
+
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(_TIMEOUT), follow_redirects=True,
         ) as client:
-            for place in places:
-                reason = await _check_place(client, place)
-                if reason:
-                    suspicions.append(f"• {place.name} ({place.category}): {reason}")
-                await asyncio.sleep(1.0)  # вежливая пауза между запросами
+            results = await asyncio.gather(*(_guarded(p) for p in places))
+
+        for place, reason in results:
+            if reason:
+                suspicions.append(f"• {place.name} ({place.category}): {reason}")
 
         if not suspicions:
             logger.info("PLACE_VERIFY: %d мест проверено, подозрений нет.", len(places))

@@ -565,6 +565,44 @@ _UNGROUNDED_REPLIES = (
     "Не уверен и не хочу гадать — таких данных у меня нет.",
 )
 
+# Ссылки на фоновые задачи (fire-and-forget): без сильной ссылки GC может
+# собрать задачу до завершения — asyncio держит на неё лишь слабую ссылку.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro) -> None:
+    """Запускает корутину в фоне, удерживая ссылку до её завершения."""
+    task = asyncio.get_running_loop().create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+
+# Служебные обёртки промпта из хендлера (help.py): контекст темы и пометки
+# диалога. Для лога «не знаю»-вопросов нужен чистый вопрос жителя, иначе в
+# дайджест и ключ дедупликации попадёт весь преамбул с чужими репликами.
+_SCAFFOLD_REPLY_MARKER = "[Реплика, на которую отвечаешь]\n"
+_SCAFFOLD_LEADING_BLOCK = re.compile(r"^\s*\[[^\]]*\]\s*\n+")
+_SCAFFOLD_TRAILING_NOTE = re.compile(r"\n?\[[^\]]*\]\s*$")
+
+
+def _strip_prompt_scaffolding(text: str) -> str:
+    """Вынимает исходный вопрос жителя из промпта с преамбулой контекста."""
+    # 1) после «[Реплика, на которую отвечаешь]» идёт сам вопрос (+ возможный
+    #    префикс «[Продолжение диалога...]») — берём хвост после маркера.
+    idx = text.rfind(_SCAFFOLD_REPLY_MARKER)
+    if idx != -1:
+        text = text[idx + len(_SCAFFOLD_REPLY_MARKER):]
+    # 2) снимаем ведущие служебные блоки в квадратных скобках (напр. «Продолжение
+    #    диалога — предыдущий ответ бота: ...»).
+    while True:
+        stripped = _SCAFFOLD_LEADING_BLOCK.sub("", text, count=1)
+        if stripped == text:
+            break
+        text = stripped
+    # 3) снимаем хвостовую служебную пометку («Продолжительный диалог — ...»).
+    text = _SCAFFOLD_TRAILING_NOTE.sub("", text)
+    return text.strip()
+
 
 # Последний использованный style-hint per (chat_id, user_id) — чтобы не повторялся подряд.
 _LAST_STYLE_HINT_BY_USER: dict[tuple[int, int], str] = {}
@@ -1351,11 +1389,11 @@ class AnthropicProvider:
             logger.info("ANSWER_GATE: ungrounded factual question → honest 'не знаю' prompt=%r", safe_prompt[:80])
             # Петля роста: вопрос без ответа копится для еженедельного дайджеста
             # админам (fire-and-forget — ответ жителю не ждёт записи в БД).
+            # Логируем чистый вопрос без служебной преамбулы контекста.
             try:
                 from app.services.unanswered import log_unanswered
-                asyncio.get_running_loop().create_task(
-                    log_unanswered(chat_id, safe_prompt)
-                )
+                clean_q = _strip_prompt_scaffolding(safe_prompt)
+                _spawn_background(log_unanswered(chat_id, clean_q))
             except Exception:
                 pass
             return random.choice(_UNGROUNDED_REPLIES)
