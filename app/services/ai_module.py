@@ -2271,6 +2271,43 @@ _PLACES_SYNONYMS: dict[str, list[str]] = {
     "госучрежден": ["госучрежден", "мфц", "администрац"],
     "пенсион": ["пенсион", "сфр", "пособ"],
     "развива": ["развива", "детск", "кружк"],
+    # Новые категории (июль 2026): бытовые формулировки → ключевые слова карточек
+    "заправ": ["азс", "заправ"],
+    "бензин": ["азс", "бензин"],
+    "азс": ["азс"],
+    "банк": ["банк", "банкомат"],
+    "банкомат": ["банкомат", "банк"],
+    "обналич": ["банкомат", "банк"],
+    "метро": ["метро", "станц"],
+    "электричк": ["электричк", "платформ", "вокзал"],
+    "автобус": ["автобус", "маршрут"],
+    "маршрутк": ["маршрут", "автобус"],
+    "транспорт": ["транспорт", "метро", "автобус", "маршрут"],
+    "доехать": ["метро", "автобус", "маршрут", "электричк"],
+    "пвз": ["пункт выдач", "wildberries", "ozon", "сдэк"],
+    "выдач": ["пункт выдач", "wildberries", "ozon", "сдэк"],
+    "озон": ["ozon"],
+    "вайлдберриз": ["wildberries"],
+    "постамат": ["постамат", "пункт выдач"],
+    "ветеринар": ["ветклиник", "ветеринар"],
+    "ветклиник": ["ветклиник", "ветеринар"],
+    "зоомагазин": ["зоомагазин", "зоо", "лапы"],
+    "животн": ["ветклиник", "зоомагазин"],
+    "парикмахер": ["парикмахер", "салон", "барбер", "стрижк"],
+    "стрижк": ["парикмахер", "салон"],
+    "маникюр": ["маникюр", "салон", "ногт"],
+    "постри": ["парикмахер", "салон", "стрижк"],
+    "стрич": ["парикмахер", "салон"],
+    "красот": ["салон", "красот", "маникюр"],
+    "фитнес": ["фитнес", "тренажёр", "спорт", "зал"],
+    "спортзал": ["фитнес", "тренажёр"],
+    "тренажёр": ["тренажёр", "фитнес"],
+    "тренажер": ["тренажёр", "фитнес"],
+    "бассейн": ["бассейн", "спорт"],
+    "шиномонтаж": ["шиномонтаж", "авто"],
+    "автосервис": ["автосервис", "авто", "сто"],
+    "автомойк": ["автомойк", "мойк", "азс"],
+    "травмпункт": ["травмпункт", "травм"],
 }
 
 _MIN_WORD_LENGTH = 3
@@ -2312,28 +2349,33 @@ async def _get_places_context(query: str, *, top_k: int = 5) -> str:
 
     try:
         async for session in get_session():
-            # Каждое слово должно встречаться хотя бы в одном из полей
-            from sqlalchemy import and_, or_
-            word_conditions = []
-            for word in search_words[:5]:  # Ограничиваем количество слов
-                like = f"%{word}%"
-                word_conditions.append(
-                    or_(
-                        Place.name.ilike(like),
-                        Place.address.ilike(like),
-                        Place.category.ilike(like),
-                        Place.subcategory.ilike(like),
-                        Place.description.ilike(like),
-                    )
-                )
-            rows = (
+            # Фильтрация в Python, а не через SQL ilike: SQLite LIKE/ILIKE
+            # регистронезависим ТОЛЬКО для латиницы, поэтому «АЗС» не находилось
+            # по запросу «азс». Мест немного (~100), полная загрузка дешевле, а
+            # str.lower() в Python корректно сворачивает кириллицу.
+            all_active = (
                 await session.execute(
                     select(Place)
-                    .where(Place.is_active.is_(True), or_(*word_conditions))
+                    .where(Place.is_active.is_(True))
                     .order_by(Place.distance_km.asc().nulls_last(), Place.name.asc())
-                    .limit(top_k)
                 )
             ).scalars().all()
+            words = search_words[:5]
+            scored: list[tuple[int, Place]] = []
+            for place in all_active:
+                haystack = " ".join(
+                    x for x in (
+                        place.name, place.address, place.category,
+                        place.subcategory, place.description,
+                    ) if x
+                ).lower()
+                hits = sum(1 for w in words if w in haystack)
+                if hits:
+                    scored.append((hits, place))
+            # Больше совпавших слов → выше; при равенстве сохраняется порядок
+            # по расстоянию (список уже отсортирован по distance_km).
+            scored.sort(key=lambda t: t[0], reverse=True)
+            rows = [p for _, p in scored[:top_k]]
             if not rows:
                 logger.info("Places search: no results found for words=%s", search_words[:5])
                 return ""
