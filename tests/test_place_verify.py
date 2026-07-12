@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from app.services.place_verify import _CLOSED_MARKERS, _first_url
+import asyncio
+
+from app.services.place_verify import _CLOSED_MARKERS, _CONCURRENCY, _first_url
 
 
 def test_first_url_extracts_from_mixed_source() -> None:
@@ -10,6 +12,54 @@ def test_first_url_extracts_from_mixed_source() -> None:
         "https://pochta.ru/offices/142718"
     assert _first_url("Yandex Maps / 2GIS (Измайлово, 12А)") is None
     assert _first_url(None) is None
+
+
+def test_verify_places_runs_concurrently(monkeypatch) -> None:
+    """Сверка идёт пачками (Semaphore), а не строго последовательно.
+
+    Регресс: раньше 100+ мест проверялись по одному с паузой 1с — минуты
+    блокировки. Проверяем, что одновременно активно >1 проверки.
+    """
+    from types import SimpleNamespace
+
+    from app.services import place_verify
+
+    places = [
+        SimpleNamespace(name=f"p{i}", category="c", source="https://ex/a", is_active=True)
+        for i in range(_CONCURRENCY * 2)
+    ]
+
+    active = 0
+    max_active = 0
+
+    async def _fake_check(client, place):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.02)
+        active -= 1
+        return None
+
+    async def _fake_session():
+        class _Res:
+            def scalars(self_inner):
+                return SimpleNamespace(all=lambda: places)
+
+        class _Sess:
+            async def execute(self_inner, *a, **k):
+                return _Res()
+
+        yield _Sess()
+
+    monkeypatch.setattr(place_verify, "_check_place", _fake_check)
+    monkeypatch.setattr(place_verify, "get_session", _fake_session)
+
+    bot = SimpleNamespace(
+        send_message=lambda *a, **k: asyncio.sleep(0),
+    )
+    asyncio.run(place_verify.verify_places(bot))
+    assert max_active > 1, "проверки должны идти параллельно"
+    assert max_active <= _CONCURRENCY, "но не больше лимита семафора"
 
 
 def test_closed_markers_match_real_phrases() -> None:
