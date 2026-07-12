@@ -55,22 +55,15 @@ def test_seed_places_have_verification_passport() -> None:
     assert not missing, f"места без verified_at: {missing[:5]}"
 
 
-def test_kb_directory_entries_defer_to_places() -> None:
-    """Единый источник: KB-справочники не несут конфликтующих volatile-адресов.
-
-    Раньше transport_metro утверждал «прямого автобуса нет», перебивая по
-    приоритету свежую таблицу мест (маршрутка 1224к есть).
+def test_directory_intents_removed_from_kb() -> None:
+    """Единый источник: справочные записи (аптеки/банки/магазины/транспорт)
+    удалены из KB — на «где аптека/банк» авторитетно отвечает таблица places,
+    а не устаревший статичный текст KB (он перебивал места по приоритету).
     """
     from app.services.resident_kb import load_resident_kb
 
     load_resident_kb.cache_clear()
-    entries = {e.id: e for e in load_resident_kb()}
-
-    tm = entries["transport_metro"]
-    assert "прямого автобуса" not in tm.answer.lower()
-    assert "1224" in tm.answer  # актуальный прямой маршрут
-    # Банки указывают на ближайший банкомат (~2 км), а не только Видное 5-7 км
-    assert "Аструм" in entries["banks"].answer
-    # Свежесть проставлена
-    for eid in ("transport_metro", "banks", "pharmacy", "sports_fitness", "shops_grocery"):
-        assert entries[eid].verified_at == "2026-07-12", eid
+    ids = {e.id for e in load_resident_kb()}
+    for gone in ("pharmacy", "banks", "shops_grocery", "sports_fitness",
+                 "transport_metro", "transport_bus"):
+        assert gone not in ids, f"{gone} должен отвечать из places, а не из KB"

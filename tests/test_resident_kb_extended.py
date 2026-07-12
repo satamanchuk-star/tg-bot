@@ -49,11 +49,21 @@ def test_kb_has_owners_meeting_entry():
     assert "УК" in answer or "собрание" in answer.lower()
 
 
-def test_kb_existing_shops_updated():
-    """Магазины: должны упоминаться Первым делом или Буханка."""
-    answer = build_resident_answer("Где продуктовый магазин в ЖК?")
-    assert answer is not None
-    assert "Первым делом" in answer or "Буханка" in answer or "пятёрочка" in answer.lower()
+def test_shops_moved_to_places_directory():
+    """Единый источник: магазины теперь в таблице places, а не в KB.
+
+    Раньше KB-запись shops_grocery дублировала места и могла устаревать;
+    удалена. Магазины «Первым делом»/«Буханка» — в data/places_seed.json,
+    откуда на «где магазин» отвечает _get_places_context.
+    """
+    import json
+    from pathlib import Path
+
+    seed = json.loads(Path("data/places_seed.json").read_text(encoding="utf-8"))
+    places = seed if isinstance(seed, list) else seed.get("places", seed)
+    names = {p["name"] for p in places}
+    assert "Первым делом" in names
+    assert "Буханка" in names
 
 
 def test_kb_existing_contacts_updated():
