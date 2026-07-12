@@ -2312,28 +2312,33 @@ async def _get_places_context(query: str, *, top_k: int = 5) -> str:
 
     try:
         async for session in get_session():
-            # Каждое слово должно встречаться хотя бы в одном из полей
-            from sqlalchemy import and_, or_
-            word_conditions = []
-            for word in search_words[:5]:  # Ограничиваем количество слов
-                like = f"%{word}%"
-                word_conditions.append(
-                    or_(
-                        Place.name.ilike(like),
-                        Place.address.ilike(like),
-                        Place.category.ilike(like),
-                        Place.subcategory.ilike(like),
-                        Place.description.ilike(like),
-                    )
-                )
-            rows = (
+            # Фильтрация в Python, а не через SQL ilike: SQLite LIKE/ILIKE
+            # регистронезависим ТОЛЬКО для латиницы, поэтому «АЗС» не находилось
+            # по запросу «азс». Мест немного (~100), полная загрузка дешевле, а
+            # str.lower() в Python корректно сворачивает кириллицу.
+            all_active = (
                 await session.execute(
                     select(Place)
-                    .where(Place.is_active.is_(True), or_(*word_conditions))
+                    .where(Place.is_active.is_(True))
                     .order_by(Place.distance_km.asc().nulls_last(), Place.name.asc())
-                    .limit(top_k)
                 )
             ).scalars().all()
+            words = search_words[:5]
+            scored: list[tuple[int, Place]] = []
+            for place in all_active:
+                haystack = " ".join(
+                    x for x in (
+                        place.name, place.address, place.category,
+                        place.subcategory, place.description,
+                    ) if x
+                ).lower()
+                hits = sum(1 for w in words if w in haystack)
+                if hits:
+                    scored.append((hits, place))
+            # Больше совпавших слов → выше; при равенстве сохраняется порядок
+            # по расстоянию (список уже отсортирован по distance_km).
+            scored.sort(key=lambda t: t[0], reverse=True)
+            rows = [p for _, p in scored[:top_k]]
             if not rows:
                 logger.info("Places search: no results found for words=%s", search_words[:5])
                 return ""
