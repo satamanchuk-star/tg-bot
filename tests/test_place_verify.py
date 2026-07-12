@@ -53,3 +53,17 @@ def test_seed_places_have_verification_passport() -> None:
     places = seed if isinstance(seed, list) else seed.get("places", seed)
     missing = [p["name"] for p in places if not p.get("verified_at")]
     assert not missing, f"места без verified_at: {missing[:5]}"
+
+
+def test_directory_intents_removed_from_kb() -> None:
+    """Единый источник: справочные записи (аптеки/банки/магазины/транспорт)
+    удалены из KB — на «где аптека/банк» авторитетно отвечает таблица places,
+    а не устаревший статичный текст KB (он перебивал места по приоритету).
+    """
+    from app.services.resident_kb import load_resident_kb
+
+    load_resident_kb.cache_clear()
+    ids = {e.id for e in load_resident_kb()}
+    for gone in ("pharmacy", "banks", "shops_grocery", "sports_fitness",
+                 "transport_metro", "transport_bus"):
+        assert gone not in ids, f"{gone} должен отвечать из places, а не из KB"
