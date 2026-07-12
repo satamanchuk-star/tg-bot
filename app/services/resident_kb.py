@@ -65,6 +65,8 @@ class ResidentKbEntry:
     aliases: list[str]
     source: str
     updated_at: str
+    # Паспорт достоверности: когда факт проверялся в последний раз (ISO-дата)
+    verified_at: str | None = None
 
 
 @dataclass(slots=True)

@@ -2355,8 +2355,23 @@ async def _get_places_context(query: str, *, top_k: int = 5) -> str:
                     snippet += f", расстояние: {item.distance_km:.1f} км"
                 if item.description:
                     snippet += f" — {item.description[:100]}"
+                if item.verified_at is not None:
+                    snippet += f" [проверено: {item.verified_at.strftime('%m.%Y')}]"
                 parts.append(snippet)
-            return "\n".join(parts)
+            context = "\n".join(parts)
+            # Честность о свежести: если данные проверялись давно, модель должна
+            # предупредить жителя (район строится, инфраструктура меняется быстро).
+            from datetime import datetime as _dt, timezone as _tz
+            oldest = min(
+                (r.verified_at for r in rows if r.verified_at is not None),
+                default=None,
+            )
+            if oldest is None or (_dt.now(_tz.utc) - oldest.replace(tzinfo=_tz.utc)).days > 90:
+                context += (
+                    "\n[Данные проверялись более 3 месяцев назад — мягко посоветуй "
+                    "уточнить часы работы перед визитом.]"
+                )
+            return context
     except Exception as exc:
         logger.warning("Places search failed: %s", exc)
     return ""
