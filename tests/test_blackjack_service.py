@@ -198,6 +198,57 @@ def test_refund_active_bets_returns_money(db) -> None:
     assert rounds[0].closed_by == "admin" and rounds[0].result == "push"
 
 
+def test_invitations_varied_and_valid() -> None:
+    """Приглашения зовут на игру, их несколько, и все упоминают /21."""
+    from app.handlers.blackjack import _INVITATIONS, _pick_invitation
+
+    assert len(_INVITATIONS) >= 5
+    assert len(set(_INVITATIONS)) == len(_INVITATIONS)  # без дублей
+    for text in _INVITATIONS:
+        assert "/21" in text
+        assert "<b>" not in text  # без сырого HTML (default parse_mode не задан)
+    assert _pick_invitation() in _INVITATIONS
+
+
+def test_daily_leaderboard_shows_top_by_coins(db) -> None:
+    from app.handlers.blackjack import _daily_leaderboard_text
+
+    async def _run():
+        async with db() as session:
+            session.add(UserStat(user_id=1, chat_id=10, coins=340, display_name="Вася"))
+            session.add(UserStat(user_id=2, chat_id=10, coins=90, display_name="Петя"))
+            session.add(GameRound(user_id=1, chat_id=10, bet=25, result="win",
+                                  payout=50, player_hand="К♥ Д♠", dealer_hand="9♦ 8♣",
+                                  finished_at=datetime.now(timezone.utc)))
+            await session.commit()
+            return await _daily_leaderboard_text(session, 10)
+
+    text = asyncio.run(_run())
+    assert "🥇 Вася — 340" in text
+    assert "🥈 Петя — 90" in text
+    assert "Топ-5 по монетам" in text
+
+
+def test_get_day_stats_counts_recent_rounds(db) -> None:
+    """Вечерняя статистика: свежая партия учтена, старая (5ч назад) — нет."""
+    from app.services import blackjack as bj
+
+    async def _run():
+        async with db() as session:
+            session.add(GameRound(user_id=1, chat_id=10, bet=25, result="win",
+                                  payout=50, player_hand="К♥ Д♠", dealer_hand="9♦ 8♣",
+                                  finished_at=datetime.now(timezone.utc)))
+            session.add(GameRound(user_id=1, chat_id=10, bet=5, result="lose",
+                                  payout=0, player_hand="5♥ 5♠ К♦", dealer_hand="9♦ 8♣",
+                                  finished_at=datetime.now(timezone.utc) - timedelta(hours=5)))
+            await session.commit()
+            return await bj.get_day_stats(session, 10)
+
+    rounds, day_bet, day_paid = asyncio.run(_run())
+    assert rounds == 1  # только свежая партия
+    assert day_bet == 25 and day_paid == 50
+
+
 def test_migration_v12_sets_200_once(db, monkeypatch) -> None:
     from app.main import apply_v12_coins_200
 

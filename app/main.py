@@ -583,17 +583,19 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     # таймаут партий, полуночное закрытие + чистка, субботний лидерборд,
     # ежедневный анонс правил перед окном 22:00–00:00.
     from app.handlers.blackjack import (
-        announce_blackjack_rules,
+        announce_game_soon,
         check_game_timeouts,
         close_games_and_cleanup,
         send_weekly_game_leaderboard,
     )
     scheduler.add_job(check_game_timeouts, "interval", minutes=1, args=[bot])
-    scheduler.add_job(close_games_and_cleanup, "cron", hour=0, minute=5, args=[bot])
+    # Полночь: закрыть партии + топ-5 по монетам за день + чистка сообщений.
+    scheduler.add_job(close_games_and_cleanup, "cron", hour=0, minute=0, args=[bot])
     scheduler.add_job(
         send_weekly_game_leaderboard, "cron", day_of_week="sat", hour=21, minute=0, args=[bot],
     )
-    scheduler.add_job(announce_blackjack_rules, "cron", hour=21, minute=55, args=[bot])
+    # За 5 минут до окна — случайное приглашение соседей на игру.
+    scheduler.add_job(announce_game_soon, "cron", hour=21, minute=55, args=[bot])
     scheduler.start()
     return scheduler
 

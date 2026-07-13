@@ -347,9 +347,10 @@ async def get_leaderboard(
     return list(by_coins), list(by_games)
 
 
-async def get_week_stats(session: AsyncSession, chat_id: int) -> tuple[int, int, int]:
-    """(партий, поставлено, выплачено) за последние 7 дней — для лидерборда."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+async def _round_stats_since(
+    session: AsyncSession, chat_id: int, cutoff: datetime
+) -> tuple[int, int, int]:
+    """(партий, поставлено, выплачено) по game_rounds с момента cutoff."""
     row = (
         await session.execute(
             select(
@@ -360,6 +361,21 @@ async def get_week_stats(session: AsyncSession, chat_id: int) -> tuple[int, int,
         )
     ).one()
     return int(row[0]), int(row[1]), int(row[2])
+
+
+async def get_week_stats(session: AsyncSession, chat_id: int) -> tuple[int, int, int]:
+    """(партий, поставлено, выплачено) за последние 7 дней — для недельного лидерборда."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    return await _round_stats_since(session, chat_id, cutoff)
+
+
+async def get_day_stats(session: AsyncSession, chat_id: int) -> tuple[int, int, int]:
+    """(партий, поставлено, выплачено) за вечернюю сессию — для полуночного топа.
+
+    Окно игры 22:00–00:00, поэтому 4 часов назад с запасом покрывают весь вечер.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=4)
+    return await _round_stats_since(session, chat_id, cutoff)
 
 
 # --- Реестр сообщений-команд (для полуночной чистки темы) ---
