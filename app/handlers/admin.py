@@ -731,19 +731,26 @@ async def reset_stats(message: Message, bot: Bot) -> None:
     cleared: list[str] = []
 
     async for session in get_session():
-        deleted_rows = await reset_runtime_statistics(session)
-        if deleted_rows["user_stats"] > 0:
-            cleared.append(f"статистика игры 21 ({deleted_rows['user_stats']})")
-        if deleted_rows["game_states"] > 0:
-            cleared.append(f"активные игры 21 ({deleted_rows['game_states']})")
+        affected = await reset_runtime_statistics(session)
+        if affected["user_stats"] > 0:
+            cleared.append(
+                f"балансы установлены в 200, счётчики обнулены ({affected['user_stats']})"
+            )
+        if affected["refunded_games"] > 0:
+            cleared.append(f"рефанд активных ставок ({affected['refunded_games']})")
+        if affected["game_states"] > 0:
+            cleared.append(f"активные партии закрыты ({affected['game_states']})")
 
         await session.commit()
 
 
     if cleared:
-        await message.reply("Статистика и сессии сброшены: " + ", ".join(cleared) + "\nRAG-база не изменялась.")
+        await message.reply(
+            "Сброшено: " + ", ".join(cleared)
+            + "\nИстория партий (game_rounds) и RAG-база не изменялись."
+        )
     else:
-        await message.reply("Статистика уже пустая, сессия сброшена. RAG-база не изменялась.")
+        await message.reply("Статистика уже пустая. RAG-база не изменялась.")
 
 
 @router.message(Command("restart_jobs"))
@@ -756,10 +763,13 @@ async def restart_jobs(message: Message, bot: Bot, state: FSMContext) -> None:
 
     # 1. Очищаем БД
     async for session in get_session():
-        # Игры
+        # Игры: сначала вернуть активные ставки (иначе деньги игроков сгорят
+        # при админском рестарте), потом удалить партии.
+        from app.services.blackjack import refund_active_bets
+        refunded = await refund_active_bets(session)
         result = await session.execute(delete(GameState))
         if result.rowcount > 0:
-            cleared.append(f"игры ({result.rowcount})")
+            cleared.append(f"игры ({result.rowcount}, рефанд ставок: {refunded})")
 
         await session.commit()
 

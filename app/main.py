@@ -33,6 +33,7 @@ from app.config import settings
 from app.db import Base, engine, get_session
 from app.handlers import (
     admin,
+    blackjack as blackjack_handler,
     forms,
     help as help_handler,
     moderation,
@@ -362,6 +363,21 @@ async def apply_v11_stats_reset(session: AsyncSession) -> None:
     logger.info("v1.1: статистика сброшена")
 
 
+async def apply_v12_coins_200(session: AsyncSession) -> None:
+    """Единоразово: всем жителям баланс 200 монет — старт ставочного блэкджека.
+
+    Новые пользователи получают 200 через coins.DEFAULT_COINS.
+    """
+    flag = await session.get(MigrationFlag, "v12_coins_200")
+    if flag:
+        return
+
+    await session.execute(update(UserStat).values(coins=200))
+    session.add(MigrationFlag(key="v12_coins_200"))
+    await session.commit()
+    logger.info("v1.2: всем начислено по 200 монет (запуск блэкджека)")
+
+
 async def drop_orphaned_tables(session: AsyncSession) -> None:
     """Удаляет осиротевшие таблицы (quiz/lottery + мёртвые модели v1.2)."""
     flag = await session.get(MigrationFlag, "drop_orphaned_tables_v2")
@@ -563,6 +579,21 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     scheduler.add_job(
         send_daily_report, "cron", hour=22, minute=30, args=[bot],
     )
+    # Блэкджек «21» (все джобы сами выходят, если topic_games не задан):
+    # таймаут партий, полуночное закрытие + чистка, субботний лидерборд,
+    # ежедневный анонс правил перед окном 22:00–00:00.
+    from app.handlers.blackjack import (
+        announce_blackjack_rules,
+        check_game_timeouts,
+        close_games_and_cleanup,
+        send_weekly_game_leaderboard,
+    )
+    scheduler.add_job(check_game_timeouts, "interval", minutes=1, args=[bot])
+    scheduler.add_job(close_games_and_cleanup, "cron", hour=0, minute=5, args=[bot])
+    scheduler.add_job(
+        send_weekly_game_leaderboard, "cron", day_of_week="sat", hour=21, minute=0, args=[bot],
+    )
+    scheduler.add_job(announce_blackjack_rules, "cron", hour=21, minute=55, args=[bot])
     scheduler.start()
     return scheduler
 
@@ -589,6 +620,7 @@ async def on_startup_critical() -> None:
     try:
         async for session in get_session():
             await apply_v11_stats_reset(session)
+            await apply_v12_coins_200(session)
             await drop_orphaned_tables(session)
     except Exception:  # noqa: BLE001
         logger.exception("Не удалось выполнить миграции (некритично, продолжаем).")
@@ -707,6 +739,11 @@ async def on_startup_warmup(bot: Bot) -> None:
                     BotCommand(command="rules", description="Правила нашего сообщества"),
                     BotCommand(command="ai", description="Задать вопрос Жаботу"),
                     BotCommand(command="предложить", description="Предложить место в инфраструктуре ЖК"),
+                    BotCommand(command="21", description="Блэкджек на монеты (тема Игры, 22:00–00:00)"),
+                    BotCommand(command="score", description="Баланс монет и статистика игр"),
+                    BotCommand(command="21top", description="Топ игроков по монетам"),
+                    BotCommand(command="bonus", description="Ежедневные +10 монет (/бонус)"),
+                    BotCommand(command="gift", description="Подарить монеты (/подарить, реплай + сумма)"),
                 ],
             )
 
@@ -938,14 +975,13 @@ async def main() -> None:
     # Порядок важен: упоминания должны ловиться до остальных обработчиков
     dp.include_router(help_handler.router)  # mention-help (catch-all, не блокирует)
     dp.include_router(admin.router)  # админ-команды
-    # ТОЧКА РАСШИРЕНИЯ — игры. Блэкджек удалён (июль 2026); для будущего игрового
-    # движка: создать app/handlers/<game>.py со своим Router и подключить здесь
-    # (до модерации). Экономика монет готова: app/services/coins.py
-    # (get_or_create_stats, transfer_coins), баланс — UserStat.coins.
+    # Игровой движок: блэкджек «21» со ставками (тема topic_games; выключен,
+    # если тема не задана). Экономика — app/services/coins.py, логика —
+    # app/services/blackjack.py. Новые игры подключать здесь же (до модерации).
+    dp.include_router(blackjack_handler.router)
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
-    # shop.router и economy_handler.router отключены: монеты и голосования
-    # убраны из продукта (июль 2026). Код и таблицы сохранены — вернутся
-    # вместе с будущим игровым движком (см. точку расширения выше).
+    # shop.router и economy_handler.router отключены: магазин и голосования
+    # убраны из продукта (июль 2026) и не возвращаются вместе с игрой.
     dp.include_router(suggest.router)   # предложить место в инфраструктуру ЖК
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
     dp.include_router(personalization_handler.router)  # /off_nudges, /on_nudges (только в DM)

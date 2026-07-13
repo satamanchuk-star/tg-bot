@@ -34,7 +34,8 @@ class UserStat(Base):
 
     user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     chat_id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    coins: Mapped[int] = mapped_column(Integer, default=100)
+    # Дефолт держим синхронным с coins.DEFAULT_COINS (единая константа).
+    coins: Mapped[int] = mapped_column(Integer, default=200)
     games_played: Mapped[int] = mapped_column(Integer, default=0)
     wins: Mapped[int] = mapped_column(Integer, default=0)
     display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -48,6 +49,27 @@ class GameState(Base):
     user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     chat_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     state_json: Mapped[str] = mapped_column(Text)
+
+
+class GameRound(Base):
+    """Почему: аудит экономики блэкджека — каждая развязка партии хранится навсегда
+    (переживает /reset_stats и рестарты)."""
+
+    __tablename__ = "game_rounds"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    bet: Mapped[int] = mapped_column(Integer)
+    result: Mapped[str] = mapped_column(String(16))  # win | blackjack | lose | push
+    payout: Mapped[int] = mapped_column(Integer)  # сколько вернулось на баланс (0 при lose)
+    player_hand: Mapped[str] = mapped_column(Text)  # «К♥ 7♠ 5♦»
+    dealer_hand: Mapped[str] = mapped_column(Text)
+    # Кто закрыл партию: player | timeout | midnight | admin
+    closed_by: Mapped[str] = mapped_column(String(16), default="player")
+    finished_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
+    )
 
 
 class HealthState(Base):
