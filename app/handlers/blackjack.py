@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from datetime import datetime, timezone
 
 from aiogram import Bot, F, Router
@@ -72,6 +73,34 @@ RULES_TEXT = (
     "📊 /score — баланс и последние партии • /21top — лидеры • /подарить — перевод монет (реплай + сумма)"
 )
 
+# Тонкий разделитель для карточной «раскладки» в сообщениях партии.
+_DIV = "━━━━━━━━━━━━"
+
+# Приглашения на игру (шлём одно случайное за 5 минут до открытия — «каждый раз
+# по-новому зовём соседей»). Тон разный: от хайпа до уюта, единый визуальный
+# каркас — заголовок с эмодзи + зов + время. Меняй/дополняй смело.
+_INVITATIONS = (
+    "🃏 Соседи, стол накрыт!\nЧерез 5 минут раздаём карты. В 22:00 «21» ждёт смельчаков — кто сегодня сорвёт банк? Жми /21",
+    "🎰 Вечернее казино «Живописный»\nРовно в 22:00 открываемся. Разомни пальцы, проверь удачу — /21",
+    "♠️ Тс-с… через пять минут раздача\nСоседи, кто не боится дилера? В 22:00 садимся за «21». /21",
+    "🌙 Ночная смена начинается\nВ 22:00 гаснет свет в подъезде и зажигается стол блэкджека. Ты с нами? /21",
+    "🔥 Пять минут до старта!\nСегодня везёт дерзким. В 22:00 карты на стол — /21",
+    "🎩 Дилер уже надел цилиндр\nВ 22:00 «21» открывается. Заходи за монетами, соседи! /21",
+    "🪙 Кто сегодня богатеет?\nЧерез 5 минут стартуем. В 22:00 ставки 5–50 монет и азарт до полуночи. /21",
+    "🏆 Место в топе ещё свободно\nВ 22:00 открываем «21» — приходи побороться за лидерборд. /21",
+    "🃏 Соседи, вечер добрый!\nЧай заварен, карты стасованы. В 22:00 играем в «21» — /21",
+    "✨ Удача любит смелых\nЧерез 5 минут раздача. В 22:00 «21» ждёт — сделай ставку и лови кураж. /21",
+)
+
+
+def _pick_invitation() -> str:
+    return random.choice(_INVITATIONS)
+
+
+def _medal(place: int) -> str:
+    """Значок места: медали для топ-3, номер для остальных."""
+    return {1: "🥇", 2: "🥈", 3: "🥉"}.get(place, f"{place}.")
+
 
 def _in_games_topic(message: Message) -> bool:
     return (
@@ -114,31 +143,40 @@ def _play_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 
 def _playing_text(state: BlackjackState, name: str) -> str:
+    """Раскладка стола во время партии: рука игрока открыта, у дилера — одна карта."""
+    player = f"{bj.format_hand(state.player_hand)} · {bj.hand_value(state.player_hand)}"
     return (
-        f"🎰 Партия {name} — ставка {state.bet} 🪙\n\n"
-        f"Твои карты: {bj.format_hand(state.player_hand)} = {bj.hand_value(state.player_hand)}\n"
-        f"Дилер: {state.dealer_hand[0]} [?]"
+        f"🃏 Блэкджек · ставка {state.bet} 🪙\n"
+        f"{_DIV}\n"
+        f"👤 Ты: {player}\n"
+        f"🎩 Дилер: {state.dealer_hand[0]} · ?"
     )
 
 
 def _outcome_text(
     state: BlackjackState, result: str, payout: int, balance: int, name: str
 ) -> str:
-    player = f"{bj.format_hand(state.player_hand)} = {bj.hand_value(state.player_hand)}"
-    dealer = f"{bj.format_hand(state.dealer_hand)} = {bj.hand_value(state.dealer_hand)}"
+    """Финальная раскладка: обе руки открыты, вердикт и баланс."""
+    player = f"{bj.format_hand(state.player_hand)} · {bj.hand_value(state.player_hand)}"
+    dealer = f"{bj.format_hand(state.dealer_hand)} · {bj.hand_value(state.dealer_hand)}"
     if result == "blackjack":
-        verdict = f"🃏 Блэкджек! Выплата {payout} 🪙"
+        verdict = f"🃏 Блэкджек! +{payout} 🪙"
     elif result == "win":
-        verdict = f"🎉 Победа! Выплата {payout} 🪙"
+        verdict = f"🎉 Победа! +{payout} 🪙"
     elif result == "push":
-        verdict = f"🤝 Ничья — ставка {state.bet} 🪙 возвращена"
+        verdict = "🤝 Ничья · ставка возвращена"
     elif bj.hand_value(state.player_hand) > 21:
-        verdict = f"💥 Перебор! Ставка {state.bet} 🪙 сгорела"
+        verdict = f"💥 Перебор! −{state.bet} 🪙"
     else:
-        verdict = f"😔 Проигрыш — ставка {state.bet} 🪙 сгорела"
+        verdict = f"😔 Проигрыш · −{state.bet} 🪙"
     return (
-        f"🎰 Партия {name} — ставка {state.bet} 🪙\n\n"
-        f"Твои карты: {player}\nДилер: {dealer}\n\n{verdict}\nБаланс: {balance} 🪙"
+        f"🃏 Блэкджек · ставка {state.bet} 🪙\n"
+        f"{_DIV}\n"
+        f"👤 Ты: {player}\n"
+        f"🎩 Дилер: {dealer}\n"
+        f"{_DIV}\n"
+        f"{verdict}\n"
+        f"💰 Баланс: {balance} 🪙"
     )
 
 
@@ -242,7 +280,10 @@ async def cmd_blackjack(message: Message, bot: Bot) -> None:
                 f"🆘 Банкрот! Держи {BANKRUPT_TOP_UP} 🪙 на реванш.\n\n" if rescued else ""
             )
             reply = await message.reply(
-                f"{prefix}💰 Баланс: {balance} 🪙\nВыбирай ставку:",
+                f"{prefix}🃏 Стол готов\n"
+                f"{_DIV}\n"
+                f"💰 Баланс: {balance} 🪙\n"
+                f"Делай ставку и лови кураж 👇",
                 reply_markup=_bet_keyboard(user_id, balance),
             )
             # message_id ответа — в состояние (edit из джобов) + в реестр чистки.
@@ -326,12 +367,24 @@ async def cmd_leaderboard(message: Message) -> None:
 
 async def _leaderboard_text(session: AsyncSession, chat_id: int) -> str:
     by_coins, by_games = await bj.get_leaderboard(session, chat_id)
-    lines = ["🏆 Лидеры «21»", "", "💰 По монетам:"]
+    lines = [f"🏆 Лидеры «21»\n{_DIV}", "💰 По монетам:"]
     for i, s in enumerate(by_coins, 1):
-        lines.append(f"{i}. {s.display_name or s.user_id} — {s.coins} 🪙")
+        lines.append(f"{_medal(i)} {s.display_name or s.user_id} — {s.coins} 🪙")
     lines += ["", "🎰 По партиям:"]
     for i, s in enumerate(by_games, 1):
-        lines.append(f"{i}. {s.display_name or s.user_id} — {s.games_played} (побед {s.wins})")
+        lines.append(f"{_medal(i)} {s.display_name or s.user_id} — {s.games_played} (побед {s.wins})")
+    return "\n".join(lines)
+
+
+async def _daily_leaderboard_text(session: AsyncSession, chat_id: int) -> str:
+    """Топ-5 по монетам на конец дня + короткий итог вечера."""
+    by_coins, _ = await bj.get_leaderboard(session, chat_id)
+    lines = [f"🌙 Казино закрыто на сегодня!\n{_DIV}", "🏆 Топ-5 по монетам:"]
+    for i, s in enumerate(by_coins, 1):
+        lines.append(f"{_medal(i)} {s.display_name or s.user_id} — {s.coins} 🪙")
+    rounds, day_bet, day_paid = await bj.get_day_stats(session, chat_id)
+    lines.append(f"\n🎰 За вечер: партий {rounds}, поставлено {day_bet} 🪙")
+    lines.append("До завтра — казино открывается в 22:00! 🃏")
     return "\n".join(lines)
 
 
@@ -546,7 +599,8 @@ async def check_game_timeouts(bot: Bot) -> None:
 
 
 async def close_games_and_cleanup(bot: Bot) -> None:
-    """00:05: закрыть все партии (авто-«хватит») и подчистить сообщения-команды."""
+    """00:00: закрыть партии (авто-«хватит»), опубликовать топ-5 по монетам за
+    день, затем подчистить сообщения-команды."""
     if settings.topic_games is None:
         return
     try:
@@ -571,6 +625,26 @@ async def close_games_and_cleanup(bot: Bot) -> None:
                     await _safe_edit(bot, chat_id, fresh.message_id,
                                      "🌙 Полночь — казино закрыто, партия завершена. До завтра!")
                     break
+
+        # Итог дня: топ-5 по монетам (только если вечером кто-то играл — иначе
+        # не спамим одинаковой доской). Это сообщение-«итог», в чистку не идёт.
+        async for session in get_session():
+            day_rounds, _, _ = await bj.get_day_stats(session, settings.forum_chat_id)
+            leaderboard = (
+                await _daily_leaderboard_text(session, settings.forum_chat_id)
+                if day_rounds > 0 else None
+            )
+            break
+        else:
+            leaderboard = None
+        if leaderboard:
+            try:
+                await bot.send_message(
+                    settings.forum_chat_id, leaderboard,
+                    message_thread_id=settings.topic_games,
+                )
+            except TelegramBadRequest:
+                pass
 
         # Чистка сообщений-команд за вечер.
         async for session in get_session():
@@ -616,15 +690,19 @@ async def send_weekly_game_leaderboard(bot: Bot) -> None:
         logger.warning("BLACKJACK: лидерборд не отправился.", exc_info=True)
 
 
-async def announce_blackjack_rules(bot: Bot) -> None:
-    """21:55 ежедневно: анонс правил перед открытием окна."""
+async def announce_game_soon(bot: Bot) -> None:
+    """21:55 ежедневно (за 5 минут до окна): случайное приглашение соседей на игру.
+
+    Каждый вечер — новый текст из пула _INVITATIONS, чтобы зов не приедался.
+    Правила доступны отдельной командой /21rules, здесь их не дублируем.
+    """
     if settings.topic_games is None:
         return
     try:
         msg = await bot.send_message(
-            settings.forum_chat_id, RULES_TEXT, message_thread_id=settings.topic_games
+            settings.forum_chat_id, _pick_invitation(), message_thread_id=settings.topic_games
         )
-        # Анонс тоже подчищаем в полночь, чтобы тема не зарастала.
+        # Приглашение подчищаем в полночь, чтобы тема не зарастала.
         async for session in get_session():
             await bj.register_game_command_message(session, msg.chat.id, msg.message_id)
             await session.commit()
