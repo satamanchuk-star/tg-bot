@@ -83,6 +83,25 @@ def test_dedup_cache_is_trimmed_when_overflow(monkeypatch) -> None:
     assert len(moderation._MODERATED_MSG_IDS) <= moderation._MODERATED_MSG_IDS_MAX // 2 + 2
 
 
+def test_blackjack_topic_is_not_moderated(monkeypatch) -> None:
+    """В теме блэкджека мат/грубость не отслеживаются — модерация не запускается."""
+    monkeypatch.setattr(moderation.settings, "forum_chat_id", 12345)
+    monkeypatch.setattr(moderation.settings, "topic_games", 42)
+    monkeypatch.setattr(moderation, "is_admin", AsyncMock(return_value=False))
+
+    ai_moderate = AsyncMock(return_value=SimpleNamespace(severity=3, sentiment="toxic"))
+    monkeypatch.setattr(moderation, "get_ai_client", lambda: SimpleNamespace(moderate=ai_moderate))
+    monkeypatch.setattr(moderation.settings, "ai_feature_moderation", True)
+
+    message = _build_message(message_id=2002)
+    message.message_thread_id = 42  # тема блэкджека
+
+    result = asyncio.run(moderation.run_moderation(message, AsyncMock()))
+
+    assert result == 0
+    assert ai_moderate.await_count == 0  # AI-модерация даже не вызывалась
+
+
 def test_prescreen_skips_clean_medium_message() -> None:
     """Чистое сообщение средней длины не требует LLM-модерации."""
     clean = (

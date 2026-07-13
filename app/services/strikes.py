@@ -8,6 +8,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Strike
+from app.utils.time import ensure_aware
 
 
 STRIKE_RESET_DAYS = 30
@@ -23,7 +24,9 @@ async def add_strike(session: AsyncSession, user_id: int, chat_id: int) -> int:
         )
     )
     now = datetime.now(timezone.utc)
-    if oldest and now - oldest > timedelta(days=STRIKE_RESET_DAYS):
+    # SQLite возвращает created_at без tzinfo — приводим к aware, иначе
+    # вычитание naive/aware падает с TypeError (страйк за мат не проставлялся).
+    if oldest and now - ensure_aware(oldest) > timedelta(days=STRIKE_RESET_DAYS):
         await session.execute(
             delete(Strike).where(Strike.user_id == user_id, Strike.chat_id == chat_id)
         )
