@@ -257,6 +257,14 @@ async def run_moderation(message: Message, bot: Bot) -> int:
     if message.from_user is None or message.text is None:
         return 0
 
+    # В теме блэкджека мат/грубость не отслеживаем: там играют и подкалывают
+    # друг друга, штрафовать за это неуместно (бот тут вообще молчит).
+    if (
+        settings.topic_games is not None
+        and message.message_thread_id == settings.topic_games
+    ):
+        return 0
+
     # Предотвращаем двойную модерацию одного сообщения (mention_help + moderate_message)
     if _is_already_moderated(message.message_id):
         return 0

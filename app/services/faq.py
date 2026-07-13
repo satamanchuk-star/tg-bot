@@ -9,6 +9,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import FrequentQuestion
+from app.utils.time import ensure_aware
 
 logger = logging.getLogger(__name__)
 
@@ -131,8 +132,9 @@ def _is_answer_locked(fq: FrequentQuestion) -> bool:
     и вопрос задавался в последние 30 дней (чтобы устаревшие ответы не блокировались)."""
     from datetime import timedelta
     now = datetime.now(timezone.utc)
-    # Ответ не может быть «залочен», если не спрашивали > 30 дней
-    if fq.last_asked_at and now - fq.last_asked_at > timedelta(days=30):
+    # Ответ не может быть «залочен», если не спрашивали > 30 дней.
+    # last_asked_at из SQLite — naive, приводим к aware перед вычитанием.
+    if fq.last_asked_at and now - ensure_aware(fq.last_asked_at) > timedelta(days=30):
         return False
     return (
         fq.ask_count >= MIN_ASK_COUNT
