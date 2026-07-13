@@ -34,19 +34,28 @@ app/
 ├── models.py            # ORM models (Strike, GameState, UserStat, etc.)
 ├── handlers/            # aiogram routers
 │   ├── admin.py         # /mute, /ban, /strike, /addcoins, /reload_profanity
-│   ├── games.py         # /21 blackjack command and callbacks
+│   ├── blackjack.py     # /21 со ставками, /бонус, /score, /21top, /подарить + джобы
 │   ├── moderation.py    # Content filtering, flood prevention
 │   ├── forms.py         # FSM-based forms
 │   ├── help.py          # Bot mention handling
 │   └── stats.py         # Statistics endpoints
 ├── services/            # Business logic
-│   ├── games.py         # Blackjack logic, leaderboard
+│   ├── blackjack.py     # Логика «21», выплаты, GameRound-история
+│   ├── coins.py         # Экономика монет: DEFAULT_COINS=200, бонус, спасение банкрота
 │   ├── strikes.py       # Strike management
 │   ├── flood.py         # Flood detection
 │   ├── health.py        # Heartbeat monitoring
 │   └── topic_stats.py   # Forum topic statistics
 └── utils/               # Utilities (admin checks, text, time, profanity)
 ```
+
+**Игра «21» и монеты (июль 2026):**
+- Тема `topic_games`, окно 22:00–00:00 МСК; бот там молчит и не модерирует.
+- Ставки 5/10/25/50: победа ×2, блэкджек (21 двумя картами) ×2.5 floor, ничья — возврат.
+- Баланс (`UserStat.coins`) персистентен ВСЕГДА: `/reset_stats` — UPDATE к 200 (не DELETE),
+  `/restart_jobs` и сброс возвращают активные ставки (`refund_active_bets`).
+- История партий `game_rounds` — вечный аудит, никогда не чистится.
+- `games_played` инкрементируется при ставке, `wins` — при развязке (не задваивать).
 
 **Key patterns:**
 - Async-first: async SQLAlchemy, async handlers, asyncio throughout
