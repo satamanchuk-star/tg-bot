@@ -12,7 +12,12 @@ from typing import Any
 
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.exceptions import TelegramAPIError, TelegramNetworkError, TelegramRetryAfter
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramBadRequest,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+)
 from aiogram.methods import TelegramMethod
 from aiogram.methods.base import TelegramType
 from aiogram.utils.token import TokenValidationError
@@ -910,7 +915,12 @@ async def error_handler(event: ErrorEvent) -> bool:
     # Сетевые сбои Telegram обычно транзиентные (таймаут, обрыв соединения).
     # Мы их уже ретраем в RetryOnFloodSession, поэтому в админ-чат отправляем
     # только при сериях повторных сбоев — один раз на окно дедупликации.
-    is_transient_network = isinstance(exc, TelegramNetworkError)
+    # Туда же — флуд-контроль (RetryAfter) и просроченные колбэки («query is
+    # too old»): в вечер запуска игры они засыпали админ-чат десятками копий.
+    is_transient_network = (
+        isinstance(exc, (TelegramNetworkError, TelegramRetryAfter))
+        or (isinstance(exc, TelegramBadRequest) and "query is too old" in str(exc))
+    )
     signature = f"{type(exc).__name__}:{str(exc)[:120]}"
     if is_transient_network and not _should_notify_error(signature):
         return True

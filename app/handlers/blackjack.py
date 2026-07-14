@@ -13,7 +13,7 @@ import random
 from datetime import datetime, timezone
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
@@ -228,14 +228,26 @@ async def _settle(
 
 async def _safe_edit(bot: Bot, chat_id: int, message_id: int | None, text: str,
                      reply_markup: InlineKeyboardMarkup | None = None) -> None:
-    """edit_text устаревших сообщений часто невозможен — молча пропускаем."""
+    """edit_text не должен ронять хендлер: устаревшее сообщение (BadRequest) или
+    флуд-контроль (RetryAfter, если ретраи сессии исчерпаны) — молча пропускаем.
+    Состояние партии к этому моменту уже закоммичено — /21 покажет актуальный стол."""
     if message_id is None:
         return
     try:
         await bot.edit_message_text(
             text, chat_id=chat_id, message_id=message_id, reply_markup=reply_markup
         )
-    except TelegramBadRequest:
+    except (TelegramBadRequest, TelegramRetryAfter):
+        pass
+
+
+async def _safe_answer(callback: CallbackQuery, text: str | None = None) -> None:
+    """Ack колбэка не должен ронять хендлер: при флуд-контроле Telegram ответ
+    приходит позже 10–15 сек и API отвечает «query is too old» — это не ошибка
+    игры, просто тост не показался."""
+    try:
+        await callback.answer(text)
+    except (TelegramBadRequest, TelegramRetryAfter):
         pass
 
 
@@ -263,9 +275,40 @@ async def cmd_blackjack(message: Message, bot: Bot) -> None:
 
             existing = await bj.load_game(session, user_id, message.chat.id)
             if existing is not None:
-                await session.commit()
-                await message.reply("У тебя уже есть активная партия — доиграй её.")
-                return
+                # Самолечение зависших партий: /21 никогда не отвечает «жди» —
+                # либо переоткрывает стол, либо закрывает просрочку и стартует заново.
+                if existing.phase == "betting":
+                    # Ставки нет — деньги не тронуты, просто открываем новый стол.
+                    await bj.delete_game(session, user_id, message.chat.id)
+                    await _safe_edit(bot, message.chat.id, existing.message_id,
+                                     "✖️ Стол переоткрыт — смотри новое сообщение ниже.")
+                elif existing.is_timed_out(datetime.now(timezone.utc)):
+                    # Просроченная партия — доигрываем авто-«хватит» и идём дальше.
+                    result, payout, balance = await _settle(
+                        session, user_id, message.chat.id, existing, closed_by="timeout"
+                    )
+                    await session.commit()
+                    name = _display_name(message) or str(user_id)
+                    await _safe_edit(bot, message.chat.id, existing.message_id,
+                                     "⏰ Время вышло — авто-«хватит».\n\n"
+                                     + _outcome_text(existing, result, payout, balance, name))
+                else:
+                    # Живая партия — пересылаем стол с кнопками (анти-завис: старое
+                    # сообщение могло не обновиться из-за флуд-контроля).
+                    await session.commit()
+                    name = _display_name(message) or str(user_id)
+                    reply = await message.reply(
+                        _playing_text(existing, name), reply_markup=_play_keyboard(user_id)
+                    )
+                    async for s2 in get_session():
+                        fresh = await bj.load_game(s2, user_id, message.chat.id)
+                        if fresh is not None and fresh.phase == "playing":
+                            fresh.message_id = reply.message_id
+                            await bj.save_game(s2, user_id, message.chat.id, fresh)
+                        await bj.register_game_command_message(s2, reply.chat.id, reply.message_id)
+                        await s2.commit()
+                        break
+                    return
 
             stats = await get_or_create_stats(
                 session, user_id, message.chat.id, display_name=_display_name(message)
@@ -444,31 +487,34 @@ async def cmd_rules(message: Message) -> None:
 async def on_game_callback(callback: CallbackQuery, bot: Bot) -> None:
     parts = (callback.data or "").split(":")
     if len(parts) < 3 or callback.from_user is None:
-        await callback.answer()
+        await _safe_answer(callback)
         return
     action, owner = parts[1], parts[2]
     if owner != str(callback.from_user.id):
-        await callback.answer("Это не твоя игра 😉")
+        await _safe_answer(callback, "Это не твоя игра 😉")
         return
     if callback.message is None:
-        await callback.answer()
+        await _safe_answer(callback)
         return
     user_id = callback.from_user.id
     chat_id = callback.message.chat.id
+
+    # Ack сразу, ДО ожидания lock'а и БД: при флуд-контроле обработка может
+    # занять >10 сек, и поздний answer падает «query is too old» (шторм ошибок
+    # в вечер запуска). Тосты дальше не шлём — вся информация в edit'ах стола.
+    await _safe_answer(callback)
 
     async with _lock_for(user_id):
         async for session in get_session():
             state = await bj.load_game(session, user_id, chat_id)
             if state is None:
                 await session.commit()
-                await callback.answer("Игра не найдена. Начни заново: /21")
                 await _safe_edit(bot, chat_id, callback.message.message_id,
                                  "Партия завершена. Новая — /21")
                 return
             # Клик по устаревшему сообщению (после таймаута была новая партия).
             if state.message_id and state.message_id != callback.message.message_id:
                 await session.commit()
-                await callback.answer("Эта партия уже неактуальна.")
                 return
 
             name = callback.from_user.username or callback.from_user.full_name
@@ -476,11 +522,9 @@ async def on_game_callback(callback: CallbackQuery, bot: Bot) -> None:
             if action == "cancel":
                 if state.phase != "betting":
                     await session.commit()
-                    await callback.answer("Ставка уже в игре — доиграй партию.")
                     return
                 await bj.delete_game(session, user_id, chat_id)
                 await session.commit()
-                await callback.answer("Партия отменена")
                 await _safe_edit(bot, chat_id, callback.message.message_id,
                                  "✖️ Партия отменена — деньги не тронуты. Новая — /21")
                 return
@@ -489,14 +533,17 @@ async def on_game_callback(callback: CallbackQuery, bot: Bot) -> None:
                 try:
                     amount = int(parts[3])
                 except (IndexError, ValueError):
-                    await callback.answer("Некорректная ставка.")
                     return
                 state, reason = await bj.place_bet_and_deal(
                     session, user_id, chat_id, amount, display_name=name
                 )
                 if state is None:
                     await session.commit()
-                    await callback.answer(reason or "Не получилось.")
+                    if reason:
+                        # Причина отказа важна игроку (не хватает монет и т.п.) —
+                        # показываем в столе, тост мог не дойти.
+                        await _safe_edit(bot, chat_id, callback.message.message_id,
+                                         f"⚠️ {reason}")
                     return
                 state.message_id = callback.message.message_id
                 await bj.save_game(session, user_id, chat_id, state)
@@ -505,12 +552,10 @@ async def on_game_callback(callback: CallbackQuery, bot: Bot) -> None:
                     # Блэкджек с раздачи — немедленная развязка.
                     result, payout, balance = await _settle(session, user_id, chat_id, state)
                     await session.commit()
-                    await callback.answer("Блэкджек!")
                     await _safe_edit(bot, chat_id, callback.message.message_id,
                                      _outcome_text(state, result, payout, balance, name))
                     return
                 await session.commit()
-                await callback.answer(f"Ставка {amount} принята")
                 await _safe_edit(bot, chat_id, callback.message.message_id,
                                  _playing_text(state, name), _play_keyboard(user_id))
                 return
@@ -518,7 +563,6 @@ async def on_game_callback(callback: CallbackQuery, bot: Bot) -> None:
             if action == "hit":
                 if state.phase != "playing" or not state.deck:
                     await session.commit()
-                    await callback.answer("Сейчас нельзя взять карту.")
                     return
                 state.player_hand.append(state.deck.pop())
                 value = bj.hand_value(state.player_hand)
@@ -526,13 +570,11 @@ async def on_game_callback(callback: CallbackQuery, bot: Bot) -> None:
                     # Перебор → lose; ровно 21 → авто-stand.
                     result, payout, balance = await _settle(session, user_id, chat_id, state)
                     await session.commit()
-                    await callback.answer()
                     await _safe_edit(bot, chat_id, callback.message.message_id,
                                      _outcome_text(state, result, payout, balance, name))
                     return
                 await bj.save_game(session, user_id, chat_id, state)
                 await session.commit()
-                await callback.answer()
                 await _safe_edit(bot, chat_id, callback.message.message_id,
                                  _playing_text(state, name), _play_keyboard(user_id))
                 return
@@ -540,17 +582,14 @@ async def on_game_callback(callback: CallbackQuery, bot: Bot) -> None:
             if action == "stand":
                 if state.phase != "playing":
                     await session.commit()
-                    await callback.answer("Сначала сделай ставку.")
                     return
                 result, payout, balance = await _settle(session, user_id, chat_id, state)
                 await session.commit()
-                await callback.answer()
                 await _safe_edit(bot, chat_id, callback.message.message_id,
                                  _outcome_text(state, result, payout, balance, name))
                 return
 
             await session.commit()
-            await callback.answer()
             return
 
 

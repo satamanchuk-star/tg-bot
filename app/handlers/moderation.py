@@ -345,12 +345,17 @@ async def run_moderation(message: Message, bot: Bot) -> int:
             and settings.ai_enabled
         ):
             try:
+                # Экономия токенов: AI-классификация интента запускается только
+                # после локального префильтра. Раньше detect_gate_intent дёргался
+                # на КАЖДОЕ сообщение топика (139 вызовов за день, из них 136
+                # впустую — итоговое условие всё равно требует явных слов заявки).
+                if not _should_collect_gate_request(text):
+                    return 0
                 from app.services.ai_tasks import detect_gate_intent, extract_gate_request
                 intent = await detect_gate_intent(text, chat_id=chat_id, user_id=user_id)
                 if (
                     intent.is_gate_problem
                     and intent.confidence >= 0.75
-                    and _should_collect_gate_request(text)
                 ):
                     fields = await extract_gate_request(text, chat_id=chat_id, user_id=user_id)
                     if fields.missing_fields:
