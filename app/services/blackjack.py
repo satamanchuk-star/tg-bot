@@ -32,7 +32,8 @@ RANKS = ("2", "3", "4", "5", "6", "7", "8", "9", "10", "В", "Д", "К", "Т")
 BET_OPTIONS = (5, 10, 25, 50)
 MIN_BET = 5
 BANKRUPT_TOP_UP = 10
-GAME_TIMEOUT_MINUTES = 10
+GAME_TIMEOUT_MINUTES = 10  # фаза playing: авто-«хватит»
+BETTING_TIMEOUT_MINUTES = 3  # фаза betting: денег нет — снимаем быстро, стол не виснет
 BLACKJACK_MULTIPLIER = 2.5  # выплата за блэкджек, округление вниз
 DEALER_STANDS_AT = 17
 
@@ -167,13 +168,16 @@ class BlackjackState:
             return None
 
     def is_timed_out(self, now: datetime) -> bool:
+        """Просрочка зависит от фазы: выбор ставки — 3 мин (денег нет, снимаем
+        быстро), партия — 10 мин (авто-«хватит»)."""
         if not self.started_at:
             return True
         try:
             started = ensure_aware(datetime.fromisoformat(self.started_at))
         except ValueError:
             return True
-        return now - started > timedelta(minutes=GAME_TIMEOUT_MINUTES)
+        limit = BETTING_TIMEOUT_MINUTES if self.phase == "betting" else GAME_TIMEOUT_MINUTES
+        return now - started > timedelta(minutes=limit)
 
 
 def new_betting_state(message_id: int | None = None) -> BlackjackState:

@@ -96,3 +96,13 @@ def test_timeout_handles_naive_and_aware() -> None:
     stale = BlackjackState(phase="playing", started_at=old_naive)
     assert stale.is_timed_out(now) is True  # naive ISO не роняет
     assert BlackjackState(phase="betting", started_at="").is_timed_out(now) is True
+
+
+def test_betting_phase_times_out_faster() -> None:
+    """Стол без ставки снимается за 3 минуты (playing живёт 10) — анти-завис."""
+    now = datetime.now(timezone.utc)
+    four_min_ago = (now - timedelta(minutes=4)).isoformat()
+    assert BlackjackState(phase="betting", started_at=four_min_ago).is_timed_out(now) is True
+    assert BlackjackState(phase="playing", started_at=four_min_ago).is_timed_out(now) is False
+    two_min_ago = (now - timedelta(minutes=2)).isoformat()
+    assert BlackjackState(phase="betting", started_at=two_min_ago).is_timed_out(now) is False
