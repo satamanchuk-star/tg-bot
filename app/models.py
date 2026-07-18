@@ -72,6 +72,48 @@ class GameRound(Base):
     )
 
 
+class QuizQuestion(Base):
+    """Пул вопросов викторины (грузится из data/quiz_questions.json)."""
+
+    __tablename__ = "quiz_questions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Помечаем использованные, чтобы не повторять; при истощении сбрасываем по кругу.
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+
+class QuizSession(Base):
+    """Активная сессия викторины одной темы. Всё состояние тура — в state_json
+    (dataclass QuizState), поэтому переживает рестарт бота посреди игры."""
+
+    __tablename__ = "quiz_sessions"
+
+    chat_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    topic_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    state_json: Mapped[str] = mapped_column(Text)
+
+
+class QuizRound(Base):
+    """История туров викторины — вечный аудит и all-time лидерборд
+    (переживает /reset_stats, как GameRound)."""
+
+    __tablename__ = "quiz_rounds"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    correct_answers: Mapped[int] = mapped_column(Integer, default=0)
+    is_winner: Mapped[bool] = mapped_column(Boolean, default=False)
+    coins_awarded: Mapped[int] = mapped_column(Integer, default=0)
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    finished_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
+    )
+
+
 class HealthState(Base):
     __tablename__ = "health_state"
 

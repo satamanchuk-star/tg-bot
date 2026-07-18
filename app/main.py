@@ -39,6 +39,7 @@ from app.db import Base, engine, get_session
 from app.handlers import (
     admin,
     blackjack as blackjack_handler,
+    quiz as quiz_handler,
     forms,
     help as help_handler,
     moderation,
@@ -389,11 +390,13 @@ async def drop_orphaned_tables(session: AsyncSession) -> None:
     if flag:
         return
 
+    # ВНИМАНИЕ: quiz_questions и quiz_sessions СНОВА живые (викторина вернулась,
+    # июль 2026) — их здесь быть не должно, иначе на свежей БД create_all их
+    # создаст, а миграция сразу снесёт. Дропаем только реально мёртвые таблицы
+    # старой викторины/лотереи.
     orphaned = [
         "lottery_tickets",
         "quiz_daily_limits",
-        "quiz_questions",
-        "quiz_sessions",
         "quiz_used_questions",
         "quiz_user_stats",
         # Модели удалены из кода (мёртвый функционал):
@@ -601,6 +604,12 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     )
     # За 5 минут до окна — случайное приглашение соседей на игру.
     scheduler.add_job(announce_game_soon, "cron", hour=21, minute=55, args=[bot])
+    # Викторина (все джобы сами выходят при topic_games=None): анонс 19:55,
+    # старт 20:00, watchdog каждую минуту (возобновляет driver после рестарта).
+    from app.handlers.quiz import announce_quiz_soon, quiz_watchdog, start_quiz_auto
+    scheduler.add_job(announce_quiz_soon, "cron", hour=19, minute=55, args=[bot])
+    scheduler.add_job(start_quiz_auto, "cron", hour=20, minute=0, args=[bot])
+    scheduler.add_job(quiz_watchdog, "interval", minutes=1, args=[bot])
     scheduler.start()
     return scheduler
 
@@ -751,6 +760,8 @@ async def on_startup_warmup(bot: Bot) -> None:
                     BotCommand(command="21top", description="Топ игроков по монетам"),
                     BotCommand(command="bonus", description="Ежедневные +10 монет (/бонус)"),
                     BotCommand(command="gift", description="Подарить монеты (/подарить, реплай + сумма)"),
+                    BotCommand(command="quiz_top", description="Знатоки викторины (/викторина_топ)"),
+                    BotCommand(command="quiz_rules", description="Правила викторины (/викторина_правила)"),
                 ],
             )
 
@@ -817,6 +828,19 @@ async def on_startup_warmup(bot: Bot) -> None:
     except Exception:
         logger.exception("Ошибка seed инфраструктуры.")
     logger.info("⏱ seed_places: %.2fs", _time.monotonic() - _step_t)
+
+    # ── Seed вопросов викторины из JSON ──────────────────────────────────────
+    _step_t = _time.monotonic()
+    try:
+        from scripts.seed_quiz import seed_quiz_questions
+        async for session in get_session():
+            total = await seed_quiz_questions(session)
+            await session.commit()
+            logger.info("Викторина: в базе %s вопросов.", total)
+            break
+    except Exception:
+        logger.exception("Ошибка seed викторины.")
+    logger.info("⏱ seed_quiz: %.2fs", _time.monotonic() - _step_t)
 
     # ── Google Sheets — в фон ────────────────────────────────────────────────
     _run_background_task(_sync_places_from_sheets(), name="startup_sync_places")
@@ -991,6 +1015,9 @@ async def main() -> None:
     # если тема не задана). Экономика — app/services/coins.py, логика —
     # app/services/blackjack.py. Новые игры подключать здесь же (до модерации).
     dp.include_router(blackjack_handler.router)
+    # Викторина (тема topic_games, старт 20:00). Роутер ДО модерации: ловит
+    # текстовые ответы игроков в теме игр. Модерация эту тему и так исключает.
+    dp.include_router(quiz_handler.router)
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
     # shop.router и economy_handler.router отключены: магазин и голосования
     # убраны из продукта (июль 2026) и не возвращаются вместе с игрой.
