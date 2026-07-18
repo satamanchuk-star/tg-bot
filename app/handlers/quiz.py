@@ -434,6 +434,58 @@ async def cmd_quiz_start(message: Message, bot: Bot) -> None:
         await message.reply(reason)
 
 
+@router.message(Command("quiz_import", "викторина_импорт"))
+async def cmd_quiz_import(message: Message, bot: Bot) -> None:
+    """Импорт вопросов с сайта (админ). Скачивает страницу и извлекает пары ИИ.
+
+    Работает в рантайме бота, где есть интернет: /quiz_import <url> [url2 ...]
+    """
+    from app.utils.admin import is_admin
+    if message.from_user is None:
+        return
+    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    urls = [p for p in parts[1:] if p.startswith("http")]
+    if not urls:
+        await message.reply(
+            "Использование: /quiz_import <ссылка> [ещё ссылки]\n"
+            "Пример: /quiz_import https://сайт.ру/вопросы"
+        )
+        return
+
+    from app.services.quiz_import import import_from_url
+
+    status = await message.reply(f"📥 Импортирую вопросы из {len(urls)} стр…")
+    lines: list[str] = []
+    total_added = 0
+    total_in_base = 0
+    for url in urls[:10]:  # разумный предел на одну команду
+        try:
+            async for session in get_session():
+                extracted, added, total_in_base = await import_from_url(
+                    session, url, chat_id=message.chat.id
+                )
+                await session.commit()
+                break
+            else:
+                continue
+            total_added += added
+            lines.append(f"✅ {url[:50]}… — извлечено {extracted}, новых {added}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("QUIZ import: %s — %s", url, exc, exc_info=True)
+            lines.append(f"⚠️ {url[:50]}… — ошибка: {str(exc)[:80]}")
+
+    summary = (
+        f"Готово. Добавлено новых: {total_added}. Всего вопросов в базе: {total_in_base}.\n\n"
+        + "\n".join(lines)
+    )
+    try:
+        await status.edit_text(summary)
+    except (TelegramBadRequest, TelegramRetryAfter):
+        await message.reply(summary)
+
+
 # --- Scheduler-джобы ---
 
 
