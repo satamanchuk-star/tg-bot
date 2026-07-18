@@ -790,6 +790,7 @@ async def on_startup_warmup(bot: Bot) -> None:
                     BotCommand(command="rag_bot", description="Добавить запись в RAG базу"),
                     BotCommand(command="rag_sync", description="Систематизировать RAG базу"),
                     BotCommand(command="restart_jobs", description="Перезапуск зависших задач"),
+                    BotCommand(command="quiz_import", description="Импорт вопросов викторины с сайта (url)"),
                     BotCommand(command="shutdown_bot", description="⚠️ Остановить бота"),
                 ],
                 scope=BotCommandScopeChatAdministrators(
