@@ -28,6 +28,14 @@ def test_typos_forgiven_for_long_words() -> None:
     assert check_answer("Достоевский", "достоевскй") is True
 
 
+def test_transposition_counts_as_one_typo() -> None:
+    """Дамерау: перестановка соседних букв — типичная опечатка быстрой печати."""
+    assert check_answer("сатурация", "сатурцаия") is True
+    assert check_answer("Гагарин", "Гаграин") is True
+    # Числа перестановка НЕ спасает — там только точное совпадение.
+    assert check_answer("1939", "1993") is False
+
+
 def test_short_word_typos_not_over_forgiven() -> None:
     """Короткие слова не прощаем по опечатке («кот»≠«код»)."""
     assert check_answer("кот", "код") is False
