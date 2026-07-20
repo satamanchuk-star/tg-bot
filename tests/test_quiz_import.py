@@ -13,8 +13,11 @@ from app.services.quiz_import import _parse_pairs, insert_new_questions
 
 
 @pytest.fixture()
-def db():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+def db(tmp_path):
+    # Файловая БД (как на проде), а не :memory: — паттерн «async for session…
+    # break» закрывает генераторы отложенно, и с in-memory каждая новая сессия
+    # может получить СВОЮ пустую базу. С файлом все соединения видят одно.
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/quiz_test.db")
     factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async def _prepare():
@@ -81,6 +84,48 @@ def test_insert_dedups_against_existing(db) -> None:
     added, total = asyncio.run(_run())
     assert added == 1  # только Рим
     assert total == 2
+
+
+def test_auto_import_runs_once_and_survives_failures(db, monkeypatch) -> None:
+    """Авто-импорт: одноразовый (MigrationFlag), падение сайта не рушит проход."""
+    from unittest.mock import AsyncMock
+
+    from app.models import MigrationFlag
+    from app.services import quiz_import as qi
+
+    async def _get_session():
+        async with db() as session:
+            yield session
+
+    monkeypatch.setattr("app.db.get_session", _get_session)
+
+    calls = {"n": 0}
+
+    async def _fake_import(session, url, *, chat_id):
+        calls["n"] += 1
+        if "olganevskaya" in url:
+            raise RuntimeError("сайт лёг")
+        return 10, 5, 100
+
+    monkeypatch.setattr(qi, "import_from_url", _fake_import)
+    bot = AsyncMock()
+
+    # Оба запуска в одном event loop: in-memory SQLite не переживает смену
+    # loop'а (артефакт теста; на проде БД — файл).
+    async def _run_twice():
+        await qi.auto_import_startup(bot)
+        first = calls["n"]
+        await qi.auto_import_startup(bot)  # флаг стоит — сайты не дёргаются
+        async with db() as session:
+            flag = await session.get(MigrationFlag, qi.AUTO_IMPORT_FLAG)
+        return first, calls["n"], flag
+
+    first, second, flag = asyncio.run(_run_twice())
+    assert first == len(qi.AUTO_IMPORT_URLS)  # прошёл по всем, включая упавший
+    assert second == first  # повторный запуск ничего не импортировал
+    assert flag is not None
+    report = bot.send_message.await_args.args[1]
+    assert "⚠️" in report and "✅" in report  # и успехи, и ошибка в отчёте
 
 
 def test_insert_dedups_within_batch(db) -> None:

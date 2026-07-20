@@ -500,13 +500,23 @@ async def announce_quiz_soon(bot: Bot) -> None:
 
 
 async def start_quiz_auto(bot: Bot) -> None:
-    """20:00 ежедневно: автозапуск тура."""
+    """20:00 ежедневно: автозапуск тура. Отказ — ГРОМКО в админ-чат: молчаливый
+    logger.info уже привёл к «анонс был, игры не было» (пустой пул вопросов
+    из-за bind mount data/ — файл сида не был виден на сервере)."""
     if settings.topic_games is None:
         return
     try:
         reason = await _launch_quiz(bot, settings.forum_chat_id)
         if reason:
-            logger.info("QUIZ: автозапуск пропущен — %s", reason)
+            logger.warning("QUIZ: автозапуск пропущен — %s", reason)
+            try:
+                await bot.send_message(
+                    settings.admin_log_chat_id,
+                    f"⚠️ Викторина в 20:00 НЕ запустилась: {reason}\n"
+                    "Пул вопросов: /quiz_import <url> или проверь seed_quiz в логах.",
+                )
+            except (TelegramBadRequest, TelegramRetryAfter):
+                pass
     except Exception:
         logger.warning("QUIZ: автозапуск упал.", exc_info=True)
 
