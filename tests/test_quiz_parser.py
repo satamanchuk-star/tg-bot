@@ -92,3 +92,48 @@ def test_plain_text_without_html() -> None:
     page = "1. Дважды два?\nОтветы\n1. Четыре."
     pairs = parse_page(page)
     assert pairs == [{"question": "Дважды два?", "answer": "Четыре", "category": "квиз"}]
+
+
+_CATEGORY_HTML = """
+<article><h2 class="entry-title"><a href="https://site.ru/post-1/">Пост 1</a></h2>
+<a class="continue-reading" href="https://site.ru/post-1/">Read Post</a></article>
+<article><h2 class="entry-title"><a href="https://site.ru/post-2/">Пост 2</a></h2></article>
+<div class="blog-nav"><div class="link-prev">
+<a href="https://site.ru/category/x/page/2/">Older Posts</a></div></div>
+"""
+
+
+def test_extract_post_links_from_category() -> None:
+    """Каталог WordPress: ссылки постов из заголовков + пагинация, без дублей."""
+    from scripts.parse_quiz_page import extract_post_links
+
+    links = extract_post_links(_CATEGORY_HTML)
+    assert links == [
+        "https://site.ru/post-1/",
+        "https://site.ru/post-2/",
+        "https://site.ru/category/x/page/2/",
+    ]
+
+
+def test_crawl_follows_category_to_posts(monkeypatch) -> None:
+    """Обход: каталог → посты → пары; пагинация тоже посещается."""
+    import scripts.parse_quiz_page as pq
+
+    pages = {
+        "https://site.ru/category/x/": _CATEGORY_HTML,
+        "https://site.ru/post-1/": "1. Столица Франции?\nОтветы\n1. Париж.",
+        "https://site.ru/post-2/": "1. Царь зверей?\nОтветы\n1. Лев.",
+        "https://site.ru/category/x/page/2/": "<p>пусто</p>",
+    }
+    visited = []
+
+    def _fake_read(src):
+        visited.append(src)
+        return pages[src]
+
+    monkeypatch.setattr(pq, "_read_source", _fake_read)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    pairs = pq.crawl(["https://site.ru/category/x/"])
+    assert {p["answer"] for p in pairs} == {"Париж", "Лев"}
+    assert "https://site.ru/category/x/page/2/" in visited  # пагинация обойдена

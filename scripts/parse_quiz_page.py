@@ -134,6 +134,32 @@ def filter_valid(pairs: list[dict]) -> tuple[list[dict], list[str]]:
     return valid, rejected
 
 
+def extract_post_links(html: str) -> list[str]:
+    """Ссылки на посты со страницы-каталога (WordPress: заголовки статей) +
+    пагинация «Older Posts». Каталог сам пар не содержит — только анонсы."""
+    links: list[str] = []
+    seen: set[str] = set()
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        # Заголовки статей и кнопки «Read Post».
+        for sel in ("h2.entry-title a", "a.continue-reading", "h1.entry-title a"):
+            for a in soup.select(sel):
+                href = a.get("href")
+                if href and href.startswith("http") and href not in seen:
+                    seen.add(href)
+                    links.append(href)
+        # Пагинация «Older Posts» — чтобы обойти весь раздел.
+        for a in soup.select("div.link-prev a, a.next, .blog-nav a"):
+            href = a.get("href")
+            if href and href.startswith("http") and href not in seen:
+                seen.add(href)
+                links.append(href)
+    except Exception:
+        pass
+    return links
+
+
 def _read_source(src: str) -> str:
     if src.startswith("http"):
         import httpx
@@ -145,18 +171,50 @@ def _read_source(src: str) -> str:
     return Path(src).read_text(encoding="utf-8")
 
 
-if __name__ == "__main__":
+def _is_pagination(url: str) -> bool:
+    return "/page/" in url
+
+
+def crawl(sources: list[str], max_pages: int = 60) -> list[dict]:
+    """Обходит источники: файл/URL с парами берётся как есть; страница-каталог
+    раскрывается в посты (и пагинацию) с вежливой паузой между запросами."""
+    import time
+
     all_pairs: list[dict] = []
-    for src in sys.argv[1:]:
+    queue = list(sources)
+    visited: set[str] = set()
+    fetched = 0
+    while queue and fetched < max_pages:
+        src = queue.pop(0)
+        if src in visited:
+            continue
+        visited.add(src)
         try:
             html = _read_source(src)
         except Exception as exc:  # noqa: BLE001
             print(f"⚠️ {src}: {exc}", file=sys.stderr)
             continue
+        fetched += 1
         found = parse_page(html)
-        print(f"{src}: найдено пар {len(found)}", file=sys.stderr)
-        all_pairs.extend(found)
+        if found:
+            print(f"{src}: пар {len(found)}", file=sys.stderr)
+            all_pairs.extend(found)
+        else:
+            # Пар нет — возможно, это каталог: раскрываем посты и пагинацию.
+            links = extract_post_links(html)
+            posts = [u for u in links if not _is_pagination(u)]
+            pages = [u for u in links if _is_pagination(u)]
+            if links:
+                print(f"{src}: каталог — постов {len(posts)}, пагинация {len(pages)}",
+                      file=sys.stderr)
+            queue.extend(posts + pages)
+        if src.startswith("http"):
+            time.sleep(1.0)  # вежливая пауза
+    return all_pairs
 
+
+if __name__ == "__main__":
+    all_pairs = crawl(sys.argv[1:])
     valid, rejected = filter_valid(all_pairs)
     for line in rejected:
         print("отсеяно:", line, file=sys.stderr)
