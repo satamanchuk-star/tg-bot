@@ -65,12 +65,17 @@ def validate_one(item: dict) -> list[str]:
         issues.append("ответ пуст после разбора вариантов")
         return issues
 
+    from app.services.quiz import _STOP_WORDS
+
     for v in variants:
         words = _tokens(v)
         if len(words) > _MAX_ANSWER_WORDS:
             issues.append(f"слишком длинный вариант ответа ({len(words)} слов): «{v}»")
         if not words:
             issues.append(f"вариант ответа без значимых токенов: «{v}»")
+        elif all(w in _STOP_WORDS for w in words):
+            # Эталон из одних стоп-слов («это») засчитал бы любую фразу с ним.
+            issues.append(f"вариант ответа целиком из стоп-слов: «{v}»")
 
     # Валидация ОТВЕТА матчем: каждый вариант эталона обязан засчитаться сам себе.
     for v in variants:

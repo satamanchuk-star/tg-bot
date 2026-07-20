@@ -86,9 +86,14 @@ def _canon_number(token: str) -> str | None:
 
 
 def _bounded_levenshtein(a: str, b: str, max_dist: int = 1) -> int:
-    """Расстояние Левенштейна с ранним выходом (возвращает max_dist+1, если больше)."""
+    """Расстояние Дамерау-Левенштейна с ранним выходом (max_dist+1, если больше).
+
+    Перестановка соседних букв («сатурцаия» → «сатурация») считается ОДНОЙ
+    правкой — это типичнейшая опечатка при быстрой печати в чате.
+    """
     if abs(len(a) - len(b)) > max_dist:
         return max_dist + 1
+    prev2: list[int] | None = None
     prev = list(range(len(b) + 1))
     for i, ca in enumerate(a, 1):
         cur = [i]
@@ -96,10 +101,17 @@ def _bounded_levenshtein(a: str, b: str, max_dist: int = 1) -> int:
         for j, cb in enumerate(b, 1):
             cost = 0 if ca == cb else 1
             val = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+            # Транспозиция: ab ↔ ba за одну правку.
+            if (
+                prev2 is not None and i > 1 and j > 1
+                and ca == b[j - 2] and a[i - 2] == cb
+            ):
+                val = min(val, prev2[j - 2] + 1)
             cur.append(val)
             best = min(best, val)
         if best > max_dist:
             return max_dist + 1
+        prev2 = prev
         prev = cur
     return prev[-1]
 
