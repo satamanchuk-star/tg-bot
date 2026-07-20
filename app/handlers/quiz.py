@@ -164,19 +164,29 @@ async def _run_quiz(bot: Bot, chat_id: int) -> None:
                 break
             else:
                 return
-            if state is None or state.phase == "finished":
+            if state is None:
+                return
+            # Финиш обрабатывает ТОЛЬКО driver и ТОЛЬКО вне лока — иначе
+            # реентрантный дедлок (finish берёт тот же _lock_for).
+            if state.phase == "finished":
+                await _finish_quiz(bot, chat_id)
                 return
 
             if state.phase == "asking":
-                # Сколько осталось на текущий вопрос (важно при возобновлении).
+                # Вопрос уже забрали (гонка или возобновление после ответа) —
+                # закрываем сразу, не досиживая таймер.
+                if state.winner_user_id is not None:
+                    await _close_question(bot, chat_id)
+                    continue
                 remaining = _remaining_seconds(state)
                 if remaining <= 0:
                     await _close_question(bot, chat_id)
                     continue
-                event = _event_for(chat_id)
-                event.clear()
+                # Событие чистится при ПОДГОТОВКЕ вопроса (_advance/_launch), а не
+                # здесь — иначе set() от быстрого ответа, пришедший до этого места,
+                # терялся бы, и driver зря ждал полный таймер (потерянное пробуждение).
                 try:
-                    await asyncio.wait_for(event.wait(), timeout=remaining)
+                    await asyncio.wait_for(_event_for(chat_id).wait(), timeout=remaining)
                 except asyncio.TimeoutError:
                     pass
                 await _close_question(bot, chat_id)
@@ -220,6 +230,7 @@ async def _close_question(bot: Bot, chat_id: int) -> None:
                 winner_name = entry.get("name") if entry else None
             reveal = _reveal_text(state, winner_name)
             is_last = state.index >= len(state.question_ids) - 1
+            # Только помечаем фазу; сам финиш зовёт driver вне лока (анти-дедлок).
             state.phase = "finished" if is_last else "break"
             await q.save_session(session, chat_id, settings.topic_games, state)
             await session.commit()
@@ -229,12 +240,10 @@ async def _close_question(bot: Bot, chat_id: int) -> None:
 
     await _safe_send(bot, reveal)
 
-    if is_last:
-        await _finish_quiz(bot, chat_id)
-
 
 async def _advance_question(bot: Bot, chat_id: int) -> None:
-    """Готовит следующий вопрос и публикует его."""
+    """Готовит следующий вопрос и публикует его. Финиш НЕ зовёт — только ставит
+    phase=finished, а driver его подхватит вне лока (иначе реентрантный дедлок)."""
     async with _lock_for(chat_id):
         async for session in get_session():
             state = await q.load_session(session, chat_id)
@@ -246,12 +255,10 @@ async def _advance_question(bot: Bot, chat_id: int) -> None:
                 state.phase = "finished"
                 await q.save_session(session, chat_id, settings.topic_games, state)
                 await session.commit()
-                await _finish_quiz(bot, chat_id)
                 return
             question = await q.get_question(session, state.question_ids[state.index])
             if question is None:
-                # Вопрос пропал из БД — пропускаем, не роняя тур.
-                state.phase = "break"
+                # Вопрос пропал из БД — остаёмся в break, driver возьмёт следующий.
                 await q.save_session(session, chat_id, settings.topic_games, state)
                 await session.commit()
                 return
@@ -260,6 +267,7 @@ async def _advance_question(bot: Bot, chat_id: int) -> None:
             state.question_text = question.question
             state.winner_user_id = None
             state.question_started_at = datetime.now(timezone.utc).isoformat()
+            _event_for(chat_id).clear()  # свежее событие под новый вопрос
             await q.save_session(session, chat_id, settings.topic_games, state)
             await session.commit()
             text = _question_text(state)
@@ -312,7 +320,9 @@ async def _launch_quiz(bot: Bot, chat_id: int) -> str | None:
                 return "Викторина уже идёт."
             questions = await q.pick_questions(session, q.QUESTIONS_PER_ROUND)
             if len(questions) < q.QUESTIONS_PER_ROUND:
-                await session.commit()
+                # НЕ коммитим: pick_questions уже пометил used_at, но тур не
+                # стартовал — откатываем, чтобы не «сжигать» свежесть вопросов зря.
+                await session.rollback()
                 return "Недостаточно вопросов в базе для тура."
             first = questions[0]
             state = q.QuizState(
@@ -323,6 +333,7 @@ async def _launch_quiz(bot: Bot, chat_id: int) -> str | None:
                 question_text=first.question,
                 question_started_at=datetime.now(timezone.utc).isoformat(),
             )
+            _event_for(chat_id).clear()  # свежее событие под первый вопрос
             await q.save_session(session, chat_id, settings.topic_games, state)
             await session.commit()
             text = _question_text(state)
@@ -434,58 +445,6 @@ async def cmd_quiz_start(message: Message, bot: Bot) -> None:
         await message.reply(reason)
 
 
-@router.message(Command("quiz_import", "викторина_импорт"))
-async def cmd_quiz_import(message: Message, bot: Bot) -> None:
-    """Импорт вопросов с сайта (админ). Скачивает страницу и извлекает пары ИИ.
-
-    Работает в рантайме бота, где есть интернет: /quiz_import <url> [url2 ...]
-    """
-    from app.utils.admin import is_admin
-    if message.from_user is None:
-        return
-    if not await is_admin(bot, settings.forum_chat_id, message.from_user.id):
-        return
-    parts = (message.text or "").split()
-    urls = [p for p in parts[1:] if p.startswith("http")]
-    if not urls:
-        await message.reply(
-            "Использование: /quiz_import <ссылка> [ещё ссылки]\n"
-            "Пример: /quiz_import https://сайт.ру/вопросы"
-        )
-        return
-
-    from app.services.quiz_import import import_from_url
-
-    status = await message.reply(f"📥 Импортирую вопросы из {len(urls)} стр…")
-    lines: list[str] = []
-    total_added = 0
-    total_in_base = 0
-    for url in urls[:10]:  # разумный предел на одну команду
-        try:
-            async for session in get_session():
-                extracted, added, total_in_base = await import_from_url(
-                    session, url, chat_id=message.chat.id
-                )
-                await session.commit()
-                break
-            else:
-                continue
-            total_added += added
-            lines.append(f"✅ {url[:50]}… — извлечено {extracted}, новых {added}")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("QUIZ import: %s — %s", url, exc, exc_info=True)
-            lines.append(f"⚠️ {url[:50]}… — ошибка: {str(exc)[:80]}")
-
-    summary = (
-        f"Готово. Добавлено новых: {total_added}. Всего вопросов в базе: {total_in_base}.\n\n"
-        + "\n".join(lines)
-    )
-    try:
-        await status.edit_text(summary)
-    except (TelegramBadRequest, TelegramRetryAfter):
-        await message.reply(summary)
-
-
 # --- Scheduler-джобы ---
 
 
@@ -512,8 +471,7 @@ async def start_quiz_auto(bot: Bot) -> None:
             try:
                 await bot.send_message(
                     settings.admin_log_chat_id,
-                    f"⚠️ Викторина в 20:00 НЕ запустилась: {reason}\n"
-                    "Пул вопросов: /quiz_import <url> или проверь seed_quiz в логах.",
+                    f"⚠️ Викторина в 20:00 не запустилась: {reason}",
                 )
             except (TelegramBadRequest, TelegramRetryAfter):
                 pass

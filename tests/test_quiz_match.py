@@ -48,6 +48,19 @@ def test_number_with_extra_words() -> None:
     assert check_answer("1961", "думаю 1962") is False
 
 
+def test_number_word_equivalence() -> None:
+    """Белое пятно: «8» должно принимать «восемь» и наоборот."""
+    assert check_answer("8", "восемь") is True
+    assert check_answer("восемь", "8") is True
+    assert check_answer("8", "8") is True
+    assert check_answer("восемь", "восемь") is True
+    # Но соседнее число словом — по-прежнему мимо.
+    assert check_answer("8", "семь") is False
+    assert check_answer("восемь", "9") is False
+    # Годы — только цифрами (в словах их всё равно не пишут).
+    assert check_answer("1961", "1961") is True
+
+
 def test_multiword_requires_all_significant() -> None:
     """Многословный ответ: нужны все значимые слова (умеренно, не 40%)."""
     assert check_answer("Красная площадь", "красная площадь") is True

@@ -608,7 +608,14 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
     # старт 20:00, watchdog каждую минуту (возобновляет driver после рестарта).
     from app.handlers.quiz import announce_quiz_soon, quiz_watchdog, start_quiz_auto
     scheduler.add_job(announce_quiz_soon, "cron", hour=19, minute=55, args=[bot])
-    scheduler.add_job(start_quiz_auto, "cron", hour=20, minute=0, args=[bot])
+    # misfire_grace_time: если бот рестартнул около 20:00, старт не «потеряется»
+    # (APScheduler по умолчанию пропускает просроченную джобу) — наверстает в
+    # течение 30 минут. Иначе тур молча не начинается (одна из причин «анонс был,
+    # игры не было»).
+    scheduler.add_job(
+        start_quiz_auto, "cron", hour=20, minute=0, args=[bot],
+        misfire_grace_time=1800, coalesce=True,
+    )
     scheduler.add_job(quiz_watchdog, "interval", minutes=1, args=[bot])
     scheduler.start()
     return scheduler
@@ -790,7 +797,6 @@ async def on_startup_warmup(bot: Bot) -> None:
                     BotCommand(command="rag_bot", description="Добавить запись в RAG базу"),
                     BotCommand(command="rag_sync", description="Систематизировать RAG базу"),
                     BotCommand(command="restart_jobs", description="Перезапуск зависших задач"),
-                    BotCommand(command="quiz_import", description="Импорт вопросов викторины с сайта (url)"),
                     BotCommand(command="shutdown_bot", description="⚠️ Остановить бота"),
                 ],
                 scope=BotCommandScopeChatAdministrators(
@@ -831,22 +837,19 @@ async def on_startup_warmup(bot: Bot) -> None:
     logger.info("⏱ seed_places: %.2fs", _time.monotonic() - _step_t)
 
     # ── Seed вопросов викторины из JSON ──────────────────────────────────────
+    # Пустая база = игра молча не стартует в 20:00; про это громко сообщает сам
+    # start_quiz_auto (алерт в админ-чат с причиной), поэтому тут только лог.
     _step_t = _time.monotonic()
     try:
         from scripts.seed_quiz import seed_quiz_questions
         async for session in get_session():
-            total = await seed_quiz_questions(session)
+            quiz_total = await seed_quiz_questions(session)
             await session.commit()
-            logger.info("Викторина: в базе %s вопросов.", total)
+            logger.info("Викторина: в базе %s вопросов.", quiz_total)
             break
     except Exception:
         logger.exception("Ошибка seed викторины.")
     logger.info("⏱ seed_quiz: %.2fs", _time.monotonic() - _step_t)
-
-    # ── Одноразовый авто-импорт вопросов с сайтов владельца (в фон) ──────────
-    # Работает только на сервере (интернет); под MigrationFlag — один раз.
-    from app.services.quiz_import import auto_import_startup
-    _run_background_task(auto_import_startup(bot), name="startup_quiz_autoimport")
 
     # ── Google Sheets — в фон ────────────────────────────────────────────────
     _run_background_task(_sync_places_from_sheets(), name="startup_sync_places")
