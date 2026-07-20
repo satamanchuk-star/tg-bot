@@ -15,6 +15,7 @@ COPY data/ ./data/
 # Копируем KB и seed в отдельную директорию, чтобы bind mount data/ не перекрывал их
 COPY data/resident_kb.json ./kb/resident_kb.json
 COPY data/places_seed.json ./kb/places_seed.json
+COPY data/quiz_questions.json ./kb/quiz_questions.json
 
 RUN mkdir -p /app/data
 

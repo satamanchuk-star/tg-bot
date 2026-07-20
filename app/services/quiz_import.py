@@ -142,3 +142,72 @@ async def import_from_url(session: AsyncSession, url: str, *, chat_id: int) -> t
     added = await insert_new_questions(session, pairs)
     total = int(await session.scalar(select(func.count()).select_from(QuizQuestion)) or 0)
     return len(pairs), added, total
+
+
+# --- Одноразовый авто-импорт при старте (сайты владельца) ---
+
+# Сайты с вопросами от владельца. При добавлении новых — поднять версию флага,
+# чтобы деплой прошёлся по списку ещё раз.
+AUTO_IMPORT_URLS = (
+    "https://raznoeinteresnoe.ru/квиз-примеры-вопросов-с-ответами/",
+    "https://olganevskaya.com/вопросы-от-сайта-квизбаза-архив/",
+    "https://quizvopros.ru",
+    "https://viktorinavopros.ru",
+)
+AUTO_IMPORT_FLAG = "quiz_autoimport_v1"
+
+
+async def auto_import_startup(bot) -> None:
+    """Фоновая задача старта: одноразово (под MigrationFlag) импортирует вопросы
+    со всех сайтов владельца и отчитывается в админ-чат.
+
+    Работает на сервере, где есть интернет (окружение сборки заблокировано).
+    Ошибки отдельных сайтов не прерывают остальные.
+    """
+    from app.config import settings
+    from app.db import get_session
+    from app.models import MigrationFlag
+
+    async for session in get_session():
+        flag = await session.get(MigrationFlag, AUTO_IMPORT_FLAG)
+        if flag is not None:
+            return
+        break
+    else:
+        return
+
+    lines: list[str] = []
+    total_added = 0
+    total_in_base = 0
+    for url in AUTO_IMPORT_URLS:
+        try:
+            async for session in get_session():
+                extracted, added, total_in_base = await import_from_url(
+                    session, url, chat_id=settings.admin_log_chat_id
+                )
+                await session.commit()
+                break
+            else:
+                continue
+            total_added += added
+            lines.append(f"✅ {url[:55]} — извлечено {extracted}, новых {added}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("QUIZ autoimport: %s — %s", url, exc)
+            lines.append(f"⚠️ {url[:55]} — {str(exc)[:80]}")
+
+    # Флаг ставим после прохода (даже частично неудачного): повторный деплой не
+    # будет долбить сайты; добить конкретный сайт можно вручную /quiz_import.
+    async for session in get_session():
+        session.add(MigrationFlag(key=AUTO_IMPORT_FLAG))
+        await session.commit()
+        break
+
+    report = (
+        f"🧠 Авто-импорт вопросов викторины: +{total_added} новых, "
+        f"в базе {total_in_base}.\n\n" + "\n".join(lines)
+        + "\n\nДобавить ещё: /quiz_import <ссылка>"
+    )
+    try:
+        await bot.send_message(settings.admin_log_chat_id, report)
+    except Exception:  # noqa: BLE001
+        logger.info("QUIZ autoimport: отчёт не отправился.\n%s", report)

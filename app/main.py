@@ -843,6 +843,11 @@ async def on_startup_warmup(bot: Bot) -> None:
         logger.exception("Ошибка seed викторины.")
     logger.info("⏱ seed_quiz: %.2fs", _time.monotonic() - _step_t)
 
+    # ── Одноразовый авто-импорт вопросов с сайтов владельца (в фон) ──────────
+    # Работает только на сервере (интернет); под MigrationFlag — один раз.
+    from app.services.quiz_import import auto_import_startup
+    _run_background_task(auto_import_startup(bot), name="startup_quiz_autoimport")
+
     # ── Google Sheets — в фон ────────────────────────────────────────────────
     _run_background_task(_sync_places_from_sheets(), name="startup_sync_places")
 
