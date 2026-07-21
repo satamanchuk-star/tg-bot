@@ -56,14 +56,26 @@ async def seed_quiz_questions(session: AsyncSession) -> int:
         if k not in seed_by_key:
             await session.delete(row)  # вопрос убрали из сида
 
+    added = 0
     for k, d in seed_by_key.items():
         if k in existing_keys:
             continue
         session.add(QuizQuestion(
             question=d["question"].strip(),
             answer=d["answer"].strip(),
+            comment=(str(d.get("comment") or "").strip() or None),
             category=(d.get("category") or None),
         ))
+        added += 1
+
+    if added:
+        # Появились свежие вопросы — снимаем флаг «база исчерпана», викторина
+        # снова начнёт запускаться в 20:00.
+        from app.models import MigrationFlag
+        flag = await session.get(MigrationFlag, "quiz_bank_exhausted")
+        if flag is not None:
+            await session.delete(flag)
+            logger.info("QUIZ seed: база пополнена (%d) — викторина снова открыта.", added)
 
     await session.flush()
     total = int(await session.scalar(

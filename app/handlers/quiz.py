@@ -129,7 +129,10 @@ def _reveal_text(state: q.QuizState, winner_name: str | None) -> str:
         head = f"✅ {winner_name} угадал(а)! +{q.COINS_PER_CORRECT} 🪙"
     else:
         head = "⏰ Никто не успел"
-    return f"{head}\nПравильный ответ: {state.current_answer}"
+    text = f"{head}\nПравильный ответ: {state.current_answer}"
+    if state.current_comment:
+        text += f"\n💬 {state.current_comment}"
+    return text
 
 
 def _final_text(scores: dict) -> str:
@@ -264,6 +267,7 @@ async def _advance_question(bot: Bot, chat_id: int) -> None:
                 return
             state.phase = "asking"
             state.current_answer = question.answer
+            state.current_comment = question.comment or ""
             state.question_text = question.question
             state.winner_user_id = None
             state.question_started_at = datetime.now(timezone.utc).isoformat()
@@ -330,6 +334,7 @@ async def _launch_quiz(bot: Bot, chat_id: int) -> str | None:
                 question_ids=[qq.id for qq in questions],
                 index=0,
                 current_answer=first.answer,
+                current_comment=first.comment or "",
                 question_text=first.question,
                 question_started_at=datetime.now(timezone.utc).isoformat(),
             )
@@ -445,26 +450,81 @@ async def cmd_quiz_start(message: Message, bot: Bot) -> None:
         await message.reply(reason)
 
 
+# --- Закрытие викторины при исчерпании базы (решение владельца) ---
+
+_EXHAUSTED_FLAG = "quiz_bank_exhausted"
+
+
+async def _bank_is_exhausted() -> bool:
+    """True, если свежих вопросов меньше, чем нужно на тур."""
+    async for session in get_session():
+        fresh = await q.count_fresh_questions(session)
+        await session.commit()
+        return fresh < q.QUESTIONS_PER_ROUND
+    return True
+
+
+async def _exhausted_already_announced() -> bool:
+    from app.models import MigrationFlag
+    async for session in get_session():
+        flag = await session.get(MigrationFlag, _EXHAUSTED_FLAG)
+        await session.commit()
+        return flag is not None
+    return True
+
+
+async def _mark_exhausted_announced() -> None:
+    from app.models import MigrationFlag
+    async for session in get_session():
+        session.add(MigrationFlag(key=_EXHAUSTED_FLAG))
+        await session.commit()
+        return
+
+
 # --- Scheduler-джобы ---
 
 
 async def announce_quiz_soon(bot: Bot) -> None:
-    """19:55 ежедневно: случайное приглашение на викторину."""
+    """19:55 ежедневно: случайное приглашение. При исчерпанной базе молчит —
+    иначе будет «анонс был, игры не было»."""
     if settings.topic_games is None:
         return
     try:
+        if await _bank_is_exhausted():
+            return
         await _safe_send(bot, _pick_invitation())
     except Exception:
         logger.warning("QUIZ: анонс не отправился.", exc_info=True)
 
 
 async def start_quiz_auto(bot: Bot) -> None:
-    """20:00 ежедневно: автозапуск тура. Отказ — ГРОМКО в админ-чат: молчаливый
-    logger.info уже привёл к «анонс был, игры не было» (пустой пул вопросов
-    из-за bind mount data/ — файл сида не был виден на сервере)."""
+    """20:00 ежедневно: автозапуск тура.
+
+    База кончилась → ОДИН раз сообщаем владельцу и жителям, ставим флаг и
+    закрываем викторину (решение владельца: вопросы не повторяются). Прочие
+    отказы — громко в админ-чат (молчаливый лог уже стоил пропущенного вечера).
+    """
     if settings.topic_games is None:
         return
     try:
+        if await _bank_is_exhausted():
+            if not await _exhausted_already_announced():
+                await _mark_exhausted_announced()
+                try:
+                    await bot.send_message(
+                        settings.admin_log_chat_id,
+                        "🏁 База вопросов викторины полностью исчерпана — все вопросы "
+                        "заданы, викторина закрыта.\nЧтобы возобновить: добавь вопросы "
+                        "(xlsx → scripts/import_quiz_xlsx) и задеплой.",
+                    )
+                except (TelegramBadRequest, TelegramRetryAfter):
+                    pass
+                await _safe_send(
+                    bot,
+                    "🏁 Викторина сыграла все свои вопросы — спасибо, знатоки!\n"
+                    "Вернёмся с новой базой. Следите за анонсами 🧠",
+                )
+            return
         reason = await _launch_quiz(bot, settings.forum_chat_id)
         if reason:
             logger.warning("QUIZ: автозапуск пропущен — %s", reason)

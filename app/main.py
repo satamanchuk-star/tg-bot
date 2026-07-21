@@ -223,6 +223,16 @@ async def init_db(async_engine: AsyncEngine) -> None:
                         text("ALTER TABLE places ADD COLUMN verified_by VARCHAR(120)")
                     )
 
+            # Миграция quiz_questions: пояснение к ответу (показывается при развязке)
+            if inspector.has_table("quiz_questions"):
+                columns = {
+                    column["name"] for column in inspector.get_columns("quiz_questions")
+                }
+                if "comment" not in columns:
+                    sync_conn.execute(
+                        text("ALTER TABLE quiz_questions ADD COLUMN comment TEXT")
+                    )
+
             # Миграция moderation_events
             if inspector.has_table("moderation_events"):
                 columns = {
