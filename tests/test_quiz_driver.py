@@ -37,6 +37,19 @@ def db(tmp_path, monkeypatch):
     asyncio.run(engine.dispose())
 
 
+def _make_bot() -> AsyncMock:
+    """Бот-мок с настоящим message_id в ответе send_message (для state_json)."""
+    bot = AsyncMock()
+    counter = {"n": 0}
+
+    async def _send(*args, **kwargs):
+        counter["n"] += 1
+        return SimpleNamespace(message_id=5000 + counter["n"], chat=SimpleNamespace(id=100))
+
+    bot.send_message = AsyncMock(side_effect=_send)
+    return bot
+
+
 def _prime(monkeypatch, questions_per_round=2, seconds=1, brk=0):
     from app.handlers import quiz as h
     from app.services import quiz as q
@@ -66,7 +79,7 @@ def test_full_round_completes_without_deadlock(db, monkeypatch) -> None:
             await session.commit()
 
     asyncio.run(_seed())
-    bot = AsyncMock()
+    bot = _make_bot()
 
     async def _run():
         reason = await h._launch_quiz(bot, 100)
@@ -108,7 +121,7 @@ def test_missing_last_question_still_finishes(db, monkeypatch) -> None:
             await session.commit()
 
     asyncio.run(_seed_and_break())
-    bot = AsyncMock()
+    bot = _make_bot()
 
     async def _run():
         h._start_driver(bot, 100)
@@ -136,7 +149,7 @@ def test_correct_answer_ends_question_fast(db, monkeypatch) -> None:
             await session.commit()
 
     asyncio.run(_seed())
-    bot = AsyncMock()
+    bot = _make_bot()
 
     async def _run():
         await h._launch_quiz(bot, 100)
@@ -146,7 +159,7 @@ def test_correct_answer_ends_question_fast(db, monkeypatch) -> None:
             text="Париж",
             from_user=SimpleNamespace(id=7, username="u", full_name="U"),
         )
-        await h.on_answer(msg)
+        await h.on_answer(msg, bot)
         # Если бы пробуждение терялось — тур висел бы 30с. Ждём максимум 5.
         await asyncio.wait_for(h._running[100], timeout=5)
 

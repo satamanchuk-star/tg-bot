@@ -150,17 +150,43 @@ def _variant_matched(variant: str, given_tokens: list[str]) -> bool:
     return all(_token_matches(c, given_tokens) for c in correct_tokens)
 
 
+def _drop_negated(tokens: list[str]) -> list[str]:
+    """Убирает токен, идущий сразу после «не»/«это не»: «это не Париж» не должно
+    засчитываться как «Париж» (жалоба на неверный подсчёт). При этом «не знаю,
+    Париж» остаётся верным — отрицание бьёт только по соседнему слову."""
+    result: list[str] = []
+    skip_next = False
+    for t in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        if t in ("не", "ни"):
+            skip_next = True
+            continue
+        result.append(t)
+    return result
+
+
 def check_answer(correct: str, given: str) -> bool:
     """Умеренный матч: опечатки прощаем, числа/даты — точно, лишние слова ок.
 
     Эталон может содержать альтернативы через «/», «;», «или» — достаточно
-    совпасть с любой.
+    совпасть с любой. Слово под отрицанием («не Париж») не засчитывается —
+    кроме эталонов, где «не/ни» часть самого ответа («Ни пуха, ни пера»).
     """
-    given_tokens = [t for t in _tokens(given) if t]
-    if not given_tokens:
+    raw_tokens = [t for t in _tokens(given) if t]
+    if not raw_tokens:
         return False
-    variants = [v for v in _ALT_SPLIT.split(correct) if v.strip()]
-    return any(_variant_matched(v, given_tokens) for v in variants)
+    filtered_tokens = _drop_negated(raw_tokens)
+    for v in _ALT_SPLIT.split(correct):
+        if not v.strip():
+            continue
+        v_tokens = _tokens(v)
+        # Эталон с «не/ни» внутри — отрицание не фильтруем, оно часть ответа.
+        use = raw_tokens if ("не" in v_tokens or "ни" in v_tokens) else filtered_tokens
+        if use and _variant_matched(v, use):
+            return True
+    return False
 
 
 def answer_length_hint(answer: str) -> str:
