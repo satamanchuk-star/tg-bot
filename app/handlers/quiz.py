@@ -110,18 +110,68 @@ async def _safe_send(bot: Bot, text: str) -> Message | None:
         return None
 
 
+async def _safe_edit(bot: Bot, message_id: int | None, text: str) -> None:
+    """Правка сообщения в теме игр; устаревшее/флуд — молча пропускаем."""
+    if message_id is None:
+        return
+    try:
+        await bot.edit_message_text(
+            text, chat_id=settings.forum_chat_id, message_id=message_id
+        )
+    except (TelegramBadRequest, TelegramRetryAfter):
+        pass
+
+
+# Реакции-анимации на ответы игроков: верный — праздник, неверный — раздумье.
+_CORRECT_REACTIONS = ("🎉", "🏆", "⚡", "🔥", "👏")
+_WRONG_REACTION = "🤔"
+
+
+async def _safe_react(bot: Bot, message: Message, emoji: str) -> None:
+    """Ставит эмодзи-реакцию на сообщение игрока (анимация в клиенте Telegram).
+
+    Реакция — best-effort украшение: любые ошибки (флуд, старое сообщение,
+    выключенные реакции в чате) молча глотаем, игру они не трогают.
+    """
+    try:
+        from aiogram.types import ReactionTypeEmoji
+        await bot.set_message_reaction(
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            reaction=[ReactionTypeEmoji(emoji=emoji)],
+        )
+    except Exception:  # noqa: BLE001 — реакции не должны ронять приём ответов
+        pass
+
+
+async def _send_start_animation(bot: Bot) -> None:
+    """Анимированный дротик 🎯 перед стартом тура — «прицелились, поехали»."""
+    try:
+        await bot.send_dice(
+            settings.forum_chat_id, message_thread_id=settings.topic_games, emoji="🎯"
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # --- Тексты тура ---
 
 
-def _question_text(state: q.QuizState) -> str:
+def _question_text(state: q.QuizState, *, warn: bool = False) -> str:
     num = state.index + 1
+    # Знаменатель — фактический размер тура (вопрос мог быть снят при
+    # синхронизации базы; константа «/15» давала «неверный подсчёт» номеров).
+    total = len(state.question_ids)
     hint = q.answer_length_hint(state.current_answer)
-    return (
-        f"❓ Вопрос {num}/{q.QUESTIONS_PER_ROUND}\n"
+    text = (
+        f"❓ Вопрос {num}/{total}\n"
         f"━━━━━━━━━━━━\n"
         f"{state.question_text}\n\n"
         f"💡 Ответ: {hint} • {q.SECONDS_PER_QUESTION} сек"
     )
+    if warn:
+        text += "\n\n⚡ Осталось 10 секунд!"
+    return text
 
 
 def _reveal_text(state: q.QuizState, winner_name: str | None) -> str:
@@ -188,10 +238,26 @@ async def _run_quiz(bot: Bot, chat_id: int) -> None:
                 # Событие чистится при ПОДГОТОВКЕ вопроса (_advance/_launch), а не
                 # здесь — иначе set() от быстрого ответа, пришедший до этого места,
                 # терялся бы, и driver зря ждал полный таймер (потерянное пробуждение).
-                try:
-                    await asyncio.wait_for(_event_for(chat_id).wait(), timeout=remaining)
-                except asyncio.TimeoutError:
-                    pass
+                warn_at = 10.0
+                answered = False
+                if remaining > warn_at + 1:
+                    try:
+                        await asyncio.wait_for(
+                            _event_for(chat_id).wait(), timeout=remaining - warn_at
+                        )
+                        answered = True
+                    except asyncio.TimeoutError:
+                        # Анимация «финишная прямая»: дописываем предупреждение
+                        # в сообщение вопроса, если его ещё никто не забрал.
+                        await _warn_last_seconds(bot, chat_id)
+                if not answered:
+                    try:
+                        await asyncio.wait_for(
+                            _event_for(chat_id).wait(),
+                            timeout=min(remaining, warn_at),
+                        )
+                    except asyncio.TimeoutError:
+                        pass
                 await _close_question(bot, chat_id)
                 continue
 
@@ -217,6 +283,25 @@ def _remaining_seconds(state: q.QuizState) -> float:
     from app.utils.time import ensure_aware
     elapsed = (datetime.now(timezone.utc) - ensure_aware(started)).total_seconds()
     return max(0.0, q.SECONDS_PER_QUESTION - elapsed)
+
+
+async def _warn_last_seconds(bot: Bot, chat_id: int) -> None:
+    """Дописывает «⚡ Осталось 10 секунд!» в сообщение вопроса (если он ещё
+    не взят) — живая динамика без лишних сообщений в теме."""
+    async with _lock_for(chat_id):
+        async for session in get_session():
+            state = await q.load_session(session, chat_id)
+            await session.commit()
+            break
+        else:
+            return
+    if (
+        state is not None
+        and state.phase == "asking"
+        and state.winner_user_id is None
+        and state.board_message_id
+    ):
+        await _safe_edit(bot, state.board_message_id, _question_text(state, warn=True))
 
 
 async def _close_question(bot: Bot, chat_id: int) -> None:
@@ -261,7 +346,11 @@ async def _advance_question(bot: Bot, chat_id: int) -> None:
                 return
             question = await q.get_question(session, state.question_ids[state.index])
             if question is None:
-                # Вопрос пропал из БД — остаёмся в break, driver возьмёт следующий.
+                # Вопрос пропал из БД (синхронизация базы во время тура) —
+                # вычёркиваем из списка, НЕ съедая номер: нумерация остаётся
+                # сплошной («Вопрос 3/14», а не скачок 3→5 из 15).
+                state.question_ids.pop(state.index)
+                state.index -= 1  # следующий заход возьмёт этот же индекс
                 await q.save_session(session, chat_id, settings.topic_games, state)
                 await session.commit()
                 return
@@ -278,7 +367,21 @@ async def _advance_question(bot: Bot, chat_id: int) -> None:
             break
         else:
             return
-    await _safe_send(bot, text)
+    msg = await _safe_send(bot, text)
+    if msg is not None:
+        await _remember_question_message(chat_id, msg.message_id)
+
+
+async def _remember_question_message(chat_id: int, message_id: int) -> None:
+    """Сохраняет message_id вопроса в состоянии — для предупреждения за 10 сек."""
+    async with _lock_for(chat_id):
+        async for session in get_session():
+            state = await q.load_session(session, chat_id)
+            if state is not None and state.phase == "asking":
+                state.board_message_id = message_id
+                await q.save_session(session, chat_id, settings.topic_games, state)
+            await session.commit()
+            return
 
 
 async def _finish_quiz(bot: Bot, chat_id: int) -> None:
@@ -351,8 +454,11 @@ async def _launch_quiz(bot: Bot, chat_id: int) -> str | None:
         f"{q.QUESTIONS_PER_ROUND} вопросов, по {q.SECONDS_PER_QUESTION} сек. "
         "Первый верный ответ забирает вопрос. Поехали!"
     )
+    await _send_start_animation(bot)  # 🎯 анимированный дротик — «прицелились»
     await _safe_send(bot, intro)
-    await _safe_send(bot, text)
+    msg = await _safe_send(bot, text)
+    if msg is not None:
+        await _remember_question_message(chat_id, msg.message_id)
     _start_driver(bot, chat_id)
     return None
 
@@ -369,12 +475,13 @@ def _start_driver(bot: Bot, chat_id: int) -> None:
 
 
 @router.message(_is_games_topic_answer)
-async def on_answer(message: Message) -> None:
+async def on_answer(message: Message, bot: Bot) -> None:
     if message.from_user is None:
         return
     text = message.text or ""
     user_id = message.from_user.id
     chat_id = message.chat.id
+    outcome: str | None = None  # correct | wrong (для реакции вне лока)
 
     async with _lock_for(chat_id):
         async for session in get_session():
@@ -387,7 +494,8 @@ async def on_answer(message: Message) -> None:
                 return
             if not q.check_answer(state.current_answer, text):
                 await session.commit()  # неверно — попытку НЕ жжём (фикс старой версии)
-                return
+                outcome = "wrong"
+                break
             # Первый верный: фиксируем победителя, начисляем монеты, будим driver.
             name = _display_name(message)
             state.winner_user_id = user_id
@@ -400,10 +508,18 @@ async def on_answer(message: Message) -> None:
             stats.coins += q.COINS_PER_CORRECT
             await q.save_session(session, chat_id, settings.topic_games, state)
             await session.commit()
+            outcome = "correct"
             break
         else:
             return
-    _event_for(chat_id).set()  # driver прекращает ждать и закрывает вопрос
+
+    # Реакции и пробуждение driver'а — вне лока (Telegram-вызовы под локом
+    # тормозили бы приём других ответов; см. вечер флуд-контроля блэкджека).
+    if outcome == "correct":
+        _event_for(chat_id).set()  # driver прекращает ждать и закрывает вопрос
+        await _safe_react(bot, message, random.choice(_CORRECT_REACTIONS))
+    elif outcome == "wrong":
+        await _safe_react(bot, message, _WRONG_REACTION)
 
 
 # --- Команды ---

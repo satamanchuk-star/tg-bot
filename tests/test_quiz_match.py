@@ -28,6 +28,23 @@ def test_typos_forgiven_for_long_words() -> None:
     assert check_answer("Достоевский", "достоевскй") is True
 
 
+def test_negated_answer_not_counted() -> None:
+    """Аудит подсчёта: «это не Париж» не должно засчитываться как «Париж»."""
+    assert check_answer("Париж", "не Париж") is False
+    assert check_answer("Париж", "это не Париж") is False
+    assert check_answer("Париж", "точно не париж") is False
+    # Но отрицание в стороне от ответа — не мешает.
+    assert check_answer("Париж", "не знаю, Париж") is True
+    assert check_answer("Париж", "не уверен но париж") is True
+
+
+def test_answers_containing_negation_still_work() -> None:
+    """Эталоны с «не/ни» внутри («Ни пуха, ни пера») матчатся как раньше."""
+    assert check_answer("Ни пуха, ни пера", "ни пуха ни пера") is True
+    assert check_answer("Москва слезам не верит", "москва слезам не верит") is True
+    assert check_answer("«Рукописи не горят»", "рукописи не горят") is True
+
+
 def test_transposition_counts_as_one_typo() -> None:
     """Дамерау: перестановка соседних букв — типичная опечатка быстрой печати."""
     assert check_answer("сатурация", "сатурцаия") is True

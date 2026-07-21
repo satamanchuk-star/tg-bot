@@ -72,9 +72,9 @@ def test_first_correct_wins_and_awards(db, monkeypatch) -> None:
     asyncio.run(_start_asking(db, "Москва"))
 
     # Первый верный.
-    asyncio.run(h.on_answer(_answer_msg("Москва", user_id=1)))
+    asyncio.run(h.on_answer(_answer_msg("Москва", user_id=1), AsyncMock()))
     # Второй верный в тот же вопрос — уже поздно, вопрос забран.
-    asyncio.run(h.on_answer(_answer_msg("Москва", user_id=2)))
+    asyncio.run(h.on_answer(_answer_msg("Москва", user_id=2), AsyncMock()))
 
     async def _check():
         async with db() as session:
@@ -99,8 +99,8 @@ def test_wrong_answer_does_not_burn_attempt(db, monkeypatch) -> None:
     _prime_topic(monkeypatch)
     asyncio.run(_start_asking(db, "Москва"))
 
-    asyncio.run(h.on_answer(_answer_msg("привет", user_id=1)))  # болтовня
-    asyncio.run(h.on_answer(_answer_msg("Москва", user_id=1)))  # теперь верно
+    asyncio.run(h.on_answer(_answer_msg("привет", user_id=1), AsyncMock()))  # болтовня
+    asyncio.run(h.on_answer(_answer_msg("Москва", user_id=1), AsyncMock()))  # теперь верно
 
     async def _check():
         async with db() as session:
@@ -124,7 +124,7 @@ def test_answer_ignored_outside_asking_phase(db, monkeypatch) -> None:
             await session.commit()
 
     asyncio.run(_prep())
-    asyncio.run(h.on_answer(_answer_msg("Москва", user_id=1)))
+    asyncio.run(h.on_answer(_answer_msg("Москва", user_id=1), AsyncMock()))
 
     async def _check():
         async with db() as session:
