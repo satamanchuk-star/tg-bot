@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Integer, delete, desc, func, select, update
+from sqlalchemy import Integer, delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import QuizQuestion, QuizRound, QuizSession
@@ -181,6 +181,7 @@ class QuizState:
     question_ids: list[int]
     index: int = 0  # индекс текущего вопроса в question_ids
     current_answer: str = ""
+    current_comment: str = ""  # пояснение к ответу (показывается при развязке)
     question_text: str = ""
     question_started_at: str = ""  # ISO с tz
     winner_user_id: int | None = None  # угадавший текущий вопрос (для first-wins)
@@ -195,6 +196,7 @@ class QuizState:
             "question_ids": self.question_ids,
             "index": self.index,
             "current_answer": self.current_answer,
+            "current_comment": self.current_comment,
             "question_text": self.question_text,
             "question_started_at": self.question_started_at,
             "winner_user_id": self.winner_user_id,
@@ -214,6 +216,7 @@ class QuizState:
                 question_ids=[int(x) for x in data["question_ids"]],
                 index=int(data.get("index", 0)),
                 current_answer=str(data.get("current_answer", "")),
+                current_comment=str(data.get("current_comment", "")),
                 question_text=str(data.get("question_text", "")),
                 question_started_at=str(data.get("question_started_at", "")),
                 winner_user_id=data.get("winner_user_id"),
@@ -288,19 +291,20 @@ async def get_active_chat_ids(session: AsyncSession) -> list[tuple[int, int | No
 # --- Выбор вопросов ---
 
 
+async def count_fresh_questions(session: AsyncSession) -> int:
+    """Сколько ещё не заданных вопросов осталось в пуле."""
+    return int(await session.scalar(
+        select(func.count()).select_from(QuizQuestion).where(QuizQuestion.used_at.is_(None))
+    ) or 0)
+
+
 async def pick_questions(session: AsyncSession, count: int) -> list[QuizQuestion]:
-    """Берёт count неиспользованных вопросов; при нехватке сбрасывает пометки
-    (пул не истощается насмерть, как в старой версии) и берёт заново."""
-    total = await session.scalar(select(func.count()).select_from(QuizQuestion))
-    if not total:
-        return []
+    """Берёт count НЕиспользованных вопросов. Повторов не бывает: когда свежие
+    кончились — возвращает сколько есть, и викторина закрывается (решение
+    владельца; recycle убран намеренно)."""
     fresh = (await session.execute(
         select(QuizQuestion).where(QuizQuestion.used_at.is_(None))
     )).scalars().all()
-    if len(fresh) < count:
-        # Круг пройден — сбрасываем «использованные» и начинаем заново.
-        await session.execute(update(QuizQuestion).values(used_at=None))
-        fresh = (await session.execute(select(QuizQuestion))).scalars().all()
     chosen = random.sample(fresh, min(count, len(fresh)))
     now = datetime.now(timezone.utc)
     for q in chosen:

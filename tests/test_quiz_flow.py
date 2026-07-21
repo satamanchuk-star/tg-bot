@@ -53,8 +53,9 @@ def test_state_rejects_bad_payload() -> None:
     assert QuizState.from_json('{"version": 999}') is None
 
 
-def test_pick_questions_and_recycle(db) -> None:
-    """Пул не истощается насмерть: при нехватке свежих сбрасывает пометки."""
+def test_pick_questions_never_repeats(db) -> None:
+    """Вопросы не повторяются (решение владельца): recycle убран, свежие
+    кончились — возвращается остаток, викторина закрывается."""
     from app.services import quiz as q
 
     async def _run():
@@ -63,14 +64,16 @@ def test_pick_questions_and_recycle(db) -> None:
             await session.commit()
             first = await q.pick_questions(session, 15)
             await session.commit()
-            # Осталось 5 свежих (<15) → следующий вызов сбросит и выберет заново.
-            second = await q.pick_questions(session, 15)
+            second = await q.pick_questions(session, 15)  # осталось только 5
             await session.commit()
-            return len(first), len(second)
+            fresh_left = await q.count_fresh_questions(session)
+            return len(first), len(second), fresh_left, {x.id for x in first} & {x.id for x in second}
 
-    n1, n2 = asyncio.run(_run())
+    n1, n2, fresh, overlap = asyncio.run(_run())
     assert n1 == 15
-    assert n2 == 15  # не отказал, а переиспользовал пул
+    assert n2 == 5  # только остаток, БЕЗ повторного использования
+    assert fresh == 0
+    assert overlap == set()  # ни один вопрос не выдан дважды
 
 
 def test_pick_questions_insufficient(db) -> None:

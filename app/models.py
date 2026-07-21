@@ -80,8 +80,11 @@ class QuizQuestion(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     question: Mapped[str] = mapped_column(Text)
     answer: Mapped[str] = mapped_column(Text)
+    # Пояснение после развязки («Кинотеатры. 5 центов стоил билет…» → хвост).
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     category: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # Помечаем использованные, чтобы не повторять; при истощении сбрасываем по кругу.
+    # Помечаем заданные — вопрос НИКОГДА не повторяется; когда свежие кончились,
+    # викторина закрывается с уведомлением владельцу (без recycle).
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
 
