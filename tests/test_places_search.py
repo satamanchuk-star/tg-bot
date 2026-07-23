@@ -81,6 +81,18 @@ def test_route_query_keeps_destination(seeded_places) -> None:
 
 
 def test_no_noise_for_missing_categories(seeded_places) -> None:
-    """Нет записей автосервиса → пустой контекст, а не автобусы/мусор."""
-    assert _search("автосервис рядом") == ""
-    assert _search("где шиномонтаж") == ""
+    """Категории нет в базе → пустой контекст, а не автобусы/мусор.
+
+    Аудит-3: автосервис/шиномонтаж теперь есть в базе (см. тест ниже),
+    поэтому проверяем на всё ещё отсутствующих категориях.
+    """
+    assert _search("боулинг рядом") == ""
+    assert _search("где каток залить лед") == ""
+
+
+def test_household_and_auto_services_found(seeded_places) -> None:
+    """Аудит-3: бытовые услуги и автосервисы находятся по бытовым формулировкам."""
+    assert "Диана" in _search("где ближайшая химчистка")
+    assert "шиномонтаж" in _search("нужен круглосуточный шиномонтаж").lower()
+    assert "Автопилот" in _search("автосервис рядом") or "Авто сити" in _search("автосервис рядом")
+    assert "Проспер" in _search("где подшить брюки")
