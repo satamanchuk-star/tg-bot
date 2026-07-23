@@ -1060,7 +1060,12 @@ async def main() -> None:
         polling_attempt = 0
         while True:
             try:
-                await bot.delete_webhook(drop_pending_updates=True)
+                # НЕ выбрасываем накопившиеся сообщения: рестарт/деплой в 20:0x
+                # съедал ответы жителей на викторину и команды. Полный дроп —
+                # только явным флагом (разовая расчистка после долгого простоя).
+                await bot.delete_webhook(
+                    drop_pending_updates=settings.drop_pending_on_start
+                )
                 try:
                     await dp.start_polling(
                         bot,

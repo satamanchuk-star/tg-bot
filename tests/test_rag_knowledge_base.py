@@ -86,10 +86,11 @@ def test_rag_message_is_available_immediately_after_save() -> None:
     assert messages[0] == "Шлагбаум открывается через приложение УК."
 
 
-def test_rag_ranking_keeps_all_knowledge_base_records() -> None:
+def test_rag_ranking_drops_irrelevant_records() -> None:
+    """Аудит-фикс: нерелевантные записи НЕ идут в опору. Раньше запись про лифт
+    попадала в контекст вопроса о шлагбауме, и гейт от галлюцинаций молчал."""
     messages = asyncio.run(_prepare_messages())
-    assert len(messages) == 2
-    assert "Для заявки по лифту пишите в топик Жалобы." in messages
+    assert messages == ["Шлагбаум открывается через приложение УК."]
 
 
 def test_rag_systematization_merges_similar_messages_in_context() -> None:

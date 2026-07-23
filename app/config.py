@@ -108,6 +108,14 @@ class Settings(BaseSettings):
     moderation_training_mode: bool = False
     # Утреннее приветствие с погодой и праздниками (8:00 в General)
     ai_daily_greeting: bool = False
+    # Выбрасывать ли накопившиеся апдейты при старте (разовая расчистка после
+    # долгого простоя). По умолчанию НЕТ — деплой не должен терять сообщения.
+    drop_pending_on_start: bool = False
+    # Ключ шифрования бэкапа БД (Fernet, base64). Генерация:
+    # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Хранить ТОЛЬКО в GitHub Secrets (BOT_ENV). Пусто — бэкап шлётся без
+    # шифрования с предупреждением в caption.
+    backup_encryption_key: str | None = None
     db_logs_retention_days: int = 14
     db_stats_retention_days: int = 45
     google_sheets_spreadsheet_id: str = "1OsPh54Bn5fdkfsEJyKcbYZTcHnue3EWQ"

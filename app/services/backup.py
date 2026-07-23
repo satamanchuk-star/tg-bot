@@ -59,6 +59,7 @@ async def send_db_backup(bot: Bot) -> None:
 
     stamp = datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d_%H%M")
     tmp_path: Path | None = None
+    enc_path: Path | None = None
     try:
         # Консистентный снимок через SQLite Online Backup API — обычное копирование
         # файла могло бы поймать базу посреди записи. Само копирование —
@@ -69,19 +70,49 @@ async def send_db_backup(bot: Bot) -> None:
             tmp_path = Path(tmp.name)
         await asyncio.to_thread(_make_backup_copy, src, tmp_path)
 
-        size_mb = tmp_path.stat().st_size / (1024 * 1024)
+        # Шифрование: в БД лежат сообщения и профили жителей — открытым файлом
+        # в общий лог-чат такому ехать нельзя. Ключ — BACKUP_ENCRYPTION_KEY
+        # (Fernet) из секретов; без ключа шлём как раньше, но с предупреждением.
+        send_path = tmp_path
+        filename = f"bot_backup_{stamp}.db"
+        if settings.backup_encryption_key:
+            enc_path = Path(str(tmp_path) + ".enc")
+            await asyncio.to_thread(
+                _encrypt_file, tmp_path, enc_path, settings.backup_encryption_key
+            )
+            send_path = enc_path
+            filename += ".enc"
+            caption = (
+                f"💾 Ночной бэкап БД (зашифрован)\n"
+                "Расшифровка: python -c \"from cryptography.fernet import Fernet;"
+                "import sys;open('bot.db','wb').write(Fernet(open('key.txt','rb')"
+                ".read().strip()).decrypt(open(sys.argv[1],'rb').read()))\" файл.enc"
+            )
+        else:
+            caption = (
+                f"💾 Ночной бэкап БД\n"
+                "⚠️ НЕ зашифрован: задайте BACKUP_ENCRYPTION_KEY в секретах "
+                "(в БД — сообщения и профили жителей)."
+            )
+
+        size_mb = send_path.stat().st_size / (1024 * 1024)
         await bot.send_document(
             settings.admin_log_chat_id,
-            FSInputFile(tmp_path, filename=f"bot_backup_{stamp}.db"),
-            caption=(
-                f"💾 Ночной бэкап БД ({size_mb:.1f} МБ)\n"
-                "Восстановление: скачать файл → положить в data/bot.db → перезапустить бота."
-            ),
+            FSInputFile(send_path, filename=filename),
+            caption=f"{caption}\nРазмер: {size_mb:.1f} МБ",
             disable_notification=True,
         )
         logger.info("BACKUP: копия БД отправлена в админ-чат (%.1f МБ)", size_mb)
     except Exception:
         logger.warning("BACKUP: не удалось отправить копию БД.", exc_info=True)
     finally:
-        if tmp_path is not None:
-            tmp_path.unlink(missing_ok=True)
+        for p in (tmp_path, enc_path):
+            if p is not None:
+                p.unlink(missing_ok=True)
+
+
+def _encrypt_file(src: Path, dst: Path, key: str) -> None:
+    """Fernet-шифрование файла (синхронно — звать через to_thread)."""
+    from cryptography.fernet import Fernet
+
+    dst.write_bytes(Fernet(key.encode()).encrypt(src.read_bytes()))
