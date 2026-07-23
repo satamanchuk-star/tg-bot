@@ -213,6 +213,43 @@ def invalidate_cache_by_keywords(keywords: list[str]) -> int:
     return len(to_delete)
 
 
+# Общий бюджет символов на все <knowledge_base>-блоки в динамической части
+# промпта. Раньше блоки складывались без ограничения (KB+RAG+FAQ+places+web
+# до 8-10k символов): нужный факт тонул в шуме, а каждый ответ дорожал.
+_KB_CONTEXT_BUDGET = 4000
+
+
+def _apply_kb_budget(
+    blocks: list[tuple[str, str | None]], budget: int = _KB_CONTEXT_BUDGET
+) -> list[str]:
+    """Оборачивает блоки знаний в <knowledge_base> под общим бюджетом символов.
+
+    Блоки идут в порядке приоритета (resident_canonical > rag > faq > places >
+    web): старшие входят целиком, блок на границе обрезается по последней
+    полной строке, младшие отбрасываются.
+    """
+    result: list[str] = []
+    remaining = budget
+    for source, text in blocks:
+        text = (text or "").strip()
+        if not text:
+            continue
+        if remaining <= 0:
+            break
+        if len(text) > remaining:
+            cut = text[:remaining]
+            # Режем по последней полной строке — оборванный на полуслове факт
+            # («часы работы: 9:0») хуже отсутствующего.
+            if "\n" in cut:
+                cut = cut.rsplit("\n", 1)[0]
+            text = cut.strip()
+            if not text:
+                break
+        result.append(f'<knowledge_base source="{source}">\n{text}\n</knowledge_base>')
+        remaining -= len(text)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Topic-aware контекст: маппинг topic_id → подсказка для промпта
 # ---------------------------------------------------------------------------
@@ -1405,32 +1442,18 @@ class AnthropicProvider:
                 pass
             return random.choice(_UNGROUNDED_REPLIES)
 
-        if resident_context:
-            dynamic_system_parts.append(
-                "<knowledge_base source=\"resident_canonical\">\n"
-                f"{resident_context}\n"
-                "</knowledge_base>"
-            )
-        if rag_text:
-            dynamic_system_parts.append(
-                f"<knowledge_base source=\"rag\">\n{rag_text}\n</knowledge_base>"
-            )
-        if faq_answer:
-            dynamic_system_parts.append(
-                "<knowledge_base source=\"faq\">\n"
-                f"{faq_answer}\n"
-                "</knowledge_base>"
-            )
-        if places_context:
-            dynamic_system_parts.append(
-                "<knowledge_base source=\"places\">\n"
-                f"{places_context}\n"
-                "</knowledge_base>"
-            )
-        if web_context:
-            dynamic_system_parts.append(
-                f"<knowledge_base source=\"web\">\n{web_context}\n</knowledge_base>"
-            )
+        # Блоки знаний под общим бюджетом символов: приоритет — как у промпта
+        # (resident_canonical > rag > faq > places > web). Без бюджета сумма
+        # блоков раздувала промпт до 8-10k символов — нужный факт тонул в шуме,
+        # а каждый ответ стоил дороже.
+        kb_blocks = [
+            ("resident_canonical", resident_context),
+            ("rag", rag_text),
+            ("faq", faq_answer),
+            ("places", places_context),
+            ("web", web_context),
+        ]
+        dynamic_system_parts.extend(_apply_kb_budget(kb_blocks))
 
         # Разделяем контекст на служебный (профиль жителя, настроение чата,
         # сжатые сводки — role=system) и реальный диалог (user/assistant).
@@ -2273,7 +2296,10 @@ async def _get_rag_context(chat_id: int, query: str) -> str:
         from app.services.rag import build_rag_context
 
         async for session in get_session():
-            return await build_rag_context(session, chat_id=chat_id, query=query, top_k=8)
+            # top_k=3: после порога релевантности (MIN_RAG_RELEVANCE) выживают
+            # только записи по теме — три лучших достаточно, а 8 раздували
+            # промпт и топили факт в шуме.
+            return await build_rag_context(session, chat_id=chat_id, query=query, top_k=3)
     except Exception as exc:
         logger.warning("RAG search failed: %s", exc)
     return ""

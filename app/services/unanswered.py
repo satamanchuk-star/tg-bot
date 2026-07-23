@@ -65,6 +65,71 @@ async def log_unanswered(chat_id: int, question: str) -> None:
         logger.warning("UNANSWERED: не удалось записать вопрос.", exc_info=True)
 
 
+STALE_PREFIX = "[УСТАРЕЛО]"
+
+
+async def log_stale_report(chat_id: int, question: str, reply: str) -> None:
+    """Фиксирует жалобу «данные устарели» в той же таблице безответных вопросов.
+
+    Переиспользуем весь жизненный цикл: запись попадает в /kb_stale и в
+    еженедельный дайджест с кнопками «Ответить/Скрыть» — свежий ответ админа
+    уйдёт в RAG и закроет жалобу. Никогда не бросает.
+    """
+    question = question.strip()[:300]
+    if len(question) < 5:
+        return
+    key = _norm_key(question)
+    if not key:
+        return
+    text = f"{STALE_PREFIX} {question}\nОтвет бота был: {reply.strip()[:180]}"
+    try:
+        async for session in get_session():
+            existing = await session.scalar(
+                select(UnansweredQuestion).where(
+                    UnansweredQuestion.norm_key == key,
+                    UnansweredQuestion.chat_id == chat_id,
+                    UnansweredQuestion.status == "open",
+                    UnansweredQuestion.question.startswith(STALE_PREFIX),
+                ).limit(1)
+            )
+            now = datetime.now(timezone.utc)
+            if existing is not None:
+                existing.hits += 1
+                existing.last_asked_at = now
+            else:
+                session.add(UnansweredQuestion(
+                    chat_id=chat_id, question=text[:500], norm_key=key,
+                    last_asked_at=now,
+                ))
+            await session.commit()
+            logger.info("STALE: жалоба на устаревшие данные записана: %r", question[:80])
+    except Exception:
+        logger.warning("STALE: не удалось записать жалобу.", exc_info=True)
+
+
+async def list_open_stale_reports() -> list[str]:
+    """Открытые жалобы «устарело» для отчёта /kb_stale (свежие первыми)."""
+    try:
+        async for session in get_session():
+            rows = (await session.execute(
+                select(UnansweredQuestion)
+                .where(
+                    UnansweredQuestion.status == "open",
+                    UnansweredQuestion.question.startswith(STALE_PREFIX),
+                )
+                .order_by(UnansweredQuestion.last_asked_at.desc())
+                .limit(10)
+            )).scalars().all()
+            return [
+                q.question.splitlines()[0].removeprefix(STALE_PREFIX).strip()
+                + (f" (×{q.hits})" if q.hits > 1 else "")
+                for q in rows
+            ]
+    except Exception:
+        logger.warning("STALE: не удалось прочитать жалобы.", exc_info=True)
+    return []
+
+
 def _digest_keyboard(question_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✍️ Ответить", callback_data=f"unq:ans:{question_id}"),
@@ -146,7 +211,14 @@ async def save_admin_answer(question_id: int, answer_text: str, admin_id: int) -
             if q is None:
                 return None
             from app.services.rag import add_rag_message
-            fact = f"[Ответ администратора] Вопрос: {q.question[:300]}\nОтвет: {answer_text[:600]}"
+            # Для жалоб «устарело» берём только сам вопрос (первую строку без
+            # префикса) — старый неверный ответ бота в RAG попадать не должен.
+            # Обычные вопросы идут как есть.
+            if q.question.startswith(STALE_PREFIX):
+                question_text = q.question.splitlines()[0].removeprefix(STALE_PREFIX).strip()
+            else:
+                question_text = q.question
+            fact = f"[Ответ администратора] Вопрос: {question_text[:300]}\nОтвет: {answer_text[:600]}"
             await add_rag_message(
                 session,
                 chat_id=q.chat_id,
