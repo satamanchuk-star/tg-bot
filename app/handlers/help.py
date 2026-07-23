@@ -384,12 +384,16 @@ def _should_skip_uncertain_reply(
     prompt: str,
     reply: str,
 ) -> bool:
-    """Снижает спам неинформативными ответами в чате."""
+    """Снижает спам неинформативными ответами в чате.
+
+    Житель, обратившийся к боту напрямую, получает ответ ВСЕГДА — даже «не
+    знаю» и даже без знака вопроса («Жабот подскажи телефон УК»). Раньше
+    отсутствие «?» приводило к полному молчанию — обращение выглядело
+    проигнорированным. Защита от спама — только кулдаун на повторные
+    неинформативные ответы в той же теме.
+    """
     if not _is_uncertain_reply(reply):
         return False
-
-    if "?" not in prompt:
-        return True
 
     key = (chat_id, user_id, thread_id)
     now = datetime.now(timezone.utc)
@@ -711,14 +715,21 @@ _ABILITIES_CONTEXT = """
 • /rules — правила сообщества.
 • /предложить Название | Категория | Адрес — добавить место в справочник.
 
+═══ ИГРЫ И МОНЕТЫ (тема «Игры») ═══
+• Викторина каждый вечер в 20:00 МСК: 15 вопросов, первый верный ответ
+  забирает вопрос (+15 монет), победитель тура +100 монет. /викторина_топ.
+• Игра «21» (блэкджек) со ставками — каждый вечер с 22:00 до полуночи.
+  Команды: /21, /score (баланс и история), /21top, /бонус (+10 в сутки),
+  /подарить (перевести монеты соседу).
+• Монеты — внутренняя валюта для игр, баланс не сгорает.
+
 ═══ ЕЩЁ ═══
 • Тихо модерирую чат: фильтрую мат и спам, веду предупреждения.
 • Ставлю реакции на добрые новости и благодарности — но не спамлю.
 • Утром и вечером напоминаю в главном чате, что я на дежурстве.
 • Честно говорю «не знаю», если ответа нет в базе — не выдумываю.
 
-НИКОГДА не упоминай: монеты, голосования, магазин, доработки, игры,
-блэкджек — этих функций больше нет.
+НИКОГДА не упоминай: голосования, магазин, доработки — этих функций нет.
 
 ФОРМАТ ОТВЕТА (строго):
 - БЕЗ Markdown: никаких **звёздочек**, __подчёркиваний__, # заголовков и
@@ -1869,6 +1880,18 @@ async def ai_feedback_callback(callback: CallbackQuery) -> None:
     if action == "stale":
         # Житель сообщил, что данные в ответе устарели (закрылось/переехало/
         # другой график) — репорт админам с полным контекстом для правки базы.
+        # Плюс персистентная запись: жалоба видна в /kb_stale и в еженедельном
+        # дайджесте (ответ админа уйдёт в RAG и закроет её), а битый ответ
+        # убираем из кэша, чтобы не отдавался другим жителям.
+        try:
+            from app.services.ai_module import _spawn_background, invalidate_cache_by_keywords
+            from app.services.unanswered import log_stale_report
+
+            _stale_words = [w for w in _normalize_cache_key(prompt_text).split("|") if len(w) >= 3][:7]
+            invalidate_cache_by_keywords(_stale_words)
+            _spawn_background(log_stale_report(chat_id, prompt_text, reply_text))
+        except Exception:
+            logger.debug("Не удалось записать жалобу «устарело».", exc_info=True)
         try:
             report = (
                 "⚠️ Житель сообщил: данные в ответе бота УСТАРЕЛИ.\n\n"
@@ -1917,6 +1940,20 @@ async def ai_feedback_callback(callback: CallbackQuery) -> None:
         logger.warning("Не удалось сохранить feedback.")
         await callback.answer("Ошибка при сохранении оценки.")
         return
+
+    # 👎 замыкает петлю качества: битый ответ убираем из кэша (иначе он до часа
+    # отдаётся на похожие вопросы), а сам вопрос кладём в «безответные» — админ
+    # увидит его в еженедельном дайджесте и даст правильный ответ в RAG.
+    if rating < 0:
+        try:
+            from app.services.ai_module import _spawn_background, invalidate_cache_by_keywords
+            from app.services.unanswered import log_unanswered
+
+            _bad_words = [w for w in _normalize_cache_key(prompt_text).split("|") if len(w) >= 3][:7]
+            invalidate_cache_by_keywords(_bad_words)
+            _spawn_background(log_unanswered(chat_id, prompt_text))
+        except Exception:
+            logger.debug("Не удалось обработать 👎 для петли качества.", exc_info=True)
 
     # Убираем кнопки после оценки
     emoji = "\U0001f44d" if rating > 0 else "\U0001f44e"

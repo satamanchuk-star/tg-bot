@@ -558,6 +558,16 @@ async def kb_stale(message: Message, bot: Bot) -> None:
     kb_entries = load_resident_kb()
     kb_no_date = sum(1 for e in kb_entries if not getattr(e, "verified_at", None))
     lines.append(f"\n📚 Записей KB без даты проверки: {kb_no_date} из {len(kb_entries)}")
+
+    # Жалобы жителей по кнопке «⚠️ Устарело» — самый горячий сигнал: живой
+    # человек уже увидел неправду в ответе бота.
+    from app.services.unanswered import list_open_stale_reports
+    stale_reports = await list_open_stale_reports()
+    if stale_reports:
+        lines.append(f"\n⚠️ Жалобы жителей «данные устарели» ({len(stale_reports)}):")
+        for report in stale_reports:
+            lines.append(f"• {report[:120]}")
+        lines.append("Закрываются через еженедельный дайджест (Ответить/Скрыть).")
     lines.append(
         "\nПроверили место — обновите verified_at в data/places_seed.json "
         "и сделайте /kb_reload."
