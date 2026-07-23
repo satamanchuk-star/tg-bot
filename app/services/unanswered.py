@@ -21,11 +21,6 @@ from app.models import UnansweredQuestion
 
 logger = logging.getLogger(__name__)
 
-# message_id дайджест-сообщения в админ-чате → id вопроса (для ответа реплаем)
-_PENDING_ANSWER_MSGS: dict[int, int] = {}
-_PENDING_ANSWER_MSGS_MAX = 200
-
-
 def _norm_key(question: str) -> str:
     """Нормализует вопрос для группировки повторов (как ключ кэша ответов)."""
     from app.services.ai_module import _normalize_cache_key
@@ -161,31 +156,60 @@ async def send_unanswered_digest(bot: Bot, limit: int = 10) -> None:
         )
         for q in rows:
             hits = f" (спрашивали ×{q.hits})" if q.hits > 1 else ""
-            await bot.send_message(
+            sent = await bot.send_message(
                 settings.admin_log_chat_id,
                 f"❓ {q.question[:400]}{hits}",
                 reply_markup=_digest_keyboard(q.id),
             )
+            # Привязываем сразу: ответ реплаем на вопрос дайджеста работает
+            # и без нажатия «Ответить» (и переживает рестарт).
+            if sent is not None:
+                await register_pending_answer(sent.message_id, q.id)
         logger.info("UNANSWERED: дайджест из %d вопросов отправлен.", len(rows))
     except Exception:
         logger.warning("UNANSWERED: не удалось отправить дайджест.", exc_info=True)
 
 
-def register_pending_answer(message_id: int, question_id: int) -> None:
-    """Связывает сообщение «ответьте реплаем» с вопросом."""
-    if len(_PENDING_ANSWER_MSGS) >= _PENDING_ANSWER_MSGS_MAX:
-        oldest = next(iter(_PENDING_ANSWER_MSGS))
-        _PENDING_ANSWER_MSGS.pop(oldest, None)
-    _PENDING_ANSWER_MSGS[message_id] = question_id
+async def register_pending_answer(message_id: int, question_id: int) -> None:
+    """Связывает сообщение «ответьте реплаем» с вопросом — персистентно.
+
+    Раньше связка жила в памяти (_PENDING_ANSWER_MSGS): рестарт бота между
+    дайджестом и ответом админа молча рвал петлю роста. Теперь message_id
+    хранится в самой записи вопроса. Никогда не бросает.
+    """
+    try:
+        async for session in get_session():
+            q = await session.get(UnansweredQuestion, question_id)
+            if q is None:
+                return
+            ids = [x for x in (q.digest_message_ids or "").split(",") if x]
+            if str(message_id) not in ids:
+                ids.append(str(message_id))
+                # Ограничиваем длину поля: храним последние привязки
+                q.digest_message_ids = ",".join(ids[-8:])
+                await session.commit()
+    except Exception:
+        logger.warning("UNANSWERED: не удалось привязать сообщение дайджеста.", exc_info=True)
 
 
-def pop_pending_answer(message_id: int) -> int | None:
-    """Возвращает id вопроса, если message_id — приглашение к ответу."""
-    return _PENDING_ANSWER_MSGS.pop(message_id, None)
-
-
-def peek_pending_answer(message_id: int) -> int | None:
-    return _PENDING_ANSWER_MSGS.get(message_id)
+async def peek_pending_answer(message_id: int) -> int | None:
+    """id открытого вопроса, к которому привязано сообщение дайджеста."""
+    try:
+        async for session in get_session():
+            rows = (await session.execute(
+                select(UnansweredQuestion.id, UnansweredQuestion.digest_message_ids)
+                .where(
+                    UnansweredQuestion.status == "open",
+                    UnansweredQuestion.digest_message_ids.is_not(None),
+                )
+            )).all()
+            needle = str(message_id)
+            for qid, ids in rows:
+                if needle in (ids or "").split(","):
+                    return qid
+    except Exception:
+        logger.warning("UNANSWERED: поиск привязки дайджеста не удался.", exc_info=True)
+    return None
 
 
 async def set_status(session: AsyncSession, question_id: int, status: str) -> UnansweredQuestion | None:
