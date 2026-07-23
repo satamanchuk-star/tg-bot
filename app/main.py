@@ -315,6 +315,21 @@ async def init_db(async_engine: AsyncEngine) -> None:
                     )
                 )
 
+            # Миграция unanswered_questions: персистентная привязка сообщений
+            # дайджеста (аудит-4 — петля роста переживает рестарт)
+            if inspector.has_table("unanswered_questions"):
+                columns = {
+                    column["name"]
+                    for column in inspector.get_columns("unanswered_questions")
+                }
+                if "digest_message_ids" not in columns:
+                    sync_conn.execute(
+                        text(
+                            "ALTER TABLE unanswered_questions "
+                            "ADD COLUMN digest_message_ids VARCHAR(200)"
+                        )
+                    )
+
             # Миграция resident_profiles (создаётся через create_all,
             # но проверяем на всякий случай)
             if inspector.has_table("resident_profiles"):

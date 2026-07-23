@@ -100,14 +100,6 @@ def test_digest_silent_when_empty(db_session_factory) -> None:
     assert bot.send_message.await_count == 0
 
 
-def test_pending_answer_registry() -> None:
-    from app.services.unanswered import (
-        peek_pending_answer,
-        pop_pending_answer,
-        register_pending_answer,
-    )
-
-    register_pending_answer(100, 7)
-    assert peek_pending_answer(100) == 7
-    assert pop_pending_answer(100) == 7
-    assert peek_pending_answer(100) is None
+# Реестр «сообщение дайджеста → вопрос» стал персистентным (аудит-4):
+# сценарий register → peek → закрытие ответом покрыт в
+# tests/test_audit4_fixes.py::test_pending_answer_survives_restart.

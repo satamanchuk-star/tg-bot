@@ -69,8 +69,46 @@ async def _check_place(client: httpx.AsyncClient, place: Place) -> str | None:
     return None
 
 
+async def _check_url(client: httpx.AsyncClient, url: str) -> str | None:
+    """Проверка одиночного URL (для ссылок из ответов KB) — та же логика."""
+    try:
+        resp = await client.get(url, headers={"User-Agent": _UA})
+    except (httpx.HTTPError, httpx.TimeoutException):
+        return None
+    if resp.status_code in (404, 410):
+        return f"ссылка недоступна (HTTP {resp.status_code}): {url}"
+    if resp.status_code >= 400:
+        return None
+    lowered = resp.text[:200_000].lower()
+    for marker in _CLOSED_MARKERS:
+        if marker in lowered:
+            return f"на странице маркер «{marker}»: {url}"
+    return None
+
+
+def _kb_urls() -> list[tuple[str, str]]:
+    """(id записи KB, url) — ссылки из ответов базы знаний для сверки.
+
+    Симметрия свежести: телефоны позвонить нельзя, а сайты (УК, порталы,
+    школы) — можно; умершая ссылка в ответе KB — сигнал устаревшей записи.
+    """
+    try:
+        from app.services.resident_kb import load_resident_kb
+        pairs: list[tuple[str, str]] = []
+        for e in load_resident_kb():
+            m = _URL_RE.search(getattr(e, "answer", "") or "")
+            if m:
+                url = m.group(0).rstrip(".»)")
+                if not url.startswith("https://docs.google.com"):  # формы живут отдельно
+                    pairs.append((e.id, url))
+        return pairs
+    except Exception:
+        logger.warning("PLACE_VERIFY: не удалось собрать ссылки KB.", exc_info=True)
+        return []
+
+
 async def verify_places(bot: Bot) -> None:
-    """Еженедельный job: сверка активных мест с первоисточниками, алерт в лог-чат."""
+    """Еженедельный job: сверка активных мест (и ссылок KB) с первоисточниками."""
     try:
         async for session in get_session():
             places = (await session.execute(
@@ -82,26 +120,39 @@ async def verify_places(bot: Bot) -> None:
 
         suspicions: list[str] = []
         sem = asyncio.Semaphore(_CONCURRENCY)
+        kb_links = _kb_urls()
 
         async def _guarded(place: Place) -> tuple[Place, str | None]:
             async with sem:
                 return place, await _check_place(client, place)
 
+        async def _guarded_kb(kb_id: str, url: str) -> tuple[str, str | None]:
+            async with sem:
+                return kb_id, await _check_url(client, url)
+
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(_TIMEOUT), follow_redirects=True,
         ) as client:
             results = await asyncio.gather(*(_guarded(p) for p in places))
+            kb_results = await asyncio.gather(*(_guarded_kb(i, u) for i, u in kb_links))
 
         for place, reason in results:
             if reason:
                 suspicions.append(f"• {place.name} ({place.category}): {reason}")
+        for kb_id, reason in kb_results:
+            if reason:
+                suspicions.append(f"• KB «{kb_id}»: {reason} — проверьте запись в resident_kb.json")
 
         if not suspicions:
-            logger.info("PLACE_VERIFY: %d мест проверено, подозрений нет.", len(places))
+            logger.info(
+                "PLACE_VERIFY: %d мест и %d ссылок KB проверено, подозрений нет.",
+                len(places), len(kb_links),
+            )
             return
 
         text = (
             f"🔎 Еженедельная сверка инфраструктуры: {len(places)} мест, "
+            f"{len(kb_links)} ссылок KB, "
             f"подозрений — {len(suspicions)}:\n\n" + "\n".join(suspicions[:20]) +
             "\n\nПроверьте вручную. Закрылось — is_active=false в "
             "data/places_seed.json (или в Google Sheet) + /kb_reload."

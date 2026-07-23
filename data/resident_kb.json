@@ -29,7 +29,8 @@
    "позвонить в управляющую"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "uk_schedule",
@@ -56,7 +57,8 @@
    "рабочие часы"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "eds_and_emergency",
@@ -96,7 +98,8 @@
    "заливает"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "electricity_contact",
@@ -126,7 +129,8 @@
    "выбило автомат"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "water_electricity_recalculation",
@@ -155,7 +159,8 @@
    "слишком много начислили"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "meter_submission",
@@ -185,7 +190,8 @@
    "когда передавать"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "lift_service",
@@ -213,7 +219,8 @@
    "лифт застрял"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "internet_provider",
@@ -242,7 +249,8 @@
    "вай-фай"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "district_officer",
@@ -269,7 +277,8 @@
    "дежурная часть"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "video_surveillance",
@@ -296,7 +305,8 @@
    "как посмотреть камеры"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "gate_personal_car",
@@ -324,7 +334,8 @@
    "регистрация авто"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "gate_format_rules",
@@ -349,7 +360,8 @@
    "как написать номер"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "gate_apps",
@@ -376,7 +388,8 @@
    "установить дворецкий"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "guest_pass_flow",
@@ -405,7 +418,8 @@
    "временный пропуск"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "guest_pass_without_number",
@@ -432,7 +446,8 @@
    "иностранные номера"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "gate_open_button",
@@ -456,7 +471,8 @@
    "дистанционное открытие"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "gate_phone_pass",
@@ -478,7 +494,8 @@
    "позвонить для въезда"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "chat_rules",
@@ -505,7 +522,8 @@
    "что запрещено"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "emergency_services",
@@ -535,7 +553,8 @@
    "куда звонить"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "polyclinic",
@@ -563,7 +582,8 @@
    "терапевт"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "children_polyclinic",
@@ -589,7 +609,8 @@
    "прививка"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "hospital_trauma",
@@ -618,7 +639,8 @@
    "роддом"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "stomatology",
@@ -643,7 +665,8 @@
    "вылечить зуб"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "school",
@@ -669,7 +692,8 @@
    "ближайшая школа"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "kindergarten",
@@ -694,7 +718,8 @@
    "где садик"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "transport_train",
@@ -722,7 +747,8 @@
    "мцд-5"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "transport_roads",
@@ -750,7 +776,8 @@
    "до москвы на авто"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "noise_law",
@@ -779,7 +806,8 @@
    "сверлят"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "administration_mfc",
@@ -805,7 +833,8 @@
    "паспортный стол"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "about_complex",
@@ -832,7 +861,8 @@
    "какой жк"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "post_office",
@@ -890,7 +920,8 @@
    "рыбалка"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "animals_rules",
@@ -916,7 +947,8 @@
    "питомец в доме"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "fire_safety",
@@ -942,7 +974,8 @@
    "пожарные нормы"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "trash_disposal",
@@ -968,7 +1001,8 @@
    "вывоз старой мебели"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "housing_inspection",
@@ -995,7 +1029,8 @@
    "инспекция"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "useful_contacts_summary",
@@ -1021,7 +1056,8 @@
    "важные номера"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-16"
+  "updated_at": "2026-03-16",
+  "verified_at": "2026-03-16"
  },
  {
   "id": "intercom_access",
@@ -1051,7 +1087,8 @@
    "дубликат ключа"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-18"
+  "updated_at": "2026-03-18",
+  "verified_at": "2026-03-18"
  },
  {
   "id": "heating",
@@ -1080,7 +1117,8 @@
    "отопительный сезон"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-18"
+  "updated_at": "2026-03-18",
+  "verified_at": "2026-03-18"
  },
  {
   "id": "delivery_couriers",
@@ -1113,7 +1151,8 @@
    "заказ"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-18"
+  "updated_at": "2026-03-18",
+  "verified_at": "2026-03-18"
  },
  {
   "id": "owners_meeting",
@@ -1141,7 +1180,8 @@
    "результаты осс"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-18"
+  "updated_at": "2026-03-18",
+  "verified_at": "2026-03-18"
  },
  {
   "id": "uk_app",
@@ -1168,7 +1208,8 @@
    "подать заявку"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-18"
+  "updated_at": "2026-03-18",
+  "verified_at": "2026-03-18"
  },
  {
   "id": "playgrounds",
@@ -1196,7 +1237,8 @@
    "площадка для детей"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-18"
+  "updated_at": "2026-03-18",
+  "verified_at": "2026-03-18"
  },
  {
   "id": "water_supply",
@@ -1226,7 +1268,8 @@
    "слабый напор"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-18"
+  "updated_at": "2026-03-18",
+  "verified_at": "2026-03-18"
  },
  {
   "id": "carsharing_taxi",
@@ -1255,7 +1298,8 @@
    "яндекс такси"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-18"
+  "updated_at": "2026-03-18",
+  "verified_at": "2026-03-18"
  },
  {
   "id": "parking_rules",
@@ -1289,7 +1333,8 @@
    "нарушение парковки"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-23"
+  "updated_at": "2026-03-23",
+  "verified_at": "2026-03-23"
  },
  {
   "id": "dvoretsky_auth",
@@ -1322,7 +1367,8 @@
    "войти в дворецкого"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-23"
+  "updated_at": "2026-03-23",
+  "verified_at": "2026-03-23"
  },
  {
   "id": "ambulance_local",
@@ -1353,7 +1399,8 @@
    "экстренная медицина"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-23"
+  "updated_at": "2026-03-23",
+  "verified_at": "2026-03-23"
  },
  {
   "id": "gas_emergency",
@@ -1383,7 +1430,8 @@
    "газ авария"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-23"
+  "updated_at": "2026-03-23",
+  "verified_at": "2026-03-23"
  },
  {
   "id": "housing_legislation",
@@ -1414,7 +1462,8 @@
    "нормативные документы"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-23"
+  "updated_at": "2026-03-23",
+  "verified_at": "2026-03-23"
  },
  {
   "id": "uk_gis_control",
@@ -1444,7 +1493,8 @@
    "добродел жкх"
   ],
   "source": "resident_seed_2026",
-  "updated_at": "2026-03-23"
+  "updated_at": "2026-03-23",
+  "verified_at": "2026-03-23"
  },
  {
   "id": "storage_rooms",

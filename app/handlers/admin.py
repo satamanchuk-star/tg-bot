@@ -556,8 +556,29 @@ async def kb_stale(message: Message, bot: Bot) -> None:
 
     from app.services.resident_kb import load_resident_kb
     kb_entries = load_resident_kb()
-    kb_no_date = sum(1 for e in kb_entries if not getattr(e, "verified_at", None))
-    lines.append(f"\n📚 Записей KB без даты проверки: {kb_no_date} из {len(kb_entries)}")
+    # Симметрия с местами: у записей KB тоже есть паспорт свежести.
+    stale_kb: list[tuple[str, str]] = []  # (id, дата или «нет даты»)
+    for e in kb_entries:
+        raw = getattr(e, "verified_at", None)
+        if not raw:
+            stale_kb.append((e.id, "нет даты"))
+            continue
+        try:
+            when = datetime.fromisoformat(str(raw)).replace(tzinfo=timezone.utc)
+        except ValueError:
+            stale_kb.append((e.id, "битая дата"))
+            continue
+        if when < cutoff:
+            stale_kb.append((e.id, when.strftime("%m.%Y")))
+    if stale_kb:
+        lines.append(f"\n📚 Записей KB без проверки > 90 дней: {len(stale_kb)} из {len(kb_entries)}")
+        for kb_id, when in stale_kb[:10]:
+            lines.append(f"• {kb_id} — проверено: {when}")
+        if len(stale_kb) > 10:
+            lines.append(f"…и ещё {len(stale_kb) - 10}")
+        lines.append("Проверили запись — обновите verified_at в data/resident_kb.json.")
+    else:
+        lines.append(f"\n📚 KB: все {len(kb_entries)} записей свежие (проверены < 90 дней назад).")
 
     # Жалобы жителей по кнопке «⚠️ Устарело» — самый горячий сигнал: живой
     # человек уже увидел неправду в ответе бота.
@@ -657,13 +678,13 @@ async def unanswered_digest_cb(callback: CallbackQuery, bot: Bot) -> None:
     if action == "ans":
         if callback.message:
             # Реплай принимаем и на сам вопрос, и на приглашение
-            register_pending_answer(callback.message.message_id, qid)
+            await register_pending_answer(callback.message.message_id, qid)
             await callback.message.edit_reply_markup(reply_markup=None)
             sent = await callback.message.reply(
                 "Пришлите ответ РЕПЛАЕМ на это сообщение — я запишу его в базу знаний."
             )
             if sent is not None:
-                register_pending_answer(sent.message_id, qid)
+                await register_pending_answer(sent.message_id, qid)
         await callback.answer()
 
 
@@ -676,8 +697,8 @@ async def unanswered_admin_reply(message: Message, bot: Bot) -> None:
     """Ловит ответ админа реплаем на приглашение дайджеста → пишет в RAG."""
     if message.reply_to_message is None or message.text is None:
         return
-    from app.services.unanswered import peek_pending_answer, pop_pending_answer, save_admin_answer
-    qid = peek_pending_answer(message.reply_to_message.message_id)
+    from app.services.unanswered import peek_pending_answer, save_admin_answer
+    qid = await peek_pending_answer(message.reply_to_message.message_id)
     if qid is None:
         return
     if not await _ensure_admin(message, bot):
@@ -686,7 +707,8 @@ async def unanswered_admin_reply(message: Message, bot: Bot) -> None:
     if question is None:
         await message.reply("Не получилось сохранить ответ — попробуйте ещё раз.")
         return
-    pop_pending_answer(message.reply_to_message.message_id)
+    # Отдельный pop не нужен: peek находит только open-вопросы, а
+    # save_admin_answer уже перевёл вопрос в answered.
     await message.reply(
         f"✅ Записал в базу знаний.\nВопрос: {question[:200]}\nТеперь бот будет отвечать сам."
     )
