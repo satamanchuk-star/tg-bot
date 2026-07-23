@@ -111,6 +111,15 @@ async def seed_places(session: AsyncSession) -> int:
                 if seed_verified and existing.verified_at != seed_verified:
                     existing.verified_at = seed_verified
                     existing.verified_by = item.get("verified_by") or "seed"
+                # Seed — источник истины и для контактных полей: дозаполненные
+                # в JSON телефон/часы/описание должны доезжать до живой БД
+                # (раньше синхронизировались только is_active/verified_at,
+                # и новые данные для существующих мест молча терялись).
+                for field in ("phone", "work_time", "website", "description",
+                              "subcategory", "distance_km"):
+                    seed_value = item.get(field)
+                    if seed_value not in (None, "") and getattr(existing, field) != seed_value:
+                        setattr(existing, field, seed_value)
             continue
 
         place = Place(
