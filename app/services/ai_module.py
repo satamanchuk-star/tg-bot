@@ -1288,18 +1288,27 @@ class AnthropicProvider:
         self, prompt: str, context: list[str], *, chat_id: int,
         user_id: int | None = None, topic_id: int | None = None,
     ) -> str:
-        safe_prompt = mask_personal_data(prompt)[:1000]
-        if not is_assistant_topic_allowed(safe_prompt):
+        masked_full = mask_personal_data(prompt)
+        # Чистый вопрос жителя (без преамбулы «[Недавние сообщения…]») — по нему
+        # считаются ретрив, гейт, кэш и интент. Раньше всё это считалось по
+        # обрезку [:1000] ПОЛНОГО промпта: в заполненной теме сам вопрос стоит в
+        # хвосте и отрезался целиком — бот отвечал на сообщения соседей.
+        clean_question = _strip_prompt_scaffolding(masked_full)[:1000]
+        # Полный промпт для модели: обрезаем СЛЕВА — страдает старый контекст,
+        # а вопрос в хвосте сохраняется всегда.
+        safe_prompt = masked_full[-3000:]
+        if not is_assistant_topic_allowed(clean_question):
             return random.choice(_FORBIDDEN_TOPIC_REPLIES)
 
         # KB используется как контекст для AI, а не как прямой ответ.
         # Раньше при совпадении KB возвращался сырой текст из JSON без обработки AI,
         # что приводило к шаблонным ответам без учёта контекста вопроса.
         # Теперь AI всегда обрабатывает ответ, а KB предоставляет фактические данные.
+        # Ретрив — по чистому вопросу: контекст темы в запросе только шумел.
 
-        rag_text = await _get_rag_context(chat_id, safe_prompt)
-        faq_answer = await _get_faq_answer(chat_id, safe_prompt)
-        places_context = await _get_places_context(safe_prompt)
+        rag_text = await _get_rag_context(chat_id, clean_question)
+        faq_answer = await _get_faq_answer(chat_id, clean_question)
+        places_context = await _get_places_context(clean_question)
 
         # Статичная (кэшируемая) часть system-промпта.
         # Статичная (кэшируемая) часть: правила + персона + few-shot + ядро KB.
@@ -1312,13 +1321,13 @@ class AnthropicProvider:
         if topic_hint:
             dynamic_system_parts.append(topic_hint.lstrip("\n"))
 
-        resident_context = build_resident_context(safe_prompt, context=context)
+        resident_context = build_resident_context(clean_question, context=context)
 
         # Веб-поиск: если вопрос выходит за рамки локальной базы знаний
         web_context = ""
-        if should_search_web(safe_prompt) and not resident_context and not rag_text and not faq_answer:
+        if should_search_web(clean_question) and not resident_context and not rag_text and not faq_answer:
             try:
-                web_results = await search_duckduckgo(safe_prompt)
+                web_results = await search_duckduckgo(clean_question)
                 web_context = format_search_context(web_results)
             except Exception:
                 logger.warning("Веб-поиск при ответе ассистента не удался.")
@@ -1335,18 +1344,18 @@ class AnthropicProvider:
         _answer_cache_allowed = has_factual_context and not context
         # Ключ включает chat_id: ассистент работает и в форуме, и в лог-чате,
         # а RAG/FAQ scoped по чату — иначе ответ из одного чата утечёт в другой.
-        _cache_key = f"{chat_id}|{_normalize_cache_key(safe_prompt)}"
+        _cache_key = f"{chat_id}|{_normalize_cache_key(clean_question)}"
         if _answer_cache_allowed:
             _cached_reply = _cache_get(_cache_key)
             if _cached_reply:
-                logger.info("ANSWER_CACHE: hit chat=%s prompt=%r", chat_id, safe_prompt[:60])
+                logger.info("ANSWER_CACHE: hit chat=%s prompt=%r", chat_id, clean_question[:60])
                 return _cached_reply
 
         # Style-hint по интенту (после вычисления контекста — от него зависит пул).
         # Hint уходит в финальное user-сообщение (не в system), чтобы не ломать
         # prompt caching статичного префикса.
         chosen_hint = _pick_style_hint(
-            safe_prompt,
+            clean_question,
             has_factual_context=has_factual_context,
             chat_id=chat_id,
             user_id=user_id or 0,
@@ -1367,7 +1376,7 @@ class AnthropicProvider:
             "ANSWER_SOURCE: source=%s resident_ctx=%s rag=%s faq=%s places=%s web=%s prompt=%r user_id=%s topic_id=%s",
             _answer_source, bool(resident_context), bool(rag_text), bool(faq_answer),
             bool(places_context), bool(web_context),
-            safe_prompt[:80], user_id, topic_id,
+            clean_question[:80], user_id, topic_id,
         )
 
         # «Реже, но точнее»: фактический вопрос без опоры в базе знаний → честный
@@ -1377,23 +1386,21 @@ class AnthropicProvider:
         # уходят в модель — там точность фактов не нужна, а no_kb_notice ниже
         # всё равно запрещает выдумывать факты о ЖК. Короткий follow-up в живом
         # диалоге тоже пропускаем: ответ может содержаться в контексте беседы.
-        _is_short_followup = bool(context) and len(safe_prompt) < 40
+        _is_short_followup = bool(context) and len(clean_question) < 40
         if (
             settings.ai_require_grounding
             and not has_factual_context
             and not web_context
-            and not _looks_like_smalltalk(safe_prompt)
-            and _asks_local_facts(safe_prompt)
+            and not _looks_like_smalltalk(clean_question)
+            and _asks_local_facts(clean_question)
             and not _is_short_followup
         ):
-            logger.info("ANSWER_GATE: ungrounded factual question → honest 'не знаю' prompt=%r", safe_prompt[:80])
+            logger.info("ANSWER_GATE: ungrounded factual question → honest 'не знаю' prompt=%r", clean_question[:80])
             # Петля роста: вопрос без ответа копится для еженедельного дайджеста
             # админам (fire-and-forget — ответ жителю не ждёт записи в БД).
-            # Логируем чистый вопрос без служебной преамбулы контекста.
             try:
                 from app.services.unanswered import log_unanswered
-                clean_q = _strip_prompt_scaffolding(safe_prompt)
-                _spawn_background(log_unanswered(chat_id, clean_q))
+                _spawn_background(log_unanswered(chat_id, clean_question))
             except Exception:
                 pass
             return random.choice(_UNGROUNDED_REPLIES)
@@ -1488,7 +1495,7 @@ class AnthropicProvider:
         # ухудшает следование фактам и приводит к шаблонным «фантазиям».
         if has_factual_context:
             temperature = 0.5
-        elif _looks_like_smalltalk(safe_prompt):
+        elif _looks_like_smalltalk(clean_question):
             temperature = 0.75
         else:
             temperature = 0.7

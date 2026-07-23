@@ -11,3 +11,4 @@ gspread==6.1.4
 google-auth==2.37.0
 pytest==8.1.1
 pymorphy3==2.0.6
+cryptography==41.0.7

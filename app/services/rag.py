@@ -327,13 +327,22 @@ async def get_all_rag_messages(session: AsyncSession, chat_id: int) -> list[RagM
     return list(result.scalars().all())
 
 
+# Порог релевантности: документы с lexical_score ниже — НЕ опора для ответа.
+# Без порога любой вопрос получал топ-8 «фактов» (даже про шлагбаум на вопрос
+# о катке) → гейт от галлюцинаций никогда не срабатывал, а петля
+# «не знаю»-вопросов не наполнялась. Порог сравнивается с lexical_score ДО
+# бонуса is_admin (+0.08), иначе нерелевантные админ-записи просачивались бы.
+MIN_RAG_RELEVANCE = 0.05
+
+
 def rank_rag_messages(
     messages: list[RagMessage],
     *,
     query: str,
     top_k: int | None = None,
 ) -> list[RagMessage]:
-    """Ранжирует RAG-сообщения по TF-IDF релевантности и приоритету админских записей."""
+    """Ранжирует RAG-сообщения по TF-IDF релевантности и приоритету админских
+    записей. Нерелевантные (ниже MIN_RAG_RELEVANCE) отбрасываются полностью."""
     if not messages:
         return []
 
@@ -361,6 +370,8 @@ def rank_rag_messages(
         decay = _time_decay_factor(msg.created_at)
         # Итоговый score: tfidf + мягкое совпадение токенов, затем time_decay
         lexical_score = 0.75 * tfidf_score + 0.25 * overlap_score
+        if lexical_score < MIN_RAG_RELEVANCE:
+            continue  # не про этот вопрос — в опору не идёт
         final_score = lexical_score * (0.7 + 0.3 * decay)
         # Админские записи важны, но не должны подавлять релевантность запроса.
         if msg.is_admin:

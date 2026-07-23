@@ -8,7 +8,29 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Тесты ПЕРЕД сборкой: прямой push в main (в т.ч. правка через веб-интерфейс)
+  # раньше уезжал в прод непроверенным — quality-gate гонялся только на PR.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run full test suite
+        run: |
+          pytest -q tests/ infra_catalog/tests/
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
