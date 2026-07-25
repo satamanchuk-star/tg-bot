@@ -41,6 +41,14 @@ from app.services.coins import (
     transfer_coins,
     try_grant_daily_bonus,
 )
+from app.services.game_common import (
+    LockRegistry,
+    display_name as _gc_display_name,
+    in_games_topic,
+    medal,
+    safe_answer,
+)
+from app.services.game_common import safe_edit as _gc_safe_edit
 from app.utils.admin import extract_target_user
 from app.utils.time import is_game_time_allowed
 
@@ -51,13 +59,10 @@ router = Router()
 GAME_START_HOUR = 22
 GAME_END_HOUR = 24  # [22, 24) = 22:00–23:59 МСК
 
-# Per-user блокировки: сериализуют двойные клики и джобы. Словарь не чистим —
-# рост O(число игравших за аптайм), десятки записей, приемлемо.
-_user_locks: dict[int, asyncio.Lock] = {}
-
-
-def _lock_for(user_id: int) -> asyncio.Lock:
-    return _user_locks.setdefault(user_id, asyncio.Lock())
+# Per-user блокировки: сериализуют двойные клики и джобы
+# (общий реестр — app/services/game_common.py).
+_user_locks = LockRegistry()
+_lock_for = _user_locks.for_key
 
 
 RULES_TEXT = (
@@ -97,23 +102,10 @@ def _pick_invitation() -> str:
     return random.choice(_INVITATIONS)
 
 
-def _medal(place: int) -> str:
-    """Значок места: медали для топ-3, номер для остальных."""
-    return {1: "🥇", 2: "🥈", 3: "🥉"}.get(place, f"{place}.")
-
-
-def _in_games_topic(message: Message) -> bool:
-    return (
-        settings.topic_games is not None
-        and message.chat.id == settings.forum_chat_id
-        and message.message_thread_id == settings.topic_games
-    )
-
-
-def _display_name(message: Message) -> str | None:
-    if message.from_user is None:
-        return None
-    return message.from_user.username or message.from_user.full_name
+# Общие примитивы игр — app/services/game_common.py
+_medal = medal
+_in_games_topic = in_games_topic
+_display_name = _gc_display_name
 
 
 def _bet_keyboard(user_id: int, balance: int) -> InlineKeyboardMarkup:
@@ -228,27 +220,11 @@ async def _settle(
 
 async def _safe_edit(bot: Bot, chat_id: int, message_id: int | None, text: str,
                      reply_markup: InlineKeyboardMarkup | None = None) -> None:
-    """edit_text не должен ронять хендлер: устаревшее сообщение (BadRequest) или
-    флуд-контроль (RetryAfter, если ретраи сессии исчерпаны) — молча пропускаем.
-    Состояние партии к этому моменту уже закоммичено — /21 покажет актуальный стол."""
-    if message_id is None:
-        return
-    try:
-        await bot.edit_message_text(
-            text, chat_id=chat_id, message_id=message_id, reply_markup=reply_markup
-        )
-    except (TelegramBadRequest, TelegramRetryAfter):
-        pass
+    """Локальная сигнатура (chat_id позиционно) поверх общего safe_edit."""
+    await _gc_safe_edit(bot, message_id, text, chat_id=chat_id, reply_markup=reply_markup)
 
 
-async def _safe_answer(callback: CallbackQuery, text: str | None = None) -> None:
-    """Ack колбэка не должен ронять хендлер: при флуд-контроле Telegram ответ
-    приходит позже 10–15 сек и API отвечает «query is too old» — это не ошибка
-    игры, просто тост не показался."""
-    try:
-        await callback.answer(text)
-    except (TelegramBadRequest, TelegramRetryAfter):
-        pass
+_safe_answer = safe_answer
 
 
 # --- Команды ---

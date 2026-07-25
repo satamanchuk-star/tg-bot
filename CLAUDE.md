@@ -41,6 +41,7 @@ app/
 │   └── stats.py         # Statistics endpoints
 ├── services/            # Business logic
 │   ├── blackjack.py     # Логика «21», выплаты, GameRound-история
+│   ├── game_common.py   # Общие примитивы игр: LockRegistry, safe_send/edit/react
 │   ├── coins.py         # Экономика монет: DEFAULT_COINS=200, бонус, спасение банкрота
 │   ├── strikes.py       # Strike management
 │   ├── flood.py         # Flood detection

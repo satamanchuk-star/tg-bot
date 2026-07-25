@@ -24,6 +24,14 @@ from app.config import settings
 from app.db import get_session
 from app.services import quiz as q
 from app.services.coins import get_or_create_stats
+from app.services.game_common import (
+    LockRegistry,
+    display_name as _gc_display_name,
+    in_games_topic,
+    safe_react,
+    safe_send,
+)
+from app.services.game_common import safe_edit as _gc_safe_edit
 
 logger = logging.getLogger(__name__)
 
@@ -32,15 +40,13 @@ router = Router()
 QUIZ_HOUR = 20  # старт в 20:00 МСК
 
 # chat-lock: сериализует приём ответов и переходы вопроса (first-wins атомарен).
-_chat_locks: dict[int, asyncio.Lock] = {}
+_chat_locks = LockRegistry()
 # Событие «на текущий вопрос ответили верно» — driver ждёт его вместо таймаута.
 _answer_events: dict[int, asyncio.Event] = {}
 # Активные driver-таски: chat_id → Task (для watchdog: возобновить после рестарта).
 _running: dict[int, asyncio.Task] = {}
 
-
-def _lock_for(chat_id: int) -> asyncio.Lock:
-    return _chat_locks.setdefault(chat_id, asyncio.Lock())
+_lock_for = _chat_locks.for_key
 
 
 def _event_for(chat_id: int) -> asyncio.Event:
@@ -76,12 +82,8 @@ RULES_TEXT = (
 )
 
 
-def _in_games_topic(message: Message) -> bool:
-    return (
-        settings.topic_games is not None
-        and message.chat.id == settings.forum_chat_id
-        and message.message_thread_id == settings.topic_games
-    )
+# Общие примитивы игр — app/services/game_common.py
+_in_games_topic = in_games_topic
 
 
 def _is_games_topic_answer(message: Message) -> bool:
@@ -95,53 +97,14 @@ def _is_games_topic_answer(message: Message) -> bool:
     )
 
 
-def _display_name(message: Message) -> str | None:
-    if message.from_user is None:
-        return None
-    return message.from_user.username or message.from_user.full_name
-
-
-async def _safe_send(bot: Bot, text: str) -> Message | None:
-    try:
-        return await bot.send_message(
-            settings.forum_chat_id, text, message_thread_id=settings.topic_games
-        )
-    except (TelegramBadRequest, TelegramRetryAfter):
-        return None
-
-
-async def _safe_edit(bot: Bot, message_id: int | None, text: str) -> None:
-    """Правка сообщения в теме игр; устаревшее/флуд — молча пропускаем."""
-    if message_id is None:
-        return
-    try:
-        await bot.edit_message_text(
-            text, chat_id=settings.forum_chat_id, message_id=message_id
-        )
-    except (TelegramBadRequest, TelegramRetryAfter):
-        pass
-
+_display_name = _gc_display_name
+_safe_send = safe_send
+_safe_edit = _gc_safe_edit
+_safe_react = safe_react
 
 # Реакции-анимации на ответы игроков: верный — праздник, неверный — раздумье.
 _CORRECT_REACTIONS = ("🎉", "🏆", "⚡", "🔥", "👏")
 _WRONG_REACTION = "🤔"
-
-
-async def _safe_react(bot: Bot, message: Message, emoji: str) -> None:
-    """Ставит эмодзи-реакцию на сообщение игрока (анимация в клиенте Telegram).
-
-    Реакция — best-effort украшение: любые ошибки (флуд, старое сообщение,
-    выключенные реакции в чате) молча глотаем, игру они не трогают.
-    """
-    try:
-        from aiogram.types import ReactionTypeEmoji
-        await bot.set_message_reaction(
-            chat_id=message.chat.id,
-            message_id=message.message_id,
-            reaction=[ReactionTypeEmoji(emoji=emoji)],
-        )
-    except Exception:  # noqa: BLE001 — реакции не должны ронять приём ответов
-        pass
 
 
 async def _send_start_animation(bot: Bot) -> None:
