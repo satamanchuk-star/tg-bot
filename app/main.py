@@ -14,7 +14,6 @@ from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import (
     TelegramAPIError,
-    TelegramBadRequest,
     TelegramNetworkError,
     TelegramRetryAfter,
 )
@@ -410,30 +409,39 @@ async def apply_v12_coins_200(session: AsyncSession) -> None:
 
 
 async def drop_orphaned_tables(session: AsyncSession) -> None:
-    """Удаляет осиротевшие таблицы (quiz/lottery + мёртвые модели v1.2)."""
-    flag = await session.get(MigrationFlag, "drop_orphaned_tables_v2")
-    if flag:
-        return
+    """Удаляет осиротевшие таблицы мёртвых моделей (по версионным флагам).
 
+    Каждая волна чистки — свой флаг: ранний return по v2 не должен блокировать
+    v3 на живой проде, где v2 уже отработала.
+    """
     # ВНИМАНИЕ: quiz_questions и quiz_sessions СНОВА живые (викторина вернулась,
     # июль 2026) — их здесь быть не должно, иначе на свежей БД create_all их
-    # создаст, а миграция сразу снесёт. Дропаем только реально мёртвые таблицы
-    # старой викторины/лотереи.
-    orphaned = [
-        "lottery_tickets",
-        "quiz_daily_limits",
-        "quiz_used_questions",
-        "quiz_user_stats",
-        # Модели удалены из кода (мёртвый функционал):
-        "resident_services",
-        "moderation_calibrations",
-    ]
-    for table_name in orphaned:
-        await session.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
-
-    session.add(MigrationFlag(key="drop_orphaned_tables_v2"))
-    await session.commit()
-    logger.info("Удалены осиротевшие таблицы: %s", ", ".join(orphaned))
+    # создаст, а миграция сразу снесёт. Дропаем только реально мёртвые таблицы.
+    waves = {
+        "drop_orphaned_tables_v2": [
+            "lottery_tickets",
+            "quiz_daily_limits",
+            "quiz_used_questions",
+            "quiz_user_stats",
+            "resident_services",
+            "moderation_calibrations",
+        ],
+        # v3 (аудит-5, июль 2026): магазин и «доработки» удалены окончательно —
+        # владелец решил их не возвращать, код снесён (shop/economy/improvements).
+        "drop_orphaned_tables_v3": [
+            "bot_improvements",
+            "improvement_votes",
+            "shop_purchases",
+        ],
+    }
+    for flag_key, tables in waves.items():
+        if await session.get(MigrationFlag, flag_key):
+            continue
+        for table_name in tables:
+            await session.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+        session.add(MigrationFlag(key=flag_key))
+        await session.commit()
+        logger.info("%s: удалены осиротевшие таблицы: %s", flag_key, ", ".join(tables))
 
 
 async def heartbeat_job(bot: Bot) -> None:
@@ -970,17 +978,12 @@ async def error_handler(event: ErrorEvent) -> bool:
     exc = event.exception
     logger.exception(f"Ошибка: {exc}")
 
-    # Сетевые сбои Telegram обычно транзиентные (таймаут, обрыв соединения).
-    # Мы их уже ретраем в RetryOnFloodSession, поэтому в админ-чат отправляем
-    # только при сериях повторных сбоев — один раз на окно дедупликации.
-    # Туда же — флуд-контроль (RetryAfter) и просроченные колбэки («query is
-    # too old»): в вечер запуска игры они засыпали админ-чат десятками копий.
-    is_transient_network = (
-        isinstance(exc, (TelegramNetworkError, TelegramRetryAfter))
-        or (isinstance(exc, TelegramBadRequest) and "query is too old" in str(exc))
-    )
+    # Дедупликация для ВСЕХ ошибок: одинаковая ошибка в цикле (битый хендлер,
+    # зависший внешний сервис) шлётся в админ-чат один раз на окно (5 мин),
+    # а не десятками копий. Раньше дедуп покрывал только транзиентные сетевые
+    # сбои — любая другая ошибка в горячем пути засыпала чат.
     signature = f"{type(exc).__name__}:{str(exc)[:120]}"
-    if is_transient_network and not _should_notify_error(signature):
+    if not _should_notify_error(signature):
         return True
 
     error_text = (
@@ -1053,8 +1056,6 @@ async def main() -> None:
     # текстовые ответы игроков в теме игр. Модерация эту тему и так исключает.
     dp.include_router(quiz_handler.router)
     dp.include_router(forms.router)  # формы с FSM (перед модерацией!)
-    # shop.router и economy_handler.router отключены: магазин и голосования
-    # убраны из продукта (июль 2026) и не возвращаются вместе с игрой.
     dp.include_router(suggest.router)   # предложить место в инфраструктуру ЖК
     dp.include_router(text_publish.router)  # отправка текста от лица бота в выбранный топик
     dp.include_router(personalization_handler.router)  # /off_nudges, /on_nudges (только в DM)
