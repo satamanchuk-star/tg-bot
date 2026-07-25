@@ -427,6 +427,10 @@ class UnansweredQuestion(Base):
     hits: Mapped[int] = mapped_column(Integer, default=1)
     # open | answered | dismissed
     status: Mapped[str] = mapped_column(String(16), default="open", index=True)
+    # message_id сообщений дайджеста в админ-чате (через запятую): реплай на
+    # любое из них — ответ на этот вопрос. Персистентно: раньше связка жила
+    # в памяти и рестарт между дайджестом и ответом админа рвал петлю роста.
+    digest_message_ids: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
