@@ -196,3 +196,75 @@ def test_removed_question_keeps_numbering(db, monkeypatch) -> None:
     texts = [c.args[1] for c in bot.send_message.await_args_list if "Вопрос" in str(c.args[1])]
     assert any("Вопрос 2/2" in t for t in texts), texts
     assert not any("/3" in t for t in texts), texts
+
+def test_near_miss_gets_one_hint_reply_per_question(db, monkeypatch) -> None:
+    """Почти-верный ответ: реакция 👀 всем + одна текстовая подсказка на вопрос.
+
+    Подсказка нужна, чтобы игрок понял «мысль верная, уточни формулировку», а
+    ограничение «одна на вопрос» — чтобы при нескольких «почти» бот не засорял
+    тему. Содержание ответа подсказка не выдаёт.
+    """
+    from app.handlers import quiz as h
+
+    _prime(monkeypatch, seconds=3, brk=0)
+
+    async def _run():
+        async with db() as session:
+            session.add(QuizQuestion(id=1, question="Изделие Жиллетта?", answer="Безопасная бритва"))
+            session.add(QuizQuestion(id=2, question="Царь зверей?", answer="Лев"))
+            session.add(QuizQuestion(id=3, question="2+2?", answer="4"))
+            await session.commit()
+
+        bot = _make_bot()
+        replies: list[str] = []
+
+        def _msg_with_reply(text: str, user_id: int):
+            msg = _msg(text, user_id)
+            msg.reply = AsyncMock(side_effect=lambda t: replies.append(t))
+            return msg
+
+        assert await h._launch_quiz(bot, 100) is None
+        await asyncio.sleep(0.05)
+
+        # «Первая мировая война» ← «война»: значимое слово совпало, но ответ
+        # не засчитан — это и есть «почти».
+        near1 = _msg_with_reply("война", 1)
+        near2 = _msg_with_reply("океан", 2)
+        async for session in h.get_session():
+            state = await h.q.load_session(session, 100)
+            state.current_answer = "Первая мировая война"
+            await h.q.save_session(session, 100, 42, state)
+            await session.commit()
+            break
+
+        await h.on_answer(near1, bot)
+        await h.on_answer(near2, bot)
+
+        # Совсем мимо — ни подсказки, ни повторов
+        await h.on_answer(_msg_with_reply("велосипед", 3), bot)
+
+        for task in list(h._running.values()):
+            task.cancel()
+        return replies
+
+    replies = asyncio.run(_run())
+    assert len(replies) == 1, f"ожидали одну подсказку на вопрос, получили: {replies}"
+    assert replies[0] in h_near_hints()
+    # Подсказка не выдаёт ответ
+    assert "война" not in replies[0].lower()
+
+
+def h_near_hints() -> tuple[str, ...]:
+    from app.handlers.quiz import _NEAR_HINTS
+    return _NEAR_HINTS
+
+
+def test_near_hint_pool_is_varied_and_not_repeating() -> None:
+    """15 разных реплик, подряд одна и та же не выдаётся."""
+    from app.handlers.quiz import _NEAR_HINTS, _last_near_hint, _pick_near_hint
+
+    assert len(set(_NEAR_HINTS)) >= 15
+    _last_near_hint.clear()
+    picked = [_pick_near_hint(777) for _ in range(30)]
+    assert all(a != b for a, b in zip(picked, picked[1:]))
+    assert len(set(picked)) >= 5  # реально разные, а не две по кругу
