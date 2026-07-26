@@ -102,8 +102,10 @@ _safe_send = safe_send
 _safe_edit = _gc_safe_edit
 _safe_react = safe_react
 
-# Реакции-анимации на ответы игроков: верный — праздник, неверный — раздумье.
+# Реакции-анимации на ответы игроков: верный — праздник, «почти» — подсказка
+# уточнить формулировку, неверный — раздумье.
 _CORRECT_REACTIONS = ("🎉", "🏆", "⚡", "🔥", "👏")
+_NEAR_REACTION = "👀"
 _WRONG_REACTION = "🤔"
 
 
@@ -457,7 +459,21 @@ async def on_answer(message: Message, bot: Bot) -> None:
                 return
             if not q.check_answer(state.current_answer, text):
                 await session.commit()  # неверно — попытку НЕ жжём (фикс старой версии)
-                outcome = "wrong"
+                # «Почти» (совпало значимое слово многословного эталона) —
+                # отдельная реакция: игрок видит, что надо уточнить, а не гадать
+                # заново. В лог кладём пару эталон/ответ: по ней тюним матчер.
+                if q.is_near_miss(state.current_answer, text):
+                    outcome = "near"
+                    logger.info(
+                        "QUIZ_NEAR_MISS: эталон=%r ответ=%r",
+                        state.current_answer[:80], text[:80],
+                    )
+                else:
+                    outcome = "wrong"
+                    logger.info(
+                        "QUIZ_WRONG: эталон=%r ответ=%r",
+                        state.current_answer[:80], text[:80],
+                    )
                 break
             # Первый верный: фиксируем победителя, начисляем монеты, будим driver.
             name = _display_name(message)
@@ -481,6 +497,8 @@ async def on_answer(message: Message, bot: Bot) -> None:
     if outcome == "correct":
         _event_for(chat_id).set()  # driver прекращает ждать и закрывает вопрос
         await _safe_react(bot, message, random.choice(_CORRECT_REACTIONS))
+    elif outcome == "near":
+        await _safe_react(bot, message, _NEAR_REACTION)
     elif outcome == "wrong":
         await _safe_react(bot, message, _WRONG_REACTION)
 
