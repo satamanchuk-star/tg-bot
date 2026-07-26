@@ -68,7 +68,12 @@ def validate_one(item: dict) -> list[str]:
         issues.append("ответ пуст после разбора вариантов")
         return issues
 
-    from app.services.quiz import _STOP_WORDS
+    # Опасны только служебные слова-паразиты: эталон «это» засчитал бы любую
+    # фразу с ним. А вот ответ-местоимение («Я», «Вы, ты») — нормальный ответ:
+    # матчер для таких эталонов берёт токены как есть (см. _content_tokens),
+    # поэтому сверяться со всем стоп-листом матчера здесь нельзя.
+    _FILLER_ONLY = frozenset({"это", "этот", "эта", "эти", "был", "была", "было",
+                              "были", "есть", "так", "вот", "же", "бы", "ли"})
 
     for v in variants:
         words = _tokens(v)
@@ -76,9 +81,8 @@ def validate_one(item: dict) -> list[str]:
             issues.append(f"слишком длинный вариант ответа ({len(words)} слов): «{v}»")
         if not words:
             issues.append(f"вариант ответа без значимых токенов: «{v}»")
-        elif all(w in _STOP_WORDS for w in words):
-            # Эталон из одних стоп-слов («это») засчитал бы любую фразу с ним.
-            issues.append(f"вариант ответа целиком из стоп-слов: «{v}»")
+        elif all(w in _FILLER_ONLY for w in words):
+            issues.append(f"вариант ответа целиком из слов-паразитов: «{v}»")
 
     # Валидация ОТВЕТА матчем: каждый вариант эталона обязан засчитаться сам себе.
     for v in variants:

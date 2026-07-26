@@ -102,9 +102,53 @@ _safe_send = safe_send
 _safe_edit = _gc_safe_edit
 _safe_react = safe_react
 
-# Реакции-анимации на ответы игроков: верный — праздник, неверный — раздумье.
+# Реакции-анимации на ответы игроков: верный — праздник, «почти» — подсказка
+# уточнить формулировку, неверный — раздумье.
 _CORRECT_REACTIONS = ("🎉", "🏆", "⚡", "🔥", "👏")
+_NEAR_REACTION = "👀"
 _WRONG_REACTION = "🤔"
+
+# Реплики на почти-верный ответ: игрок должен понять, что мысль верная и надо
+# лишь уточнить формулировку. Разные каждый раз — иначе бот выглядит роботом.
+# Содержание ответа не выдаём: только «ты рядом».
+_NEAR_HINTS = (
+    "🔥 Горячо! Мысль верная — уточни формулировку.",
+    "🎯 Рядом! Не хватает слова — попробуй полнее.",
+    "💡 Тепло-тепло! Скажи чуть точнее.",
+    "🤏 Совсем чуть-чуть! Дожимай.",
+    "⚡ Почти в точку! Уточни ответ.",
+    "🧭 Верное направление — добавь недостающее.",
+    "🌡 Горячо! Ещё разок, поточнее.",
+    "😮 Ой, почти! Переформулируй.",
+    "🪄 Почти угадал — не хватает детали.",
+    "📎 Близко! Ответ рядом с твоей версией.",
+    "🚀 Почти долетел! Уточни формулировку.",
+    "🔍 Тепло! Присмотрись к формулировке.",
+    "🎣 Клюёт! Но нужно точнее.",
+    "🫡 Почти! Соберись и добей.",
+    "🧩 Кусочек на месте — не хватает остального.",
+)
+
+# chat_id → индекс вопроса, по которому подсказку уже дали: одна реплика на
+# вопрос. Иначе при нескольких «почти» тема превращается в спам бота.
+_near_hint_at: dict[int, int] = {}
+# chat_id → прошлая реплика: не повторяем подряд одну и ту же.
+_last_near_hint: dict[int, str] = {}
+
+
+def _pick_near_hint(chat_id: int) -> str:
+    options = [h for h in _NEAR_HINTS if h != _last_near_hint.get(chat_id)]
+    hint = random.choice(options or list(_NEAR_HINTS))
+    _last_near_hint[chat_id] = hint
+    return hint
+
+
+async def _safe_reply(message: Message, text: str) -> None:
+    """Реплай игроку; транзиентные ошибки Telegram игру ронять не должны."""
+    try:
+        await message.reply(text)
+    except (TelegramBadRequest, TelegramRetryAfter):
+        pass
 
 
 async def _send_start_animation(bot: Bot) -> None:
@@ -382,6 +426,8 @@ async def _finish_quiz(bot: Bot, chat_id: int) -> None:
 
 async def _launch_quiz(bot: Bot, chat_id: int) -> str | None:
     """Создаёт сессию и публикует первый вопрос. Возврат — причина отказа или None."""
+    # Новый тур — счётчик подсказок с нуля (номера вопросов начинаются заново).
+    _near_hint_at.pop(chat_id, None)
     async with _lock_for(chat_id):
         async for session in get_session():
             existing = await q.load_session(session, chat_id)
@@ -444,7 +490,8 @@ async def on_answer(message: Message, bot: Bot) -> None:
     text = message.text or ""
     user_id = message.from_user.id
     chat_id = message.chat.id
-    outcome: str | None = None  # correct | wrong (для реакции вне лока)
+    outcome: str | None = None  # correct | near | wrong (для реакции вне лока)
+    question_index = -1  # номер вопроса на момент ответа (для «одна подсказка на вопрос»)
 
     async with _lock_for(chat_id):
         async for session in get_session():
@@ -457,7 +504,22 @@ async def on_answer(message: Message, bot: Bot) -> None:
                 return
             if not q.check_answer(state.current_answer, text):
                 await session.commit()  # неверно — попытку НЕ жжём (фикс старой версии)
-                outcome = "wrong"
+                question_index = state.index
+                # «Почти» (совпало значимое слово многословного эталона) —
+                # отдельная реакция: игрок видит, что надо уточнить, а не гадать
+                # заново. В лог кладём пару эталон/ответ: по ней тюним матчер.
+                if q.is_near_miss(state.current_answer, text):
+                    outcome = "near"
+                    logger.info(
+                        "QUIZ_NEAR_MISS: эталон=%r ответ=%r",
+                        state.current_answer[:80], text[:80],
+                    )
+                else:
+                    outcome = "wrong"
+                    logger.info(
+                        "QUIZ_WRONG: эталон=%r ответ=%r",
+                        state.current_answer[:80], text[:80],
+                    )
                 break
             # Первый верный: фиксируем победителя, начисляем монеты, будим driver.
             name = _display_name(message)
@@ -481,6 +543,14 @@ async def on_answer(message: Message, bot: Bot) -> None:
     if outcome == "correct":
         _event_for(chat_id).set()  # driver прекращает ждать и закрывает вопрос
         await _safe_react(bot, message, random.choice(_CORRECT_REACTIONS))
+    elif outcome == "near":
+        await _safe_react(bot, message, _NEAR_REACTION)
+        # Реплика-подсказка — одна на вопрос: первому, кто оказался рядом.
+        # Остальным в этом же вопросе достаётся только реакция, иначе при
+        # нескольких «почти» бот засоряет тему.
+        if _near_hint_at.get(chat_id) != question_index:
+            _near_hint_at[chat_id] = question_index
+            await _safe_reply(message, _pick_near_hint(chat_id))
     elif outcome == "wrong":
         await _safe_react(bot, message, _WRONG_REACTION)
 
