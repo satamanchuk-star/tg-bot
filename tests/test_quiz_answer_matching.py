@@ -119,3 +119,55 @@ def test_key_word_credit_covers_most_multiword_answers() -> None:
     multi = [a for a in _bank_answers() if len(_content_tokens(a)) >= 2]
     accepted = [a for a in multi if check_answer(a, _content_tokens(a)[-1])]
     assert len(accepted) / len(multi) > 0.5
+
+
+@pytest.mark.parametrize(("correct", "given"), [
+    ("Фары", "фраы"),      # перестановка соседних букв в 4-буквенном слове
+    ("Ясли", "ялси"),
+    ("Рога", "роаг"),
+    ("Вино", "вион"),
+])
+def test_transposition_accepted_in_short_words(correct: str, given: str) -> None:
+    """Аналитика банка: 98 ответов из 4 букв имели нулевой бюджет опечаток,
+    и типичная перестановка букв отвергалась. Перестановку прощаем."""
+    assert check_answer(correct, given) is True
+
+
+@pytest.mark.parametrize(("correct", "given"), [
+    ("Кот", "код"),   # замена — разные слова, прощать нельзя
+    ("Кот", "кто"),   # 3 буквы — слишком коротко даже для перестановки
+    ("Мясо", "маос"), # две перестановки — уже не опечатка
+    ("Рога", "нога"),  # одна замена буквы — другое слово
+])
+def test_short_word_substitutions_still_rejected(correct: str, given: str) -> None:
+    assert check_answer(correct, given) is False
+
+
+def test_typo_robustness_on_real_bank() -> None:
+    """Ответ с одной перестановкой букв должен засчитываться почти всегда.
+
+    Порог 95%: на момент фикса — 99%. Раньше было 90%, и каждый десятый
+    верный ответ с опечаткой пропадал.
+    """
+    import random
+
+    from app.services.quiz import _ALT_SPLIT, _tokens
+
+    rng = random.Random(11)
+
+    def _typo(word: str) -> str:
+        if len(word) < 4:
+            return word
+        i = rng.randrange(len(word) - 1)
+        return word[:i] + word[i + 1] + word[i] + word[i + 2:]
+
+    ok = total = 0
+    for answer in _bank_answers():
+        tokens = _tokens(_ALT_SPLIT.split(answer)[0])
+        if not tokens:
+            continue
+        j = rng.randrange(len(tokens))
+        given = " ".join(_typo(t) if i == j else t for i, t in enumerate(tokens))
+        total += 1
+        ok += bool(check_answer(answer, given))
+    assert ok / total > 0.95, f"устойчивость к опечаткам упала: {ok / total:.0%}"
