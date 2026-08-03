@@ -186,6 +186,23 @@ def _typo_budget(word: str) -> int:
 _CONSONANTS = frozenset("бвгджзйклмнпрстфхцчшщ")
 
 
+def _is_transposition(a: str, b: str) -> bool:
+    """Слова отличаются ровно перестановкой двух СОСЕДНИХ букв («фары» ← «фраы»).
+
+    Нужно коротким словам (4 буквы), где бюджет опечаток нулевой: замену там
+    прощать нельзя («кот» ≈ «код» — разные слова), а перестановка почти всегда
+    именно опечатка быстрой печати. Аналитика банка: таких ответов 98 (5%), и
+    без этого правила верный ответ с типичной опечаткой отвергался.
+    """
+    if len(a) != len(b) or a == b:
+        return False
+    diff = [i for i, (ca, cb) in enumerate(zip(a, b)) if ca != cb]
+    if len(diff) != 2:
+        return False
+    i, j = diff
+    return j == i + 1 and a[i] == b[j] and a[j] == b[i]
+
+
 def _spelling_variant(a: str, b: str) -> bool:
     """Одно и то же слово в разном написании заимствования.
 
@@ -228,7 +245,12 @@ def _token_matches(correct: str, given_tokens: list[str]) -> bool:
     for g in given_tokens:
         if g == correct or lemmatize(g) == lemma_c:
             return True
-        if not budget or _is_number(g):
+        if _is_number(g):
+            continue
+        # Короткие слова: бюджет правок нулевой, но перестановку букв прощаем.
+        if len(correct) >= 4 and _is_transposition(correct, g):
+            return True
+        if not budget:
             continue
         if _bounded_levenshtein(correct, g, budget) <= budget:
             return True

@@ -56,11 +56,6 @@ from app.services.backup import send_db_backup
 from app.services.daily_report import send_daily_report
 from app.services.place_verify import verify_places
 from app.services.unanswered import send_unanswered_digest
-from app.services.daily_messages import (
-    send_morning_greeting,
-    send_presence_morning,
-    send_presence_evening,
-)
 from app.services.personalization import send_weekly_nudges
 from app.services.sheets import sync_places_from_sheet
 from app.services.resident_kb import load_resident_kb
@@ -587,23 +582,9 @@ async def schedule_jobs(bot: Bot) -> AsyncIOScheduler:
         minute=0,
         args=[bot],
     )
-    # Утреннее приветствие с погодой и праздниками (8:00 каждый день)
-    if settings.ai_daily_greeting:
-        scheduler.add_job(
-            send_morning_greeting,
-            "cron",
-            hour=8,
-            minute=0,
-            args=[bot],
-        )
-    # Напоминания «бот отвечает только по запросу»: утро 10:00 и вечер 21:00
-    # в главном чате. Подчёркивают, что сам бот в разговоры не встревает.
-    scheduler.add_job(
-        send_presence_morning, "cron", hour=10, minute=0, args=[bot],
-    )
-    scheduler.add_job(
-        send_presence_evening, "cron", hour=21, minute=0, args=[bot],
-    )
+    # Утренние/вечерние приветствия в General убраны по просьбе владельца
+    # (июль 2026): бот отзывается только по обращению, фоновые «я на дежурстве»
+    # были шумом в главном чате. Вместе с ними удалён app/services/daily_messages.py.
     # Ночной бэкап БД в админ-чат (3:30) — офсайт-копия на случай потери сервера.
     scheduler.add_job(
         send_db_backup, "cron", hour=3, minute=30, args=[bot],
