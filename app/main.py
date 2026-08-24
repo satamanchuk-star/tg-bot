@@ -1063,6 +1063,10 @@ async def main() -> None:
                 await bot.delete_webhook(
                     drop_pending_updates=settings.drop_pending_on_start
                 )
+                # Маркер готовности для деплоя: пайплайн ждёт эту строку в логах
+                # контейнера и откатывается на предыдущий образ, если её нет.
+                # Строку не менять — на неё завязан grep в .github/workflows/build.yml.
+                logger.info("BOT_READY: polling запускается, версия %s", settings.build_version)
                 try:
                     await dp.start_polling(
                         bot,

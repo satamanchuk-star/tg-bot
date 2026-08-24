@@ -524,6 +524,26 @@ async def kb_reload(message: Message, bot: Bot) -> None:
     )
 
 
+@router.message(Command("аналитика", "analytics"))
+async def analytics_report(message: Message, bot: Bot) -> None:
+    """Сводка работы бота и игр за N дней (по умолчанию 7): /аналитика 30."""
+    if not await _ensure_admin(message, bot):
+        return
+    parts = (message.text or "").split()
+    days = 7
+    if len(parts) > 1 and parts[1].isdigit():
+        days = max(1, min(int(parts[1]), 90))  # больше 90 дней данных нет — ретеншен
+
+    from app.services.analytics import build_analytics_report
+
+    async for session in get_session():
+        report = await build_analytics_report(session, days=days)
+        break
+    else:
+        report = "Не удалось собрать отчёт — база недоступна."
+    await message.reply(report)
+
+
 @router.message(Command("kb_stale"))
 async def kb_stale(message: Message, bot: Bot) -> None:
     """Отчёт о несвежих данных: места и записи KB, не проверявшиеся > 90 дней."""

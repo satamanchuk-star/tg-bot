@@ -288,6 +288,20 @@ def _build_topic_context_map() -> dict[int, tuple[str, str]]:
     return mapping
 
 
+def get_topic_name(topic_id: int | None) -> str:
+    """Человеческое название темы форума по её id («Шлагбаум», «Жалобы»).
+
+    Нужно отчётам: id темы владельцу ничего не говорит.
+    """
+    global _TOPIC_CONTEXT_MAP
+    if not _TOPIC_CONTEXT_MAP:
+        _TOPIC_CONTEXT_MAP = _build_topic_context_map()
+    if topic_id is None:
+        return ""
+    entry = _TOPIC_CONTEXT_MAP.get(topic_id)
+    return entry[0] if entry else ""
+
+
 def get_topic_hint(topic_id: int | None) -> str:
     """Возвращает контекстную подсказку по topic_id для system prompt."""
     global _TOPIC_CONTEXT_MAP

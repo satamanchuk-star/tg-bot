@@ -9,7 +9,7 @@ from sqlalchemy.sql.dml import Delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import AiFeedback, AiUsage, ChatHistory, FrequentQuestion, MessageLog, ModerationEvent, RagMessage, TopicStat
+from app.models import AiFeedback, AiUsage, ChatHistory, FrequentQuestion, MessageLog, ModerationEvent, RagMessage, TopicStat, QuizAnswerMiss
 
 
 
@@ -30,6 +30,12 @@ async def cleanup_old_data(session: AsyncSession, *, now_utc: datetime | None = 
     removed_moderation_events = await _delete_and_count(
         session,
         delete(ModerationEvent).where(ModerationEvent.created_at < logs_cutoff),
+    )
+    # Промахи матчера викторины — операционные данные для тюнинга матча,
+    # держим столько же, сколько логи сообщений.
+    await _delete_and_count(
+        session,
+        delete(QuizAnswerMiss).where(QuizAnswerMiss.created_at < logs_cutoff),
     )
     removed_topic_stats = await _delete_and_count(
         session,

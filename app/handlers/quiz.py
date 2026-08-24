@@ -507,19 +507,22 @@ async def on_answer(message: Message, bot: Bot) -> None:
                 question_index = state.index
                 # «Почти» (совпало значимое слово многословного эталона) —
                 # отдельная реакция: игрок видит, что надо уточнить, а не гадать
-                # заново. В лог кладём пару эталон/ответ: по ней тюним матчер.
-                if q.is_near_miss(state.current_answer, text):
-                    outcome = "near"
-                    logger.info(
-                        "QUIZ_NEAR_MISS: эталон=%r ответ=%r",
-                        state.current_answer[:80], text[:80],
-                    )
-                else:
-                    outcome = "wrong"
-                    logger.info(
-                        "QUIZ_WRONG: эталон=%r ответ=%r",
-                        state.current_answer[:80], text[:80],
-                    )
+                # заново. Пара «эталон → ответ» ложится в БД (не только в лог):
+                # по ней в /аналитика видно, справедливо ли бот отказывает.
+                outcome = "near" if q.is_near_miss(state.current_answer, text) else "wrong"
+                await q.record_answer_miss(
+                    session,
+                    chat_id=chat_id,
+                    question_id=state.current_question_id(),
+                    correct_answer=state.current_answer,
+                    given_text=text,
+                    verdict=outcome,
+                )
+                await session.commit()
+                logger.info(
+                    "QUIZ_%s: эталон=%r ответ=%r",
+                    outcome.upper(), state.current_answer[:80], text[:80],
+                )
                 break
             # Первый верный: фиксируем победителя, начисляем монеты, будим driver.
             name = _display_name(message)

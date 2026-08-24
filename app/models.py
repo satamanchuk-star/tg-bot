@@ -363,6 +363,30 @@ class AiTaskLog(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class QuizAnswerMiss(Base):
+    """Незасчитанные ответы игроков викторины — сырьё для настройки матчера.
+
+    Почему в БД, а не только в логах: жалоба «бот не считает верные ответы»
+    проверяется только парами «эталон → что написал житель». Логи на сервере
+    ротируются и недоступны из отчётов, а здесь данные попадают в /аналитика
+    и видны владельцу сразу после тура. Чистятся ретеншеном логов.
+    """
+
+    __tablename__ = "quiz_answer_misses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    question_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    correct_answer: Mapped[str] = mapped_column(Text)
+    given_text: Mapped[str] = mapped_column(Text)
+    # near — совпало значимое слово эталона (кандидат на послабление матчера),
+    # wrong — мимо.
+    verdict: Mapped[str] = mapped_column(String(8), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
+    )
+
+
 class UnansweredQuestion(Base):
     """Вопросы, на которые бот честно ответил «не знаю» — сырьё для пополнения базы.
 

@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import Integer, delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import QuizQuestion, QuizRound, QuizSession
+from app.models import QuizAnswerMiss, QuizQuestion, QuizRound, QuizSession
 from app.utils.morphology import lemmatize
 from app.utils.time import ensure_aware
 
@@ -376,6 +376,32 @@ def is_near_miss(correct: str, given: str) -> bool:
     return False
 
 
+async def record_answer_miss(
+    session: AsyncSession,
+    *,
+    chat_id: int,
+    question_id: int | None,
+    correct_answer: str,
+    given_text: str,
+    verdict: str,
+) -> None:
+    """Пишет незасчитанный ответ игрока — сырьё для настройки матчера.
+
+    Коммит делает вызывающий (ответ уже идёт в одной транзакции с игрой).
+    Никогда не бросает: аналитика не должна ронять приём ответов.
+    """
+    try:
+        session.add(QuizAnswerMiss(
+            chat_id=chat_id,
+            question_id=question_id,
+            correct_answer=correct_answer[:300],
+            given_text=given_text[:300],
+            verdict=verdict[:8],
+        ))
+    except Exception:  # noqa: BLE001
+        logger.warning("QUIZ: не удалось записать промах ответа.", exc_info=True)
+
+
 def answer_length_hint(answer: str) -> str:
     """Подсказка о форме ответа без палева содержания."""
     first_variant = _ALT_SPLIT.split(answer)[0]
@@ -405,6 +431,12 @@ class QuizState:
     board_message_id: int | None = None
     scores: dict = field(default_factory=dict)  # {str(user_id): {"name": str, "correct": int}}
     updated_at: str = ""
+
+    def current_question_id(self) -> int | None:
+        """id вопроса, который сейчас на экране (для записи промахов матчера)."""
+        if 0 <= self.index < len(self.question_ids):
+            return self.question_ids[self.index]
+        return None
 
     def to_json(self) -> str:
         return json.dumps({
