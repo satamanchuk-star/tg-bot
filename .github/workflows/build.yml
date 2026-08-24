@@ -51,6 +51,7 @@ jobs:
       - name: Build and push with retry
         env:
           BUILD_VERSION: "#${{ github.run_number }} (${{ steps.sha.outputs.short }})"
+          SHORT_SHA: ${{ steps.sha.outputs.short }}
         run: |
           set -euo pipefail
 
@@ -61,6 +62,7 @@ jobs:
               --file Dockerfile \
               --platform linux/amd64 \
               --tag satamanchuk/alexbot:latest \
+              --tag "satamanchuk/alexbot:${SHORT_SHA}" \
               --push \
               --cache-from type=gha \
               --cache-to type=gha,mode=max \
@@ -125,6 +127,51 @@ jobs:
             cd /opt/alexbot
             chmod 600 .env
             mkdir -p data
+
+            # Запоминаем работающий образ: если новый не поднимется — вернём его.
+            PREV_IMAGE=$(docker inspect --format '{{.Image}}' alexbot 2>/dev/null || echo "")
+            if [ -n "$PREV_IMAGE" ]; then
+              docker tag "$PREV_IMAGE" satamanchuk/alexbot:previous
+              echo "Предыдущий образ сохранён для отката: $PREV_IMAGE"
+            fi
+
             docker compose pull
             docker compose up -d --remove-orphans
-            docker image prune -f
+
+            # Ждём маркер готовности из app/main.py (до 2 минут: на старте
+            # прогреваются база знаний и сид вопросов).
+            READY=0
+            for i in $(seq 1 60); do
+              if docker logs alexbot 2>&1 | grep -q "BOT_READY"; then
+                READY=1
+                break
+              fi
+              STATE=$(docker inspect --format '{{.State.Status}}' alexbot 2>/dev/null || echo missing)
+              RESTARTS=$(docker inspect --format '{{.RestartCount}}' alexbot 2>/dev/null || echo 0)
+              if [ "$STATE" = "exited" ] || [ "$RESTARTS" -gt 2 ]; then
+                echo "Контейнер в состоянии $STATE, перезапусков: $RESTARTS — дальше не ждём."
+                break
+              fi
+              sleep 2
+            done
+
+            if [ "$READY" = "1" ]; then
+              echo "✅ Бот поднялся и начал polling."
+              docker image prune -f
+              exit 0
+            fi
+
+            echo "❌ Бот не сообщил о готовности. Последние логи:"
+            docker logs alexbot --tail 60 2>&1 || true
+
+            if docker image inspect satamanchuk/alexbot:previous >/dev/null 2>&1; then
+              echo "↩️ Откат на предыдущий образ."
+              docker tag satamanchuk/alexbot:previous satamanchuk/alexbot:latest
+              docker compose up -d --force-recreate
+              sleep 10
+              docker logs alexbot --tail 20 2>&1 || true
+              echo "Откат выполнен: на сервере снова предыдущая версия."
+            else
+              echo "⚠️ Предыдущего образа нет — откатывать не на что."
+            fi
+            exit 1
