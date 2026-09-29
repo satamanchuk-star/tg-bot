@@ -57,7 +57,7 @@ _INVITATIONS = (
     "🧠 Соседи, через 5 минут — викторина!\nВ 20:00 стартуем. Разминаем эрудицию, на кону монеты. Кто сегодня умнее всех?",
     "❓ Вечерний квиз на подходе!\nВ 20:00 бот засыпет вопросами. За каждый верный ответ — монеты, победителю тура — джекпот. Готовь пальцы!",
     "🎓 Тс-с… через 5 минут проверка на эрудицию\nВ 20:00 викторина. Отвечай первым — забирай монеты. Соседи, кто в игре?",
-    "🔥 Пять минут до викторины!\nВ 20:00 15 вопросов, 45 секунд на каждый. Первый верный ответ — монеты твои. Врывайся!",
+    "🔥 Пять минут до викторины!\nВ 20:00 15 вопросов, на середине каждого — подсказка. Первый верный ответ — монеты твои. Врывайся!",
     "🧩 Знатоки, по местам!\nВ 20:00 стартует квиз. Быстрее всех и без ошибок — вот рецепт победы. Ждём в 20:00!",
     "📚 Викторина через 5 минут!\nВ 20:00 узнаем, кто в доме самый эрудированный. Монеты за ответы, большой бонус победителю. /викторина_правила",
     "⚡ Внимание, вечерний квиз!\nВ 20:00 бот начинает. Кто первым даст верный ответ — тот и молодец (и при монетах). Соседи, готовы?",
@@ -72,7 +72,9 @@ def _pick_invitation() -> str:
 RULES_TEXT = (
     "🧠 Викторина — каждый вечер в 20:00 МСК, здесь\n"
     "━━━━━━━━━━━━\n"
-    f"• {q.QUESTIONS_PER_ROUND} вопросов, по {q.SECONDS_PER_QUESTION} секунд на каждый\n"
+    f"• {q.QUESTIONS_PER_ROUND} вопросов, от {q.SECONDS_PER_QUESTION} до "
+    f"{q.SECONDS_PER_QUESTION + q.EXTRA_SECONDS_MAX} секунд: чем длиннее вопрос, тем больше времени\n"
+    "• На середине вопроса — подсказка: первая буква и длина ответа 🔤\n"
     "• Отвечай прямо в чат — «первый верно ответивший» забирает вопрос\n"
     f"• За верный ответ: +{q.COINS_PER_CORRECT} 🪙 • победителю тура: +{q.WINNER_BONUS} 🪙\n"
     "• Опечатки прощаются, лишние слова в ответе — не страшны\n"
@@ -164,18 +166,25 @@ async def _send_start_animation(bot: Bot) -> None:
 # --- Тексты тура ---
 
 
-def _question_text(state: q.QuizState, *, warn: bool = False) -> str:
+def _question_text(
+    state: q.QuizState, *, warn: bool = False, hint: bool = False
+) -> str:
     num = state.index + 1
     # Знаменатель — фактический размер тура (вопрос мог быть снят при
     # синхронизации базы; константа «/15» давала «неверный подсчёт» номеров).
     total = len(state.question_ids)
-    hint = q.answer_length_hint(state.current_answer)
+    length_hint = q.answer_length_hint(state.current_answer)
+    seconds = q.question_seconds(state.question_text)
     text = (
         f"❓ Вопрос {num}/{total}\n"
         f"━━━━━━━━━━━━\n"
         f"{state.question_text}\n\n"
-        f"💡 Ответ: {hint} • {q.SECONDS_PER_QUESTION} сек"
+        f"💡 Ответ: {length_hint} • {seconds} сек"
     )
+    if hint:
+        mask = q.hint_mask(state.current_answer)
+        if mask:
+            text += f"\n🔤 Подсказка: {mask}"
     if warn:
         text += "\n\n⚡ Осталось 10 секунд!"
     return text
@@ -245,26 +254,7 @@ async def _run_quiz(bot: Bot, chat_id: int) -> None:
                 # Событие чистится при ПОДГОТОВКЕ вопроса (_advance/_launch), а не
                 # здесь — иначе set() от быстрого ответа, пришедший до этого места,
                 # терялся бы, и driver зря ждал полный таймер (потерянное пробуждение).
-                warn_at = 10.0
-                answered = False
-                if remaining > warn_at + 1:
-                    try:
-                        await asyncio.wait_for(
-                            _event_for(chat_id).wait(), timeout=remaining - warn_at
-                        )
-                        answered = True
-                    except asyncio.TimeoutError:
-                        # Анимация «финишная прямая»: дописываем предупреждение
-                        # в сообщение вопроса, если его ещё никто не забрал.
-                        await _warn_last_seconds(bot, chat_id)
-                if not answered:
-                    try:
-                        await asyncio.wait_for(
-                            _event_for(chat_id).wait(),
-                            timeout=min(remaining, warn_at),
-                        )
-                    except asyncio.TimeoutError:
-                        pass
+                await _wait_with_stages(bot, chat_id, state, remaining)
                 await _close_question(bot, chat_id)
                 continue
 
@@ -281,20 +271,71 @@ async def _run_quiz(bot: Bot, chat_id: int) -> None:
 
 
 def _remaining_seconds(state: q.QuizState) -> float:
+    total = q.question_seconds(state.question_text)
     if not state.question_started_at:
-        return q.SECONDS_PER_QUESTION
+        return float(total)
     try:
         started = datetime.fromisoformat(state.question_started_at)
     except ValueError:
-        return q.SECONDS_PER_QUESTION
+        return float(total)
     from app.utils.time import ensure_aware
     elapsed = (datetime.now(timezone.utc) - ensure_aware(started)).total_seconds()
-    return max(0.0, q.SECONDS_PER_QUESTION - elapsed)
+    return max(0.0, total - elapsed)
 
 
-async def _warn_last_seconds(bot: Bot, chat_id: int) -> None:
-    """Дописывает «⚡ Осталось 10 секунд!» в сообщение вопроса (если он ещё
-    не взят) — живая динамика без лишних сообщений в теме."""
+# Сколько секунд должно ОСТАВАТЬСЯ до конца вопроса, чтобы сработало
+# предупреждение «⚡ Осталось 10 секунд!».
+_WARN_LEFT = 10.0
+
+
+def _stages(total: int) -> list[tuple[float, str]]:
+    """Вехи вопроса по убыванию «осталось секунд»: сначала подсказка, потом
+    предупреждение. Веха включается, только если умещается в вопрос с запасом
+    (тесты гоняют вопросы по 1-3 секунды — там вех нет вовсе)."""
+    stages = [
+        (float(total - q.hint_at_seconds(total)), "hint"),
+        (_WARN_LEFT, "warn"),
+    ]
+    return sorted(
+        [(left, kind) for left, kind in stages if total > left + 1],
+        key=lambda s: -s[0],
+    )
+
+
+async def _wait_with_stages(
+    bot: Bot, chat_id: int, state: q.QuizState, remaining: float
+) -> bool:
+    """Ждёт ответ до конца вопроса, по пути открывая подсказку и предупреждение.
+
+    Возвращает True, если вопрос забрали. Вехи, которые уже прошли (driver
+    возобновлён после рестарта посреди вопроса), догоняются одной правкой —
+    последней из пройденных: предупреждение показывает и подсказку тоже.
+    """
+    stages = _stages(q.question_seconds(state.question_text))
+    passed = [kind for left, kind in stages if remaining <= left + 0.5]
+    if passed:
+        await _reveal_stage(bot, chat_id, passed[-1])
+    for left, kind in stages:
+        if remaining <= left + 0.5:
+            continue
+        try:
+            await asyncio.wait_for(_event_for(chat_id).wait(), timeout=remaining - left)
+            return True
+        except asyncio.TimeoutError:
+            remaining = left
+            await _reveal_stage(bot, chat_id, kind)
+    try:
+        await asyncio.wait_for(_event_for(chat_id).wait(), timeout=max(remaining, 0.0))
+        return True
+    except asyncio.TimeoutError:
+        return False
+
+
+async def _reveal_stage(bot: Bot, chat_id: int, kind: str) -> None:
+    """Правит сообщение вопроса на вехе (если его ещё никто не взял):
+    «hint» — открывает первую букву и длину ответа, «warn» — дописывает
+    «⚡ Осталось 10 секунд!» (подсказка к этому моменту уже открыта).
+    Живая динамика без лишних сообщений в теме."""
     async with _lock_for(chat_id):
         async for session in get_session():
             state = await q.load_session(session, chat_id)
@@ -308,7 +349,11 @@ async def _warn_last_seconds(bot: Bot, chat_id: int) -> None:
         and state.winner_user_id is None
         and state.board_message_id
     ):
-        await _safe_edit(bot, state.board_message_id, _question_text(state, warn=True))
+        await _safe_edit(
+            bot,
+            state.board_message_id,
+            _question_text(state, hint=True, warn=(kind == "warn")),
+        )
 
 
 async def _close_question(bot: Bot, chat_id: int) -> None:
@@ -460,8 +505,8 @@ async def _launch_quiz(bot: Bot, chat_id: int) -> str | None:
 
     intro = (
         "🧠 Викторина начинается!\n"
-        f"{q.QUESTIONS_PER_ROUND} вопросов, по {q.SECONDS_PER_QUESTION} сек. "
-        "Первый верный ответ забирает вопрос. Поехали!"
+        f"{q.QUESTIONS_PER_ROUND} вопросов, на середине каждого — подсказка "
+        "с первой буквой. Первый верный ответ забирает вопрос. Поехали!"
     )
     await _send_start_animation(bot)  # 🎯 анимированный дротик — «прицелились»
     await _safe_send(bot, intro)

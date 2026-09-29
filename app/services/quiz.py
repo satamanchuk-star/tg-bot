@@ -27,7 +27,15 @@ logger = logging.getLogger(__name__)
 # --- Параметры тура (текст правил обязан им соответствовать) ---
 
 QUESTIONS_PER_ROUND = 15
-SECONDS_PER_QUESTION = 45
+SECONDS_PER_QUESTION = 45  # база: хватает вопросу до ~30 слов (медиана банка — 31)
+# Длинным вопросам — больше времени: только чтение с телефона у 8% банка съедало
+# больше 20 секунд из 45, и на размышление почти ничего не оставалось.
+EXTRA_SECONDS_MAX = 30          # потолок добавки: не больше 75 сек на вопрос
+WORDS_COVERED_BY_BASE = 30      # столько слов укладывается в базовое время
+READING_WORDS_PER_SECOND = 2.5  # ~150 слов/мин — чтение с экрана телефона
+# Подсказка (первая буква + длина) — чуть дальше середины вопроса: быстрые
+# знатоки успевают без неё, остальным она даёт шанс вместо «Никто не успел».
+HINT_AT_FRACTION = 0.55         # 45 сек → подсказка на 25-й секунде
 BREAK_SECONDS = 4
 COINS_PER_CORRECT = 15
 WINNER_BONUS = 100
@@ -400,6 +408,57 @@ async def record_answer_miss(
         ))
     except Exception:  # noqa: BLE001
         logger.warning("QUIZ: не удалось записать промах ответа.", exc_info=True)
+
+
+def question_seconds(question_text: str) -> int:
+    """Время на вопрос: база + добавка за длину текста (округляется до 5 сек).
+
+    База — SECONDS_PER_QUESTION (тесты подменяют её на единицы секунд, поэтому
+    добавка считается поверх неё, а не от жёстких 45).
+    """
+    words = len((question_text or "").split())
+    extra_words = max(0, words - WORDS_COVERED_BY_BASE)
+    if not extra_words:
+        return SECONDS_PER_QUESTION
+    extra = extra_words / READING_WORDS_PER_SECOND
+    extra = min(EXTRA_SECONDS_MAX, -(-int(extra) // 5) * 5 or 5)  # вверх до кратного 5
+    return SECONDS_PER_QUESTION + extra
+
+
+def hint_at_seconds(total_seconds: int) -> int:
+    """На какой секунде от начала вопроса открывать подсказку."""
+    return max(1, int(total_seconds * HINT_AT_FRACTION + 0.5))
+
+
+def hint_mask(answer: str) -> str:
+    """Маска ответа для подсказки: «Чумовые» → «Ч _ _ _ _ _ _».
+
+    Берём первый вариант эталона (до «/», «;», «или»), кавычки и скобки
+    выбрасываем. Первая буква открыта, остальные — «_», границы слов видны.
+    Ответ короче трёх букв не раскрываем вовсе: «Д _» у ответа «Да» —
+    это уже не подсказка, а готовый ответ.
+    """
+    variant = _ALT_SPLIT.split(answer or "")[0]
+    variant = re.sub(r"\([^)]*\)", " ", variant)          # «(зачёт: …)» и т.п.
+    words = re.findall(r"[\w-]+", variant)
+    letters_total = sum(ch.isalnum() for w in words for ch in w)
+    reveal_first = letters_total >= 3
+    rendered_words: list[str] = []
+    revealed = False
+    for word in words:
+        chars: list[str] = []
+        for ch in word:
+            if ch == "-":
+                chars.append("-")
+            elif ch.isalnum() or ch == "_":
+                if reveal_first and not revealed:
+                    chars.append(ch.upper())
+                    revealed = True
+                else:
+                    chars.append("_")
+        if chars:
+            rendered_words.append(" ".join(chars))
+    return "   ".join(rendered_words)
 
 
 def answer_length_hint(answer: str) -> str:
