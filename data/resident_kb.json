@@ -36,9 +36,9 @@
    "номер ук",
    "позвонить в управляющую"
   ],
-  "source": "uk_notice_2026_10",
+  "source": "resident_seed_2026",
   "updated_at": "2026-10-05",
-  "verified_at": "2026-10-05"
+  "verified_at": "2026-03-16"
  },
  {
   "id": "uk_schedule",
@@ -1074,9 +1074,9 @@
    "полезные контакты",
    "важные номера"
   ],
-  "source": "uk_notice_2026_10",
+  "source": "resident_seed_2026",
   "updated_at": "2026-10-05",
-  "verified_at": "2026-10-05"
+  "verified_at": "2026-03-16"
  },
  {
   "id": "intercom_access",
