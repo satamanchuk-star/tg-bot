@@ -35,6 +35,7 @@ from app.services.chat_history import (
 )
 from app.services.faq import get_faq_answer, track_question, update_faq_rating
 from app.services.feedback import save_feedback
+from app.services.freshness import with_freshness_note
 from app.services.resident_kb import (
     get_entries_by_category,
     search_resident_kb,
@@ -1494,6 +1495,10 @@ async def ai_command(message: Message) -> None:
         # Определяем категорию KB для контекстных кнопок (Позвонить/Сайт/Ещё про …)
         kb_category = _resolve_kb_category(prompt, context)
 
+        # Телефоны и часы, которые давно не перепроверяли, — честная приписка
+        # с просьбой нажать «⚠️ Устарело» (см. app/services/freshness.py).
+        reply = await with_freshness_note(reply)
+
         # Отправляем ответ с кнопками оценки + контекстными действиями
         sent = await message.reply(
             reply,
@@ -1783,6 +1788,10 @@ async def mention_help(message: Message, bot: Bot) -> None:
 
             # Определяем категорию KB для контекстных кнопок
             kb_category = _resolve_kb_category(prompt, context)
+
+            # Телефоны и часы, которые давно не перепроверяли, — честная приписка
+            # с просьбой нажать «⚠️ Устарело» (см. app/services/freshness.py).
+            reply = await with_freshness_note(reply)
 
             # Отправляем с кнопками оценки + контекстными действиями
             sent = await message.reply(
