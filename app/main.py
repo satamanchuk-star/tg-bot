@@ -664,6 +664,42 @@ async def on_startup_critical() -> None:
     logger.info("⏱ migrations: %.2fs", _time.monotonic() - _step_t)
 
 
+async def _report_kb_update(bot: Bot) -> None:
+    """После выкладки новой базы знаний: сброс устаревших FAQ-ответов + отчёт админам.
+
+    Почему: после смены графика УК бот продолжал отвечать по-старому, и снаружи
+    не было видно, доехала ли новая база до сервера. Теперь при каждой новой
+    версии базы в админ-чат приходит одна строка: сколько записей, откуда
+    прочитаны и сколько закреплённых ответов сброшено.
+    """
+    from app.services.faq import reset_faq_on_kb_change
+    from app.services.resident_kb import kb_fingerprint, load_resident_kb, resolve_kb_path
+
+    try:
+        reset = None
+        async for session in get_session():
+            reset = await reset_faq_on_kb_change(session, kb_fingerprint())
+            break
+        if reset is None:
+            return  # база не менялась с прошлого старта
+        kb_path = resolve_kb_path()
+        source = f"{kb_path.parent.name}/{kb_path.name}" if kb_path else "файл не найден"
+        lines = [
+            f"📚 База знаний обновлена: {len(load_resident_kb())} записей ({source}).",
+            f"Сброшено закреплённых FAQ-ответов: {reset}.",
+        ]
+        server_copy = Path(__file__).resolve().parents[1] / "data" / "resident_kb.json"
+        if kb_path is not None and kb_path != server_copy and server_copy.exists():
+            lines.append(
+                "⚠️ На сервере лежит устаревшая data/resident_kb.json — "
+                "бот её не читает, лучше удалить."
+            )
+        logger.info("KB_UPDATE: %s", " ".join(lines))
+        await bot.send_message(settings.admin_log_chat_id, "\n".join(lines))
+    except Exception:
+        logger.exception("Не удалось обработать обновление базы знаний.")
+
+
 async def on_startup_warmup(bot: Bot) -> None:
     """Фоновый прогрев: probes, set_commands, seed, resident_kb, AI probe, уведомление.
 
@@ -834,6 +870,7 @@ async def on_startup_warmup(bot: Bot) -> None:
         load_resident_kb()
     except Exception:
         logger.exception("Не удалось загрузить базу знаний жителей (resident_kb.json).")
+    await _report_kb_update(bot)
     logger.info("⏱ resident_kb: %.2fs", _time.monotonic() - _step_t)
 
     # ── Seed инфраструктуры из JSON ──────────────────────────────────────────
