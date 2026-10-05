@@ -1,3 +1,4 @@
+import pytest
 from app.handlers.help import _extract_ai_prompt
 from app.services.ai_module import build_local_assistant_reply
 from app.services.resident_kb import build_resident_answer
@@ -19,10 +20,37 @@ def test_resident_answer_uk_contacts() -> None:
 
 
 def test_resident_answer_uk_schedule() -> None:
+    """График приёма УК «ВЕК» по объявлению от октября 2026."""
     answer = build_resident_answer("Как работает УК?")
     assert answer is not None
-    assert "09:00–18:00" in answer
-    assert "13:00–13:48" in answer
+    assert "не приёмный день" in answer          # понедельник
+    assert "09:00–18:00" in answer               # вт–чт
+    assert "09:00–17:00" in answer               # пт
+    assert "10:00–14:00" in answer               # сб
+    assert "13:00–14:00" in answer               # обед
+    assert "085-33-30" in answer                 # вс — заявки через аварийку
+
+
+def test_old_uk_schedule_is_gone_everywhere() -> None:
+    """Старый график (перерыв до 13:48, среда до 19:00, выходная суббота)
+    не должен остаться ни в одной записи — иначе бот ответит двумя версиями."""
+    from app.services.resident_kb import load_resident_kb
+
+    load_resident_kb.cache_clear()
+    for entry in load_resident_kb():
+        assert "13:48" not in entry.answer, entry.id
+        assert "Ср — 09:00–19:00" not in entry.answer, entry.id
+        assert "Сб, Вс — выходные" not in entry.answer, entry.id
+
+
+@pytest.mark.parametrize(("question", "expected"), [
+    ("Работает ли УК в субботу?", "10:00–14:00"),
+    ("УК в понедельник принимает?", "не приёмный день"),
+    ("Какая почта у УК?", "info@ukvek-sity.ru"),
+])
+def test_new_uk_questions_find_answers(question: str, expected: str) -> None:
+    answer = build_resident_answer(question)
+    assert answer is not None and expected in answer
 
 
 def test_resident_answer_gate() -> None:
