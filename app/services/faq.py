@@ -142,3 +142,32 @@ def _is_answer_locked(fq: FrequentQuestion) -> bool:
         and fq.negative_ratings == 0
         and fq.best_answer is not None
     )
+
+
+async def reset_faq_on_kb_change(session: AsyncSession, fingerprint: str) -> int | None:
+    """Сбрасывает закреплённые FAQ-ответы, если база знаний поменялась.
+
+    Почему: FAQ-ответ — снимок ответа бота на момент, когда база была другой.
+    После смены графика УК закреплённый старый ответ продолжал попадать в
+    контекст модели (и дословно — в локальный фоллбек) рядом с новой базой.
+    Счётчики обращений сохраняем, ответы и оценки — обнуляем: новый ответ
+    снова наберёт оценки уже на свежих данных.
+
+    Возвращает число сброшенных ответов или None, если база не менялась.
+    Отпечаток помечается флагом в migration_flags — сброс один раз на версию.
+    """
+    from app.models import MigrationFlag
+
+    if not fingerprint:
+        return None
+    flag_key = f"kb_faq_{fingerprint}"
+    if await session.get(MigrationFlag, flag_key):
+        return None
+    result = await session.execute(
+        update(FrequentQuestion)
+        .where(FrequentQuestion.best_answer.is_not(None))
+        .values(best_answer=None, positive_ratings=0, negative_ratings=0)
+    )
+    session.add(MigrationFlag(key=flag_key))
+    await session.commit()
+    return int(result.rowcount or 0)

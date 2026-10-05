@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -224,22 +225,66 @@ def _is_exact_match(normalized_query: str, entry: ResidentKbEntry) -> bool:
     return False
 
 
+def _newest_date(path: Path) -> str:
+    """Самая свежая дата правки/проверки в файле базы («» — файл битый)."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return max(
+            (str(item.get(key) or "")[:10] for item in raw for key in ("updated_at", "verified_at")),
+            default="",
+        )
+    except (OSError, ValueError, TypeError, AttributeError):
+        return ""
+
+
+def resolve_kb_path(root: Path | None = None) -> Path | None:
+    """Какой файл базы читать: копию в data/ или файл из образа (kb/).
+
+    Почему не «data/ всегда»: на сервере data/ — bind mount, и копия базы,
+    однажды положенная туда руками, навсегда перекрыла бы файл из образа —
+    ни одна правка из репозитория не доехала бы до бота. Поэтому берём
+    файл с более свежими датами; при равенстве — data/ (ручная правка на
+    сервере поверх той же версии).
+    """
+    project_root = root or Path(__file__).resolve().parents[2]
+    server_copy = project_root / "data" / "resident_kb.json"
+    image_copy = project_root / "kb" / "resident_kb.json"
+    if not server_copy.exists():
+        return image_copy if image_copy.exists() else None
+    if not image_copy.exists():
+        return server_copy
+    if _newest_date(image_copy) > _newest_date(server_copy):
+        logger.warning(
+            "data/resident_kb.json старше файла из образа — читаем %s. "
+            "Удалите устаревшую копию с сервера.", image_copy,
+        )
+        return image_copy
+    return server_copy
+
+
+def kb_fingerprint() -> str:
+    """Отпечаток содержимого базы: меняется при любой правке файла."""
+    path = resolve_kb_path()
+    if path is None:
+        return ""
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
 @lru_cache(maxsize=1)
 def load_resident_kb() -> tuple[ResidentKbEntry, ...]:
     _ENTRY_TOKEN_CACHE.clear()
-    project_root = Path(__file__).resolve().parents[2]
-    kb_path = project_root / "data" / "resident_kb.json"
-    if not kb_path.exists():
-        # Fallback: файл может лежать в неперекрытом каталоге kb/ внутри образа
-        kb_path = project_root / "kb" / "resident_kb.json"
-    if not kb_path.exists():
-        logger.warning("Файл базы знаний не найден: %s", kb_path)
+    kb_path = resolve_kb_path()
+    if kb_path is None:
+        logger.warning("Файл базы знаний не найден ни в data/, ни в kb/.")
         return ()
     raw = json.loads(kb_path.read_text(encoding="utf-8"))
     entries: list[ResidentKbEntry] = []
     for item in raw:
         entries.append(ResidentKbEntry(**item))
-    logger.info("Resident KB loaded: %s entries, updated_at=%s", len(entries), datetime.now(timezone.utc).isoformat())
+    logger.info(
+        "Resident KB loaded: %s entries from %s, loaded_at=%s",
+        len(entries), kb_path, datetime.now(timezone.utc).isoformat(),
+    )
     return tuple(entries)
 
 

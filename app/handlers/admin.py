@@ -518,9 +518,18 @@ async def kb_reload(message: Message, bot: Bot) -> None:
     # отдаваться до часа после правки базы.
     clear_assistant_cache()
     entries = load_resident_kb()
+    # Закреплённые FAQ-ответы построены на прошлой версии базы — сбрасываем.
+    from app.services.faq import reset_faq_on_kb_change
+    from app.services.resident_kb import kb_fingerprint
+
+    reset = None
+    async for session in get_session():
+        reset = await reset_faq_on_kb_change(session, kb_fingerprint())
+        break
     await message.reply(
         f"База знаний перечитана: {len(entries)} записей. "
         "Изменения в data/resident_kb.json применены."
+        + (f" Сброшено закреплённых FAQ-ответов: {reset}." if reset else "")
     )
 
 
