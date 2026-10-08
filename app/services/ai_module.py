@@ -94,11 +94,17 @@ def _is_modern_model(model_id: str) -> bool:
     return bool(_MODERN_MODEL_RE.search(model_id or ""))
 
 
-def _model_request_params(model_id: str, *, max_tokens: int, temperature: float) -> dict[str, object]:
-    """Параметры запроса, зависящие от поколения модели (без model/messages/system)."""
+def _model_request_params(
+    model_id: str, *, max_tokens: int, temperature: float, effort: str | None = None,
+) -> dict[str, object]:
+    """Параметры запроса, зависящие от поколения модели (без model/messages/system).
+
+    effort — для конкретного маршрута (ответы жителям — AI_REPLY_EFFORT),
+    иначе общий AI_EFFORT (классификаторы, сводки).
+    """
     if not _is_modern_model(model_id):
         return {"max_tokens": max_tokens, "temperature": temperature}
-    params: dict[str, object] = {"output_config": {"effort": settings.ai_effort}}
+    params: dict[str, object] = {"output_config": {"effort": effort or settings.ai_effort}}
     if settings.ai_thinking == "disabled" and _THINKING_OFF_OK_RE.search(model_id):
         params["thinking"] = {"type": "disabled"}
         params["max_tokens"] = max_tokens
@@ -1170,6 +1176,7 @@ class AnthropicProvider:
         response_format: dict | None,
         fallback_model: str,
         request_reserved: bool = False,
+        effort: str | None = None,
     ) -> tuple[str, int]:
         """Единая точка вызова Anthropic Messages API. Возвращает (текст, токены).
         SDK сам ретраит 429/5xx (max_retries); здесь — один retry на fallback-модель
@@ -1204,6 +1211,7 @@ class AnthropicProvider:
                 "messages": request_messages,
                 **_model_request_params(
                     current_model, max_tokens=max_tokens, temperature=temperature,
+                    effort=effort,
                 ),
             }
             if system_blocks:
@@ -1230,6 +1238,23 @@ class AnthropicProvider:
                     )
                     current_model = fallback_model
                     used_fallback = True
+                    continue
+                if (
+                    status_code == 400
+                    and _is_modern_model(current_model)
+                    and not refusal_retry
+                    and current_model != fallback_model
+                ):
+                    # Страховка перехода на новое поколение: если API отверг
+                    # какой-то параметр запроса, жителю лучше ответ запасной
+                    # модели, чем шаблон локального фоллбэка. Основную модель
+                    # не переключаем — громкий лог покажет, что чинить.
+                    logger.error(
+                        "AI 400 on modern model=%s body=%r -> retry on %s",
+                        current_model, error_hint, fallback_model,
+                    )
+                    current_model = fallback_model
+                    refusal_retry = True
                     continue
                 raise RuntimeError(f"AI API вернул ошибку {status_code}: {error_hint}") from exc
             except (anthropic.APIConnectionError, anthropic.APITimeoutError) as exc:
@@ -1293,6 +1318,7 @@ class AnthropicProvider:
         bypass_limit: bool = False,
         model: str | None = None,
         response_format: dict | None = None,
+        effort: str | None = None,
     ) -> tuple[str, int]:
         if not settings.ai_key:
             raise RuntimeError("AI_KEY не задан")
@@ -1312,6 +1338,7 @@ class AnthropicProvider:
             response_format=response_format,
             fallback_model=_normalize_model_id(settings.ai_fallback_model),
             request_reserved=request_reserved,
+            effort=effort,
         )
 
     async def _chat_completion_with_model(
@@ -1616,6 +1643,7 @@ class AnthropicProvider:
                 chat_id=chat_id,
                 temperature=temperature,
                 model=settings.ai_reply_model,
+                effort=settings.ai_reply_effort,
             )
             reply = content[:500]
             if _answer_cache_allowed:

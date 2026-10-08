@@ -816,3 +816,39 @@ def test_modern_model_never_gets_assistant_prefill(monkeypatch) -> None:
     asyncio.run(provider._chat_completion(history, chat_id=1))
     assert sent[0]["messages"][-1]["role"] == "user"
     asyncio.run(provider.aclose())
+
+
+def test_bad_request_on_modern_model_falls_back_once(monkeypatch) -> None:
+    """API отверг параметр новой модели — ответ запасной, а не локальный шаблон."""
+    import anthropic
+
+    provider = AnthropicProvider()
+    sent: list[dict] = []
+
+    async def _create(**kwargs):  # type: ignore[no-untyped-def]
+        sent.append(kwargs)
+        if len(sent) == 1:
+            request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+            response = httpx.Response(400, request=request)
+            raise anthropic.BadRequestError("output_config: unexpected field", response=response, body=None)
+        return _FakeMessage()
+
+    _patch_completion_env(monkeypatch, provider, _create)
+    monkeypatch.setattr(provider, "_model", "claude-haiku-5-5", raising=False)
+
+    content, _ = asyncio.run(provider._chat_completion([{"role": "user", "content": "ping"}], chat_id=1))
+
+    assert content == "ok"
+    assert [k["model"] for k in sent] == ["claude-haiku-5-5", "claude-haiku-4-5"]
+    assert "output_config" not in sent[1]
+    assert provider._model == "claude-haiku-5-5"
+    asyncio.run(provider.aclose())
+
+
+def test_reply_route_uses_its_own_effort(monkeypatch) -> None:
+    from app.services.ai_module import _model_request_params
+
+    monkeypatch.setattr("app.services.ai_module.settings.ai_effort", "low", raising=False)
+    params = _model_request_params("claude-haiku-5-5", max_tokens=650, temperature=0.5, effort="medium")
+    assert params["output_config"] == {"effort": "medium"}
+    assert _model_request_params("claude-haiku-5-5", max_tokens=650, temperature=0.5)["output_config"] == {"effort": "low"}
