@@ -83,5 +83,9 @@ def test_settings_defaults_to_claude_haiku(monkeypatch) -> None:
     for var in ("AI_MODEL", "AI_PREMIUM_MODEL", "AI_FALLBACK_MODEL"):
         monkeypatch.delenv(var, raising=False)
     settings = Settings(**BASE_ENV, _env_file=None)
-    assert settings.ai_model == "claude-haiku-4-5"
+    assert settings.ai_model == "claude-haiku-5-5"
+    assert settings.ai_reply_model == "claude-haiku-5-5"
     assert settings.ai_premium_model == "claude-sonnet-4-6"
+    # Запасная — предыдущая Haiku: на неё уходим при отказе или неверном ID.
+    assert settings.ai_fallback_model == "claude-haiku-4-5"
+    assert settings.ai_effort == "low"

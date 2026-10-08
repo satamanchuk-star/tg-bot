@@ -74,6 +74,39 @@ def _normalize_model_id(model_id: str) -> str:
 
 
 
+# Модели нового поколения (Claude Haiku 5.5, Sonnet/Opus 5.x, Opus 4.7/4.8,
+# Fable/Mythos): non-default temperature/top_p/top_k и assistant-prefill дают
+# 400, глубина рассуждений задаётся effort. Старые (Haiku 4.5, Sonnet 4.6) —
+# наоборот: temperature принимают, effort на Haiku 4.5 — ошибка.
+_MODERN_MODEL_RE = re.compile(
+    r"claude-(?:haiku-5|sonnet-5|opus-5|opus-4-[78]|fable|mythos)", re.IGNORECASE,
+)
+# Haiku 5.x умеет полностью отключать рассуждения (на effort до high) — для
+# коротких реплик чата это быстрее и не съедает max_tokens. Opus 5.5 /
+# Sonnet 5.5 / Fable на {"type": "disabled"} отвечают 400 — им не шлём.
+_THINKING_OFF_OK_RE = re.compile(r"claude-haiku-5", re.IGNORECASE)
+# Если рассуждения включены, они расходуют max_tokens: короткий лимит
+# классификатора (120) иначе кончился бы до текста ответа.
+_THINKING_MIN_MAX_TOKENS = 2048
+
+
+def _is_modern_model(model_id: str) -> bool:
+    return bool(_MODERN_MODEL_RE.search(model_id or ""))
+
+
+def _model_request_params(model_id: str, *, max_tokens: int, temperature: float) -> dict[str, object]:
+    """Параметры запроса, зависящие от поколения модели (без model/messages/system)."""
+    if not _is_modern_model(model_id):
+        return {"max_tokens": max_tokens, "temperature": temperature}
+    params: dict[str, object] = {"output_config": {"effort": settings.ai_effort}}
+    if settings.ai_thinking == "disabled" and _THINKING_OFF_OK_RE.search(model_id):
+        params["thinking"] = {"type": "disabled"}
+        params["max_tokens"] = max_tokens
+    else:
+        params["max_tokens"] = max(max_tokens, _THINKING_MIN_MAX_TOKENS)
+    return params
+
+
 def _is_invalid_model_id_error(error_hint: str) -> bool:
     normalized = error_hint.lower()
     return (
@@ -1157,12 +1190,21 @@ class AnthropicProvider:
 
         current_model = model_id
         used_fallback = False
+        refusal_retry = False
         while True:
+            request_messages = anth_messages
+            if _is_modern_model(current_model):
+                # Assistant-prefill (последнее сообщение от бота) новые модели
+                # отклоняют с 400 — запрос должен заканчиваться репликой жителя.
+                request_messages = list(anth_messages)
+                while len(request_messages) > 1 and request_messages[-1]["role"] == "assistant":
+                    request_messages.pop()
             kwargs: dict[str, object] = {
                 "model": current_model,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "messages": anth_messages,
+                "messages": request_messages,
+                **_model_request_params(
+                    current_model, max_tokens=max_tokens, temperature=temperature,
+                ),
             }
             if system_blocks:
                 kwargs["system"] = system_blocks
@@ -1195,6 +1237,24 @@ class AnthropicProvider:
             except anthropic.AnthropicError as exc:
                 raise RuntimeError(f"Некорректный ответ AI API: {exc}") from exc
 
+            if (
+                getattr(response, "stop_reason", None) == "refusal"
+                and not refusal_retry
+                and current_model != fallback_model
+            ):
+                # Классификаторы безопасности новых моделей иногда отклоняют
+                # безобидный вопрос; серверного фолбэка у Haiku 5.5 нет —
+                # повторяем на запасной модели. Основную модель НЕ переключаем:
+                # отказ — свойство запроса, а не сломанного ID.
+                logger.warning(
+                    "AI refusal model=%s category=%s chat_id=%s -> retry on %s",
+                    current_model,
+                    getattr(getattr(response, "stop_details", None), "category", None),
+                    chat_id, fallback_model,
+                )
+                current_model = fallback_model
+                refusal_retry = True
+                continue
             content = _extract_text_from_message(response).strip()
             if not content:
                 raise RuntimeError("AI вернул пустой текст")
@@ -1285,7 +1345,18 @@ class AnthropicProvider:
         try:
             await self._client.models.list()
             latency = int((time.perf_counter() - started) * 1000)
-            return AiProbeResult(True, "AI API доступен.", latency)
+            # Модель ответов — в отчёт о старте: её можно переопределить в
+            # BOT_ENV (AI_REPLY_MODEL), и снаружи иначе не видно, какая работает.
+            reply_model = _normalize_model_id(settings.ai_reply_model)
+            try:
+                await self._client.models.retrieve(reply_model)
+                note = f"AI API доступен. Модель ответов: {reply_model}."
+            except anthropic.NotFoundError:
+                note = (
+                    f"AI API доступен, но модель {reply_model} не найдена — "
+                    f"ответы пойдут через запасную {settings.ai_fallback_model}."
+                )
+            return AiProbeResult(True, note, latency)
         except Exception as exc:  # noqa: BLE001
             latency = int((time.perf_counter() - started) * 1000)
             return AiProbeResult(False, str(exc), latency)

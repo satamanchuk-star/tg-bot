@@ -56,7 +56,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("ANTHROPIC_API_KEY", "AI_KEY", "AI_API_KEY"),
     )
     ai_model: str = Field(
-        default="claude-haiku-4-5",
+        default="claude-haiku-5-5",
         validation_alias=AliasChoices("AI_MODEL", "ai_model"),
     )
     ai_max_tokens: int = 800
@@ -83,19 +83,27 @@ class Settings(BaseSettings):
 
     # --- Multi-model routing (Anthropic Claude) ---
     # По умолчанию всё на дешёвом Claude Haiku; Sonnet — только премиум-путь.
-    ai_classifier_model: str = "claude-haiku-4-5"
-    ai_spam_model: str = "claude-haiku-4-5"
-    ai_topic_model: str = "claude-haiku-4-5"
-    ai_gate_intent_model: str = "claude-haiku-4-5"
-    ai_main_model: str = "claude-haiku-4-5"
-    ai_faq_model: str = "claude-haiku-4-5"
-    ai_reply_model: str = "claude-haiku-4-5"
-    ai_digest_model: str = "claude-haiku-4-5"
-    ai_gate_extract_model: str = "claude-haiku-4-5"
-    ai_code_model: str = "claude-haiku-4-5"
+    ai_classifier_model: str = "claude-haiku-5-5"
+    ai_spam_model: str = "claude-haiku-5-5"
+    ai_topic_model: str = "claude-haiku-5-5"
+    ai_gate_intent_model: str = "claude-haiku-5-5"
+    ai_main_model: str = "claude-haiku-5-5"
+    ai_faq_model: str = "claude-haiku-5-5"
+    ai_reply_model: str = "claude-haiku-5-5"
+    ai_digest_model: str = "claude-haiku-5-5"
+    ai_gate_extract_model: str = "claude-haiku-5-5"
+    ai_code_model: str = "claude-haiku-5-5"
     # Премиум-ответы (крайние случаи) — Claude Sonnet.
     ai_premium_model: str = "claude-sonnet-4-6"
+    # Запасная модель: на неё бот уходит, если основная недоступна (неверный ID)
+    # или отказала в ответе (refusal у Haiku 5.5 без серверного фолбэка).
     ai_fallback_model: str = "claude-haiku-4-5"
+    # Для моделей нового поколения (Haiku 5.5 и др.): глубина рассуждений.
+    # low — чат и короткие задачи (быстро и дёшево); medium/high — дороже и дольше.
+    ai_effort: str = "low"
+    # disabled — Haiku 5.x отвечает без скрытых рассуждений (быстро, как 4.5);
+    # adaptive — модель сама решает, думать ли (качественнее, медленнее).
+    ai_thinking: str = "disabled"
 
     # --- Extended limits ---
     ai_max_daily_cost_usd: float = 2.0

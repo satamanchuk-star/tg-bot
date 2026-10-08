@@ -122,7 +122,12 @@ app/
 - **SQLAlchemy 2.0.25** - Async ORM with aiosqlite
 - **Pydantic Settings** - Configuration from environment
 - **APScheduler** - Recurring jobs
-- **anthropic SDK** - прямой доступ к Claude (Messages API); по умолчанию `claude-haiku-4-5`, премиум — `claude-sonnet-4-6`
+- **anthropic SDK** - прямой доступ к Claude (Messages API); по умолчанию `claude-haiku-5-5`,
+  запасная — `claude-haiku-4-5`, премиум — `claude-sonnet-4-6`. Модели нового поколения
+  (Haiku 5.5, *-5.x, Opus 4.7/4.8) НЕ принимают `temperature`/prefill (400) — параметры
+  запроса по поколению собирает `_model_request_params` (effort `AI_EFFORT`=low, рассуждения
+  `AI_THINKING`=disabled для Haiku 5.x). Отказ (`stop_reason=refusal`) → повтор на запасной
+  без переключения основной. Модель ответов видна в отчёте о старте (probe).
 
 ## Данные о местах и знаниях (единый источник истины)
 
