@@ -56,14 +56,17 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("ANTHROPIC_API_KEY", "AI_KEY", "AI_API_KEY"),
     )
     ai_model: str = Field(
-        default="claude-haiku-4-5",
+        default="claude-haiku-5-5",
         validation_alias=AliasChoices("AI_MODEL", "ai_model"),
     )
-    ai_max_tokens: int = 800
+    # Лимиты токенов подняты на ~30% при переходе на Haiku 5.5: её токенизатор
+    # считает тот же русский текст примерно на 30% длиннее — со старыми числами
+    # ответы обрезались бы раньше, а дневной лимит кончался бы к вечеру.
+    ai_max_tokens: int = 1000
     ai_timeout_seconds: int = 12
     ai_retries: int = 1
     ai_daily_request_limit: int = 2000
-    ai_daily_token_limit: int = 400000
+    ai_daily_token_limit: int = 520000
     ai_feature_moderation: bool = True
     ai_feature_assistant: bool = True
     ai_feature_web_search: bool = True
@@ -83,25 +86,37 @@ class Settings(BaseSettings):
 
     # --- Multi-model routing (Anthropic Claude) ---
     # По умолчанию всё на дешёвом Claude Haiku; Sonnet — только премиум-путь.
-    ai_classifier_model: str = "claude-haiku-4-5"
-    ai_spam_model: str = "claude-haiku-4-5"
-    ai_topic_model: str = "claude-haiku-4-5"
-    ai_gate_intent_model: str = "claude-haiku-4-5"
-    ai_main_model: str = "claude-haiku-4-5"
-    ai_faq_model: str = "claude-haiku-4-5"
-    ai_reply_model: str = "claude-haiku-4-5"
-    ai_digest_model: str = "claude-haiku-4-5"
-    ai_gate_extract_model: str = "claude-haiku-4-5"
-    ai_code_model: str = "claude-haiku-4-5"
+    ai_classifier_model: str = "claude-haiku-5-5"
+    ai_spam_model: str = "claude-haiku-5-5"
+    ai_topic_model: str = "claude-haiku-5-5"
+    ai_gate_intent_model: str = "claude-haiku-5-5"
+    ai_main_model: str = "claude-haiku-5-5"
+    ai_faq_model: str = "claude-haiku-5-5"
+    ai_reply_model: str = "claude-haiku-5-5"
+    ai_digest_model: str = "claude-haiku-5-5"
+    ai_gate_extract_model: str = "claude-haiku-5-5"
+    ai_code_model: str = "claude-haiku-5-5"
     # Премиум-ответы (крайние случаи) — Claude Sonnet.
     ai_premium_model: str = "claude-sonnet-4-6"
+    # Запасная модель: на неё бот уходит, если основная недоступна (неверный ID)
+    # или отказала в ответе (refusal у Haiku 5.5 без серверного фолбэка).
     ai_fallback_model: str = "claude-haiku-4-5"
+    # Для моделей нового поколения (Haiku 5.5 и др.): глубина рассуждений.
+    # low — чат и короткие задачи (быстро и дёшево); medium/high — дороже и дольше.
+    ai_effort: str = "low"
+    # Отдельно — для ответов жителям: главный рычаг качества ответа. low —
+    # быстро и дёшево; medium — модель внимательнее сверяется с базой знаний,
+    # но отвечает дольше. Меняется в BOT_ENV без деплоя кода.
+    ai_reply_effort: str = "low"
+    # disabled — Haiku 5.x отвечает без скрытых рассуждений (быстро, как 4.5);
+    # adaptive — модель сама решает, думать ли (качественнее, медленнее).
+    ai_thinking: str = "disabled"
 
     # --- Extended limits ---
     ai_max_daily_cost_usd: float = 2.0
-    ai_classifier_max_output_tokens: int = 120
-    ai_reply_max_output_tokens: int = 500
-    ai_digest_max_output_tokens: int = 700
+    ai_classifier_max_output_tokens: int = 160
+    ai_reply_max_output_tokens: int = 650
+    ai_digest_max_output_tokens: int = 900
 
     # Тихое обучение модерации: бот НЕ модерирует, а отправляет подозрительные
     # сообщения в лог-чат с кнопками для подтверждения действия администратором.

@@ -139,8 +139,25 @@ def _entry_tokens(entry: ResidentKbEntry) -> set[str]:
     return _content_tokens(" ".join(chunks))
 
 
+def _entry_head_tokens(entry: ResidentKbEntry) -> set[str]:
+    """Токены «шапки» записи — то, о чём запись (формулировки, теги, категория)."""
+    chunks = [
+        " ".join(entry.question_patterns),
+        " ".join(entry.search_tags),
+        " ".join(entry.aliases),
+        entry.category,
+    ]
+    return _content_tokens(" ".join(chunks))
+
+
+# Совпадение только в тексте ответа весит вдвое меньше совпадения в шапке:
+# «УК» упоминается в десятках ответов («обратитесь в УК»), и раньше вопрос
+# про часы работы УК тянул в контекст лифт, шлагбаум и аварийку.
+_ANSWER_ONLY_WEIGHT = 0.5
+
 # Кэш предрассчитанных токенов записей KB — заполняется при первом обращении
 _ENTRY_TOKEN_CACHE: dict[str, set[str]] = {}
+_ENTRY_HEAD_TOKEN_CACHE: dict[str, set[str]] = {}
 
 
 def _get_cached_entry_tokens(entry: ResidentKbEntry) -> set[str]:
@@ -148,6 +165,12 @@ def _get_cached_entry_tokens(entry: ResidentKbEntry) -> set[str]:
     if entry.id not in _ENTRY_TOKEN_CACHE:
         _ENTRY_TOKEN_CACHE[entry.id] = _entry_tokens(entry)
     return _ENTRY_TOKEN_CACHE[entry.id]
+
+
+def _get_cached_head_tokens(entry: ResidentKbEntry) -> set[str]:
+    if entry.id not in _ENTRY_HEAD_TOKEN_CACHE:
+        _ENTRY_HEAD_TOKEN_CACHE[entry.id] = _entry_head_tokens(entry)
+    return _ENTRY_HEAD_TOKEN_CACHE[entry.id]
 
 
 def _score_entry(query_tokens: set[str], entry: ResidentKbEntry) -> float:
@@ -175,20 +198,22 @@ def _score_entry(query_tokens: set[str], entry: ResidentKbEntry) -> float:
     if meaningful_count == 0 and overlap_count <= 2:
         return 0.0
 
-    overlap_ratio = overlap_count / max(len(query_tokens), 1)
+    head_overlap = overlap & _get_cached_head_tokens(entry)
+    weighted_overlap = len(head_overlap) + _ANSWER_ONLY_WEIGHT * (overlap_count - len(head_overlap))
+    overlap_ratio = weighted_overlap / max(len(query_tokens), 1)
 
-    # Двухуровневые keyword бонусы
+    # Двухуровневые keyword бонусы — только за ОБЩЕЕ ключевое слово. Раньше
+    # хватало любого сильного слова в вопросе и любого в записи («ук» в вопросе
+    # + «лифт» в записи = +0.15), и почти каждая запись проходила порог.
     keyword_bonus = 0.0
-    if any(kw in query_tokens for kw in _CRITICAL_KEYWORDS) and any(
-        kw in entry_tokens for kw in _CRITICAL_KEYWORDS
-    ):
+    if overlap & _CRITICAL_KEYWORDS:
         keyword_bonus = 0.3
-    elif any(kw in query_tokens for kw in _STRONG_KEYWORDS) and any(
-        kw in entry_tokens for kw in _STRONG_KEYWORDS
-    ):
+    elif overlap & _STRONG_KEYWORDS:
         keyword_bonus = 0.15
 
-    category_bonus = 0.08 if entry.category in {"шлагбаум", "ук", "аварийка"} else 0.0
+    category_bonus = (
+        0.08 if head_overlap and entry.category in {"шлагбаум", "ук", "аварийка"} else 0.0
+    )
     # Приоритет влияет меньше, чтобы не вытягивать нерелевантные записи
     priority_bonus = min(entry.priority, 100) / 500
     return overlap_ratio + keyword_bonus + category_bonus + priority_bonus
@@ -273,6 +298,7 @@ def kb_fingerprint() -> str:
 @lru_cache(maxsize=1)
 def load_resident_kb() -> tuple[ResidentKbEntry, ...]:
     _ENTRY_TOKEN_CACHE.clear()
+    _ENTRY_HEAD_TOKEN_CACHE.clear()
     kb_path = resolve_kb_path()
     if kb_path is None:
         logger.warning("Файл базы знаний не найден ни в data/, ни в kb/.")
@@ -363,7 +389,16 @@ def build_resident_context(query: str, *, context: list[str] | None = None, top_
         return ""
     # Отсекаем записи с низкой релевантностью, чтобы не загрязнять контекст ИИ
     _MIN_CONTEXT_SCORE = 0.45
-    relevant = [m for m in result.matches if m.score >= _MIN_CONTEXT_SCORE]
+    # Записи вдвое слабее лучшей — шум: забирают бюджет контекста (4000
+    # символов на все источники) у RAG/FAQ/карточек мест и сбивают модель.
+    # На офлайн-наборе 65 вопросов это 2.4 записи в контексте вместо 4.5
+    # без потери нужной записи.
+    _RELATIVE_CUTOFF = 0.5
+    best = result.matches[0].score
+    relevant = [
+        m for m in result.matches
+        if m.score >= _MIN_CONTEXT_SCORE and m.score >= best * _RELATIVE_CUTOFF
+    ]
     if not relevant:
         return ""
     parts: list[str] = []
